@@ -152,9 +152,7 @@ local({
                  as.character(getRversion()),
                  R.version$platform),
                collapse = "\n")
-  tf <- tempfile(); writeLines(key, tf)
-  hash <- unname(tools::md5sum(tf))
-  unlink(tf)
+  hash <- secretbase::sha256(key)
 
   library_path <- file.path(cache_dir, "libraries", hash)
 

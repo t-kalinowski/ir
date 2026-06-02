@@ -84,7 +84,7 @@ published version equals the request, `ir` reports the available versions.
 
 - A Rust toolchain (to build `ir`).
 - `R` / `Rscript` on `PATH` (this prototype uses whatever R it finds).
-- The R packages `yaml12`, `pak`, and `renv` installed in that R.
+- The R packages `yaml12`, `pak`, `renv`, and `secretbase` installed in that R.
 
 ## Build & install
 
