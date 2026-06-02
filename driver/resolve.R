@@ -87,42 +87,49 @@ local({
 
   if (length(deps)) {
 
-    # Resolve an exact pin (`pkg==1.2`) to a concrete pak ref `pkg@<version>`.
-    # pak's `@<version>` requires a *literal* published version string, so a
-    # partial spec like `1.2` would fail even though `1.2.0` exists. We match
-    # the request against published versions numerically -- like pip/uv, where
-    # `==1.2` selects the version equal to 1.2 (i.e. 1.2.0), not 1.2.x.
-    exact_ref <- function(pkg, ver) {
+    # Resolve a version constraint to a concrete pak ref `pkg@<version>`.
+    # pak's refs natively express only `>=` and exact pins, so for `==`, `<`,
+    # `<=` and `>` we enumerate the package's published versions (incl. the
+    # CRAN archive, via pak::pkg_history) and pin the newest one that satisfies
+    # the constraint. Matching is numeric, like pip/uv: `1.2` means the version
+    # equal to 1.2 (e.g. 1.2.0), not the 1.2.x series.
+    constrained_ref <- function(pkg, op, ver) {
+      if (op %in% c("", "=")) op <- "=="
       target <- tryCatch(numeric_version(ver), error = function(e) NULL)
-      hist <- tryCatch(pak::pkg_history(pkg), error = function(e) NULL)
+      hist   <- tryCatch(pak::pkg_history(pkg), error = function(e) NULL)
       if (is.null(target) || is.null(hist) || !nrow(hist))
         return(sprintf("%s@%s", pkg, ver))  # fall back; let pak validate
+
       avail <- as.character(hist$Version)
-      hit <- avail[numeric_version(avail) == target]
-      if (!length(hit)) {
-        near <- tail(avail, 6L)
-        stop(sprintf("no version of '%s' equal to %s (available: %s)",
-                     pkg, ver, paste(near, collapse = ", ")), call. = FALSE)
-      }
-      # Prefer the literal string if published, else any numeric match.
-      sprintf("%s@%s", pkg, if (ver %in% hit) ver else hit[[length(hit)]])
+      hits  <- avail[do.call(op, list(numeric_version(avail), target))]
+      if (!length(hits))
+        stop(sprintf("no version of '%s' satisfies '%s%s' (available: %s)",
+                     pkg, op, ver, paste(tail(avail, 6L), collapse = ", ")),
+             call. = FALSE)
+
+      # Newest published version satisfying the constraint; for an exact pin,
+      # prefer the literal string if it was published verbatim.
+      pick <- hits[order(numeric_version(hits), decreasing = TRUE)][[1L]]
+      if (op == "==" && ver %in% hits) pick <- ver
+      sprintf("%s@%s", pkg, pick)
     }
 
     # Translate dependency specs into pak package references:
     #   `pkg`         -> `pkg`         (latest)
-    #   `pkg>=1.0`    -> `pkg@>=1.0`   (lower bound)
-    #   `pkg==1.2`    -> `pkg@1.2.0`   (exact; version normalised)
-    #   `pkg 1.0`     -> `pkg@1.0.0`   (exact; version normalised)
+    #   `pkg>=1.0`    -> `pkg@>=1.0`   (lower bound; solver picks)
+    #   `pkg<=1.2`    -> `pkg@1.2.0`   (newest version <= 1.2)
+    #   `pkg<1.2`     -> `pkg@1.1.1`   (newest version < 1.2)
+    #   `pkg==1.2`    -> `pkg@1.2.0`   (exact; numeric match)
     to_ref <- function(d) {
       d <- trimws(d)
       m <- regmatches(d, regexec(
-        "^([A-Za-z][A-Za-z0-9.]*[A-Za-z0-9])[[:space:]]*(>=|==|=)?[[:space:]]*([0-9][0-9.-]*)?$",
+        "^([A-Za-z][A-Za-z0-9.]*[A-Za-z0-9])[[:space:]]*(>=|<=|==|>|<|=)?[[:space:]]*([0-9][0-9.-]*)?$",
         d
       ))[[1L]]
       if (length(m) != 4L) return(d)  # leave anything exotic untouched (e.g. github refs)
       pkg <- m[[2L]]; op <- m[[3L]]; ver <- m[[4L]]
       if (!nzchar(ver)) return(pkg)
-      if (identical(op, ">=")) sprintf("%s@>=%s", pkg, ver) else exact_ref(pkg, ver)
+      if (identical(op, ">=")) sprintf("%s@>=%s", pkg, ver) else constrained_ref(pkg, op, ver)
     }
     refs_in <- vapply(deps, to_ref, character(1L), USE.NAMES = FALSE)
 

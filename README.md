@@ -68,17 +68,24 @@ package, two YAML rules apply:
 
 Supported dependency specs in this prototype:
 
-| Spec         | Meaning                                                      |
-| ------------ | ----------------------------------------------------------- |
-| `pkg`        | latest available                                            |
-| `pkg>=1.0`   | at least version 1.0                                        |
-| `pkg==1.2`   | exactly version 1.2                                         |
+| Spec         | Meaning                                          |
+| ------------ | ------------------------------------------------ |
+| `pkg`        | latest available                                 |
+| `pkg>=1.0`   | at least version 1.0                             |
+| `pkg<=1.2`   | newest version that is at most 1.2               |
+| `pkg<1.2`    | newest version below 1.2                         |
+| `pkg>1.2`    | newest version above 1.2                         |
+| `pkg==1.2`   | exactly version 1.2                              |
 
-Exact pins match versions numerically, like pip/uv: `pkg==1.2` selects the
-published version *equal to* 1.2 (i.e. `1.2.0`), not the `1.2.x` series. The
-request is resolved against the package's published versions (`pak::pkg_history`,
-including the CRAN archive), so a partial spec such as `1.2` finds `1.2.0`. If no
-published version equals the request, `ir` reports the available versions.
+Specs match versions numerically, like pip/uv: `pkg==1.2` selects the published
+version *equal to* 1.2 (i.e. `1.2.0`), not the `1.2.x` series. Write operators
+without spaces (`pkg<=1.2`, not `pkg <= 1.2`).
+
+`>=` is passed to pak's solver natively. The other operators have no equivalent
+in pak's ref syntax, so `ir` resolves them against the package's published
+versions (`pak::pkg_history`, including the CRAN archive) and pins the newest
+version that satisfies the constraint. If none qualifies, `ir` reports the
+available versions.
 
 ## Requirements
 
