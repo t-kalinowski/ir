@@ -87,11 +87,32 @@ local({
 
   if (length(deps)) {
 
+    # Resolve an exact pin (`pkg==1.2`) to a concrete pak ref `pkg@<version>`.
+    # pak's `@<version>` requires a *literal* published version string, so a
+    # partial spec like `1.2` would fail even though `1.2.0` exists. We match
+    # the request against published versions numerically -- like pip/uv, where
+    # `==1.2` selects the version equal to 1.2 (i.e. 1.2.0), not 1.2.x.
+    exact_ref <- function(pkg, ver) {
+      target <- tryCatch(numeric_version(ver), error = function(e) NULL)
+      hist <- tryCatch(pak::pkg_history(pkg), error = function(e) NULL)
+      if (is.null(target) || is.null(hist) || !nrow(hist))
+        return(sprintf("%s@%s", pkg, ver))  # fall back; let pak validate
+      avail <- as.character(hist$Version)
+      hit <- avail[numeric_version(avail) == target]
+      if (!length(hit)) {
+        near <- tail(avail, 6L)
+        stop(sprintf("no version of '%s' equal to %s (available: %s)",
+                     pkg, ver, paste(near, collapse = ", ")), call. = FALSE)
+      }
+      # Prefer the literal string if published, else any numeric match.
+      sprintf("%s@%s", pkg, if (ver %in% hit) ver else hit[[length(hit)]])
+    }
+
     # Translate dependency specs into pak package references:
     #   `pkg`         -> `pkg`         (latest)
     #   `pkg>=1.0`    -> `pkg@>=1.0`   (lower bound)
-    #   `pkg==1.0`    -> `pkg@1.0`     (exact)
-    #   `pkg 1.0`     -> `pkg@1.0`     (exact)
+    #   `pkg==1.2`    -> `pkg@1.2.0`   (exact; version normalised)
+    #   `pkg 1.0`     -> `pkg@1.0.0`   (exact; version normalised)
     to_ref <- function(d) {
       d <- trimws(d)
       m <- regmatches(d, regexec(
@@ -101,7 +122,7 @@ local({
       if (length(m) != 4L) return(d)  # leave anything exotic untouched (e.g. github refs)
       pkg <- m[[2L]]; op <- m[[3L]]; ver <- m[[4L]]
       if (!nzchar(ver)) return(pkg)
-      if (identical(op, ">=")) sprintf("%s@>=%s", pkg, ver) else sprintf("%s@%s", pkg, ver)
+      if (identical(op, ">=")) sprintf("%s@>=%s", pkg, ver) else exact_ref(pkg, ver)
     }
     refs_in <- vapply(deps, to_ref, character(1L), USE.NAMES = FALSE)
 

@@ -68,11 +68,17 @@ package, two YAML rules apply:
 
 Supported dependency specs in this prototype:
 
-| Spec            | Meaning                  |
-| --------------- | ------------------------ |
-| `pkg`           | latest available         |
-| `pkg>=1.0`      | at least version 1.0     |
-| `pkg==1.0`      | exactly version 1.0      |
+| Spec         | Meaning                                                      |
+| ------------ | ----------------------------------------------------------- |
+| `pkg`        | latest available                                            |
+| `pkg>=1.0`   | at least version 1.0                                        |
+| `pkg==1.2`   | exactly version 1.2                                         |
+
+Exact pins match versions numerically, like pip/uv: `pkg==1.2` selects the
+published version *equal to* 1.2 (i.e. `1.2.0`), not the `1.2.x` series. The
+request is resolved against the package's published versions (`pak::pkg_history`,
+including the CRAN archive), so a partial spec such as `1.2` finds `1.2.0`. If no
+published version equals the request, `ir` reports the available versions.
 
 ## Requirements
 
