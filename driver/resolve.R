@@ -131,16 +131,44 @@ ir_to_ref <- function(d, history = ir_pkg_history) {
   else ir_constrained_ref(pkg, op, ver, history = history)
 }
 
+## --- cache location ---------------------------------------------------------
+
+# The cache root: the standard per-package user cache directory, overridable
+# with IR_CACHE_DIR. Holds `libraries/` (materialised libraries) and
+# `resolutions/` (the daily resolution cache).
+ir_cache_dir <- function() {
+  env <- Sys.getenv("IR_CACHE_DIR")
+  if (nzchar(env)) env else tools::R_user_dir("ir", "cache")
+}
+
+## --- resolution cache -------------------------------------------------------
+
+# Key identifying a resolution request: the declared dependency specs (order
+# independent), the day, and the R version / platform. Including the date forces
+# a fresh resolution -- and so picks up newly published versions -- at most once
+# per day; until then an identical request reuses its previous result without
+# invoking pak. Order independent so reordering deps doesn't bust the cache.
+ir_input_key <- function(deps,
+                         date     = Sys.Date(),
+                         rversion = getRversion(),
+                         platform = R.version$platform) {
+  secretbase::sha256(paste(c(sort(deps),
+                             as.character(date),
+                             as.character(rversion),
+                             platform),
+                           collapse = "\n"))
+}
+
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
 
   args <- commandArgs(trailingOnly = TRUE)
-  if (length(args) < 3L)
-    stop("usage: resolve.R <script_path> <cache_dir> <out_file>", call. = FALSE)
+  if (length(args) < 2L)
+    stop("usage: resolve.R <script_path> <out_file>", call. = FALSE)
   script_path <- args[[1L]]
-  cache_dir   <- args[[2L]]
-  out_file    <- args[[3L]]
+  out_file    <- args[[2L]]
+  cache_dir   <- ir_cache_dir()
 
   # We run with --vanilla, so no repository is configured. Fall back to a
   # canonical CRAN mirror when the session has none.
@@ -155,6 +183,19 @@ ir_resolve_main <- function() {
   spec <- ir_read_spec(ir_frontmatter(readLines(script_path, warn = FALSE)))
   deps <- ir_deps(spec)
   ir_check_r_version(spec)
+
+  ## 1b. Resolution cache: if this exact request was resolved earlier today and
+  ## its library still exists, reuse it and skip pak entirely. The marker is
+  ## written only after a successful materialise (below), so its presence
+  ## implies a complete library.
+  marker <- file.path(cache_dir, "resolutions", ir_input_key(deps))
+  if (file.exists(marker)) {
+    cached <- readLines(marker, n = 1L, warn = FALSE)
+    if (length(cached) && nzchar(cached) && dir.exists(cached)) {
+      writeLines(cached, out_file)
+      return(invisible())
+    }
+  }
 
   ## 2. Resolve with pak
   # A script may legitimately declare no dependencies; it then gets an empty
@@ -210,6 +251,10 @@ ir_resolve_main <- function() {
       )
     ))
   }
+
+  ## 4b. Record the resolution so an identical request today skips pak.
+  dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
+  writeLines(library_path, marker)
 
   writeLines(library_path, out_file)
   invisible()
