@@ -58,6 +58,26 @@ ir_deps <- function(spec) {
   deps[nzchar(deps)]
 }
 
+# Optional date-bounded resolution. `exclude after` is a YAML mapping key whose
+# value is an ISO date; resolution then uses that day's Posit Package Manager
+# CRAN snapshot instead of the latest CRAN repository.
+ir_exclude_after <- function(spec) {
+  value <- spec[["exclude after"]]
+  if (is.null(value)) return(NULL)
+
+  value <- trimws(as.character(value)[[1L]])
+  if (!grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", value))
+    stop("`exclude after` must be a date string in YYYY-MM-DD format",
+         call. = FALSE)
+
+  date <- as.Date(value, format = "%Y-%m-%d")
+  if (is.na(date) || !identical(format(date, "%Y-%m-%d"), value))
+    stop("`exclude after` must be a date string in YYYY-MM-DD format",
+         call. = FALSE)
+
+  value
+}
+
 # Soft-check the optional `R:` version constraint against the running R; warn
 # on a mismatch but never stop (this prototype does not select R versions).
 ir_check_r_version <- function(spec, current = getRversion()) {
@@ -98,25 +118,50 @@ ir_to_ref <- function(d) {
 
 # The cache root: the standard per-package user cache directory, overridable
 # with IR_CACHE_DIR. Holds `libraries/` (materialised libraries) and
-# `resolutions/` (the daily resolution cache).
+# `resolutions/` (the resolution request cache).
 ir_cache_dir <- function() {
   env <- Sys.getenv("IR_CACHE_DIR")
   if (nzchar(env)) env else tools::R_user_dir("ir", "cache")
 }
 
+## --- repositories -----------------------------------------------------------
+
+ir_ppm_snapshot_url <- function(exclude_after) {
+  sprintf("https://packagemanager.posit.co/cran/%s", exclude_after)
+}
+
+ir_repos <- function(spec, repos = getOption("repos")) {
+  exclude_after <- ir_exclude_after(spec)
+  if (!is.null(exclude_after))
+    return(c(CRAN = ir_ppm_snapshot_url(exclude_after)))
+
+  cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    c(CRAN = "https://cran.r-project.org")
+  else
+    repos
+}
+
 ## --- resolution cache -------------------------------------------------------
 
 # Key identifying a resolution request: the declared dependency specs (order
-# independent), the day, and the R version / platform. Including the date forces
-# a fresh resolution -- and so picks up newly published versions -- at most once
-# per day; until then an identical request reuses its previous result without
-# invoking pak. Order independent so reordering deps doesn't bust the cache.
+# independent), the resolution source, and the R version / platform. Latest
+# resolution includes the current day so newly published versions are picked up
+# at most once per day. Dated PPM snapshot resolution uses only the snapshot date
+# because that repository state is immutable. Order independent so reordering
+# deps doesn't bust the cache.
 ir_input_key <- function(deps,
-                         date     = Sys.Date(),
-                         rversion = getRversion(),
-                         platform = R.version$platform) {
+                         date          = Sys.Date(),
+                         rversion      = getRversion(),
+                         platform      = R.version$platform,
+                         exclude_after = NULL) {
+  source_key <- if (is.null(exclude_after))
+    as.character(date)
+  else
+    sprintf("exclude after: %s", exclude_after)
+
   secretbase::sha256(paste(c(sort(deps),
-                             as.character(date),
+                             source_key,
                              as.character(rversion),
                              platform),
                            collapse = "\n"))
@@ -133,25 +178,20 @@ ir_resolve_main <- function() {
   out_file    <- args[[2L]]
   cache_dir   <- ir_cache_dir()
 
-  # We run with --vanilla, so no repository is configured. Fall back to a
-  # canonical CRAN mirror when the session has none.
-  repos <- getOption("repos")
-  cran  <- if (!is.null(repos)) repos[["CRAN"]] else NULL
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@")) {
-    repos <- c(CRAN = "https://cran.r-project.org")
-    options(repos = repos)
-  }
-
   ## 1. Parse frontmatter
   spec <- ir_read_spec(ir_frontmatter(readLines(script_path, warn = FALSE)))
   deps <- ir_deps(spec)
+  exclude_after <- ir_exclude_after(spec)
   ir_check_r_version(spec)
+  repos <- ir_repos(spec)
+  options(repos = repos)
 
-  ## 1b. Resolution cache: if this exact request was resolved earlier today and
-  ## its library still exists, reuse it and skip pak entirely. The marker is
-  ## written only after a successful materialise (below), so its presence
-  ## implies a complete library.
-  marker <- file.path(cache_dir, "resolutions", ir_input_key(deps))
+  ## 1b. Resolution cache: if this exact request was resolved already and its
+  ## library still exists, reuse it and skip pak entirely. The marker is written
+  ## only after a successful materialise (below), so its presence implies a
+  ## complete library.
+  marker <- file.path(cache_dir, "resolutions",
+                      ir_input_key(deps, exclude_after = exclude_after))
   if (file.exists(marker)) {
     cached <- readLines(marker, n = 1L, warn = FALSE)
     if (length(cached) && nzchar(cached) && dir.exists(cached)) {
@@ -215,7 +255,7 @@ ir_resolve_main <- function() {
     ))
   }
 
-  ## 4b. Record the resolution so an identical request today skips pak.
+  ## 4b. Record the resolution so an identical request skips pak.
   dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
   writeLines(library_path, marker)
 
