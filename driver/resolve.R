@@ -50,8 +50,8 @@ ir_read_spec <- function(yaml_text) {
 }
 
 # The declared dependency specs. Accepts both a YAML list (`- dplyr`) and a
-# whitespace-separated scalar (`dplyr>=1.0 tidyr`); package refs never contain
-# spaces, so operators must be written without them (`pkg<=1.2`).
+# whitespace-separated scalar (`dplyr>=1.0 tidyr`); package refs are expected
+# to be whitespace-free.
 ir_deps <- function(spec) {
   deps <- as.character(spec$dependencies %||% character())
   deps <- as.character(unlist(strsplit(trimws(deps), "[[:space:]]+")))
@@ -74,61 +74,24 @@ ir_check_r_version <- function(spec, current = getRversion()) {
   invisible()
 }
 
-## --- version-spec translation -----------------------------------------------
-
-# Default history lookup: a package's published versions (incl. CRAN archive),
-# as a character vector. Returns character(0) if the lookup fails.
-ir_pkg_history <- function(pkg) {
-  h <- tryCatch(pak::pkg_history(pkg), error = function(e) NULL)
-  if (is.null(h) || !nrow(h)) character() else as.character(h$Version)
-}
-
-# Resolve a version constraint to a concrete pak ref `pkg@<version>`.
-# pak's refs natively express only `>=` and exact pins, so for `==`, `<`, `<=`
-# and `>` we enumerate the package's published versions (via `history`) and pin
-# the newest one that satisfies the constraint. Matching is numeric, like
-# pip/uv: `1.2` means the version equal to 1.2 (e.g. 1.2.0), not the 1.2.x
-# series. `history` is injectable for testing.
-ir_constrained_ref <- function(pkg, op, ver, history = ir_pkg_history) {
-  if (op %in% c("", "=")) op <- "=="
-  target <- tryCatch(numeric_version(ver), error = function(e) NULL)
-  avail  <- history(pkg)
-  if (is.null(target) || !length(avail))
-    return(sprintf("%s@%s", pkg, ver))  # fall back; let pak validate
-
-  hits <- avail[do.call(op, list(numeric_version(avail), target))]
-  if (!length(hits))
-    stop(sprintf("no version of '%s' satisfies '%s%s' (available: %s)",
-                 pkg, op, ver, paste(tail(avail, 6L), collapse = ", ")),
-         call. = FALSE)
-
-  # Newest published version satisfying the constraint; for an exact pin,
-  # prefer the literal string if it was published verbatim.
-  pick <- hits[order(numeric_version(hits), decreasing = TRUE)][[1L]]
-  if (op == "==" && ver %in% hits) pick <- ver
-  sprintf("%s@%s", pkg, pick)
-}
+## --- pak ref normalisation --------------------------------------------------
 
 # Translate one dependency spec into a pak package reference:
 #   `pkg`         -> `pkg`         (latest)
 #   `pkg>=1.0`    -> `pkg@>=1.0`   (lower bound; solver picks)
-#   `pkg<=1.2`    -> `pkg@1.2.0`   (newest version <= 1.2)
-#   `pkg<1.2`     -> `pkg@1.1.1`   (newest version < 1.2)
-#   `pkg>1.2`     -> `pkg@2.0.0`   (newest version > 1.2)
-#   `pkg==1.2`    -> `pkg@1.2.0`   (exact; numeric match)
-# Anything that isn't a plain `name[op]version` spec (e.g. a GitHub ref) is
-# passed through untouched.
-ir_to_ref <- function(d, history = ir_pkg_history) {
+#   `pkg==1.0`    -> `pkg@1.0`     (exact version)
+# Native pak refs, GitHub refs, and URL refs are passed through untouched.
+# Unsupported version operators such as `pkg<=1.2` are also passed to pak
+# unchanged, so pak remains the source of truth for supported refs.
+ir_to_ref <- function(d) {
   d <- trimws(d)
   m <- regmatches(d, regexec(
-    "^([A-Za-z][A-Za-z0-9.]*[A-Za-z0-9])[[:space:]]*(>=|<=|==|>|<|=)?[[:space:]]*([0-9][0-9.-]*)?$",
+    "^([A-Za-z][A-Za-z0-9.]*[A-Za-z0-9])[[:space:]]*(>=|==)[[:space:]]*([0-9][0-9.-]*)$",
     d
   ))[[1L]]
   if (length(m) != 4L) return(d)
-  pkg <- m[[2L]]; op <- m[[3L]]; ver <- m[[4L]]
-  if (!nzchar(ver)) return(pkg)
-  if (identical(op, ">=")) sprintf("%s@>=%s", pkg, ver)
-  else ir_constrained_ref(pkg, op, ver, history = history)
+  if (m[[3L]] == ">=") sprintf("%s@>=%s", m[[2L]], m[[4L]])
+  else sprintf("%s@%s", m[[2L]], m[[4L]])
 }
 
 ## --- cache location ---------------------------------------------------------

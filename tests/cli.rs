@@ -2,9 +2,8 @@
 //!
 //! The cases here are offline and deterministic — they exercise argument
 //! handling and error reporting, none of which reaches R. The R-side
-//! resolution logic (every version operator and error) is covered
-//! comprehensively by `tests/test-resolve.R`, which this file also runs via
-//! `cargo test` when an R toolchain is available.
+//! resolution logic is covered by `tests/test-resolve.R`, which this file also
+//! runs via `cargo test` when an R toolchain is available.
 
 use std::process::Command;
 
@@ -52,7 +51,8 @@ fn run_with_missing_script_errors() {
 }
 
 /// Run the comprehensive R resolution suite under `cargo test`. Skips (passes
-/// as a no-op) when no usable R toolchain with testthat + yaml12 is present.
+/// as a no-op) when no usable R toolchain with the required R packages is
+/// present.
 #[test]
 fn r_resolve_suite_passes() {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -62,13 +62,15 @@ fn r_resolve_suite_passes() {
         .args([
             "-e",
             "stopifnot(requireNamespace('testthat', quietly = TRUE), \
-                       requireNamespace('yaml12',  quietly = TRUE))",
+                       requireNamespace('yaml12', quietly = TRUE), \
+                       requireNamespace('withr', quietly = TRUE), \
+                       requireNamespace('secretbase', quietly = TRUE))",
         ])
         .output();
     match probe {
         Err(_) => return eprintln!("skipping R suite: `{rscript}` not found"),
         Ok(o) if !o.status.success() => {
-            return eprintln!("skipping R suite: testthat/yaml12 unavailable");
+            return eprintln!("skipping R suite: required R packages unavailable");
         }
         Ok(_) => {}
     }
