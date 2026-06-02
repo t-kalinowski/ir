@@ -2,9 +2,8 @@
 //!
 //! The cases here are offline and deterministic — they exercise argument
 //! handling and error reporting, none of which reaches R. The R-side
-//! resolution logic (every version operator and error) is covered
-//! comprehensively by `tests/test-resolve.R`, which this file also runs via
-//! `cargo test` when an R toolchain is available.
+//! resolution logic is covered by `tests/test-resolve.R`, which this file also
+//! runs via `cargo test` when an R toolchain is available.
 
 use std::process::Command;
 

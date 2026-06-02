@@ -63,7 +63,7 @@ package, two YAML rules apply:
 # dependencies:
 #   dplyr>=1.0        # lower bound
 #   tidyr             # latest
-#   cli==3.6.6        # exact version
+#   cli@3.6.6         # exact version
 # R: ">= 4.0"         # optional; soft-checked against the running R
 ```
 
@@ -73,20 +73,13 @@ Supported dependency specs in this prototype:
 | ------------ | ------------------------------------------------ |
 | `pkg`        | latest available                                 |
 | `pkg>=1.0`   | at least version 1.0                             |
-| `pkg<=1.2`   | newest version that is at most 1.2               |
-| `pkg<1.2`    | newest version below 1.2                         |
-| `pkg>1.2`    | newest version above 1.2                         |
-| `pkg==1.2`   | exactly version 1.2                              |
+| `pkg@1.2`    | exactly version 1.2                              |
+| `pkg@>=1.0`  | pak's native lower-bound ref                     |
 
-Specs match versions numerically, like pip/uv: `pkg==1.2` selects the published
-version *equal to* 1.2 (i.e. `1.2.0`), not the `1.2.x` series. Write operators
-without spaces (`pkg<=1.2`, not `pkg <= 1.2`).
-
-`>=` is passed to pak's solver natively. The other operators have no equivalent
-in pak's ref syntax, so `ir` resolves them against the package's published
-versions (`pak::pkg_history`, including the CRAN archive) and pins the newest
-version that satisfies the constraint. If none qualifies, `ir` reports the
-available versions.
+`pkg>=1.0` is only a shorthand for pak's native `pkg@>=1.0` ref. Other pak ref
+forms, such as GitHub refs and URL refs, are passed through unchanged. Version
+operators that are not pak package refs, including `pkg<=1.2`, are not resolved
+by `ir`.
 
 ## Requirements
 
@@ -109,10 +102,9 @@ $ cargo test
 
 `cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
 with `testthat` and `yaml12` is available, the R resolution suite
-(`tests/test-resolve.R`) — which covers every version operator, numeric version
-ordering, exotic-ref pass-through, frontmatter parsing, and error cases against
-a mocked version history (offline and deterministic). The R suite can also be
-run on its own:
+(`tests/test-resolve.R`) — which covers pak ref normalisation, unsupported
+version-operator pass-through, exotic-ref pass-through, frontmatter parsing, and
+R-version checks. The R suite can also be run on its own:
 
 ```console
 $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'
@@ -129,7 +121,7 @@ $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE
 
 - Uses the `R`/`Rscript` already on `PATH`; the `R:` constraint is only a soft
   warning, not a version selector.
-- Dependency specs support bare names and the `>=`, `<=`, `<`, `>`, `==`
-  operators. Other pak ref forms (e.g. `user/repo` GitHub refs) are passed
-  through untouched but untested.
+- Dependency specs support pak package refs. `pkg>=1.0` is accepted as a
+  shorthand for pak's `pkg@>=1.0`; upper-bound syntax such as `pkg<=1.2` is not
+  resolved by `ir`.
 - Repositories default to CRAN (`https://cran.r-project.org`).

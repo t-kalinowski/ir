@@ -3,9 +3,7 @@
 # Run with:
 #   Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'
 #
-# The driver's logic is exercised through its pure helper functions. Version
-# resolution is made deterministic and offline by injecting a fake `history`
-# function in place of the real pak::pkg_history lookup.
+# The driver's logic is exercised through its pure helper functions.
 
 library(testthat)
 
@@ -26,106 +24,44 @@ locate_driver <- function() {
 }
 source(locate_driver())
 
-# --- fixtures ---------------------------------------------------------------
-
-# A fixed published-version set. Includes 10.0.0 so numeric (not lexical)
-# ordering is exercised: lexically "10.0.0" < "2.0.0", numerically it is larger.
-VERSIONS <- c("0.5.0", "1.0.0", "1.0.5", "1.1.0", "1.1.1",
-              "1.2.0", "1.2.1", "1.2.2", "2.0.0", "10.0.0")
-hist_mock    <- function(pkg) VERSIONS
-hist_empty   <- function(pkg) character()
-hist_boom    <- function(pkg) stop("history must not be consulted here")
-hist_partial <- function(pkg) c("1.1.0", "1.2", "1.2.0", "1.3.0")
-
-ref <- function(spec, history = hist_mock) ir_to_ref(spec, history = history)
+ref <- function(spec) ir_to_ref(spec)
 
 # --- bare names and lower bounds (no history lookup) ------------------------
 
 test_that("bare names pass through and never consult history", {
-  expect_equal(ref("dplyr", hist_boom), "dplyr")
-  expect_equal(ref("  dplyr  ", hist_boom), "dplyr")  # trimmed
-  expect_equal(ref("data.table", hist_boom), "data.table")
+  expect_equal(ref("dplyr"), "dplyr")
+  expect_equal(ref("  dplyr  "), "dplyr")  # trimmed
+  expect_equal(ref("data.table"), "data.table")
 })
 
 test_that(">= lower bounds are native pak refs (no history lookup)", {
-  expect_equal(ref("dplyr>=1.0", hist_boom), "dplyr@>=1.0")
-  expect_equal(ref("dplyr>=1.1.0", hist_boom), "dplyr@>=1.1.0")
+  expect_equal(ref("dplyr>=1.0"), "dplyr@>=1.0")
+  expect_equal(ref("dplyr>=1.1.0"), "dplyr@>=1.1.0")
 })
 
-# --- exact pins -------------------------------------------------------------
+# --- native pak refs and unsupported version syntax -------------------------
 
-test_that("exact pins (== / =) match versions numerically", {
-  expect_equal(ref("pkg==1.0.0"), "pkg@1.0.0")
-  expect_equal(ref("pkg==2.0.0"), "pkg@2.0.0")
-  expect_equal(ref("pkg==1.2"),   "pkg@1.2.0")   # 1.2 == 1.2.0
-  expect_equal(ref("pkg=1.0"),    "pkg@1.0.0")   # single '=' is exact
-  expect_equal(ref("pkg==10.0.0"), "pkg@10.0.0")
+test_that("native pak refs pass through untouched", {
+  expect_equal(ref("pkg@1.2.3"), "pkg@1.2.3")
+  expect_equal(ref("pkg@>=1.2.3"), "pkg@>=1.2.3")
 })
 
-test_that("exact pins prefer a verbatim published version string", {
-  # both "1.2" and "1.2.0" are numerically equal and published; keep the
-  # literal request so pak gets the exact tarball.
-  expect_equal(ref("pkg==1.2", hist_partial), "pkg@1.2")
-})
-
-test_that("ir_constrained_ref treats empty / '=' op as exact", {
-  expect_equal(ir_constrained_ref("pkg", "",  "1.0", history = hist_mock), "pkg@1.0.0")
-  expect_equal(ir_constrained_ref("pkg", "=", "1.0", history = hist_mock), "pkg@1.0.0")
-})
-
-# --- upper bounds -----------------------------------------------------------
-
-test_that("<= picks the newest version at or below the bound", {
-  expect_equal(ref("pkg<=1.2"),    "pkg@1.2.0")  # 1.2.0 == 1.2 qualifies
-  expect_equal(ref("pkg<=1.1.0"),  "pkg@1.1.0")
-  expect_equal(ref("pkg<=2.0.0"),  "pkg@2.0.0")  # not 10.0.0
-})
-
-test_that("< picks the newest version strictly below the bound", {
-  expect_equal(ref("pkg<1.2"),    "pkg@1.1.1")   # 1.2.0 excluded
-  expect_equal(ref("pkg<1.1.0"),  "pkg@1.0.5")
-  expect_equal(ref("pkg<10.0.0"), "pkg@2.0.0")
-})
-
-# --- lower-strict bound -----------------------------------------------------
-
-test_that("> picks the newest version strictly above the bound", {
-  expect_equal(ref("pkg>1.2"),    "pkg@10.0.0")  # newest overall above 1.2
-  expect_equal(ref("pkg>2.0.0"),  "pkg@10.0.0")
-})
-
-# --- numeric (not lexical) version ordering ---------------------------------
-
-test_that("version selection is numeric, not lexical", {
-  hist <- function(pkg) c("1.2.0", "1.9.0", "1.10.0", "1.100.0")
-  # lexical max would be "1.9.0"; numeric max under 2.0.0 is "1.100.0"
-  expect_equal(ref("pkg<2.0.0", hist), "pkg@1.100.0")
-  expect_equal(ref("pkg<=10.0.0"),     "pkg@10.0.0")
+test_that("non-pak version operators are not rewritten by ir", {
+  expect_equal(ref("pkg<=1.2"), "pkg<=1.2")
+  expect_equal(ref("pkg<1.2"), "pkg<1.2")
+  expect_equal(ref("pkg>1.2"), "pkg>1.2")
+  expect_equal(ref("pkg==1.2"), "pkg==1.2")
+  expect_equal(ref("pkg=1.2"), "pkg=1.2")
 })
 
 # --- exotic refs pass through -----------------------------------------------
 
 test_that("non-standard refs are passed through untouched", {
-  expect_equal(ref("user/repo", hist_boom),         "user/repo")
-  expect_equal(ref("user/repo@main", hist_boom),    "user/repo@main")
-  expect_equal(ref("github::r-lib/cli", hist_boom), "github::r-lib/cli")
-  expect_equal(ref("bioc::Biobase", hist_boom),     "bioc::Biobase")
-  expect_equal(ref("url::https://x/y.tar.gz", hist_boom), "url::https://x/y.tar.gz")
-})
-
-# --- error cases ------------------------------------------------------------
-
-test_that("unsatisfiable constraints error and report available versions", {
-  expect_error(ref("pkg<0.1"),     "no version of 'pkg' satisfies '<0.1'")
-  expect_error(ref("pkg==9.9"),    "satisfies '==9.9'")
-  expect_error(ref("pkg>10.0.0"),  "satisfies '>10.0.0'")
-  expect_error(ref("pkg<=0.0.1"),  "available:")
-})
-
-test_that("missing history falls back to a literal pin (pak validates)", {
-  expect_equal(ref("pkg==1.2", hist_empty), "pkg@1.2")
-  expect_equal(ref("pkg<=1.2", hist_empty), "pkg@1.2")
-  expect_equal(ref("pkg<1.2",  hist_empty), "pkg@1.2")
+  expect_equal(ref("user/repo"),         "user/repo")
+  expect_equal(ref("user/repo@main"),    "user/repo@main")
+  expect_equal(ref("github::r-lib/cli"), "github::r-lib/cli")
+  expect_equal(ref("bioc::Biobase"),     "bioc::Biobase")
+  expect_equal(ref("url::https://x/y.tar.gz"), "url::https://x/y.tar.gz")
 })
 
 # --- frontmatter extraction -------------------------------------------------
@@ -170,8 +106,8 @@ test_that("ir_read_spec errors on malformed YAML", {
 test_that("ir_deps handles list and folded-scalar forms", {
   expect_equal(ir_deps(list(dependencies = c("dplyr>=1.0", "tidyr"))),
                c("dplyr>=1.0", "tidyr"))
-  expect_equal(ir_deps(list(dependencies = "dplyr>=1.0 tidyr secretbase==1.2")),
-               c("dplyr>=1.0", "tidyr", "secretbase==1.2"))
+  expect_equal(ir_deps(list(dependencies = "dplyr>=1.0 tidyr secretbase@1.2")),
+               c("dplyr>=1.0", "tidyr", "secretbase@1.2"))
 })
 
 test_that("ir_deps returns character(0) when there are no dependencies", {
@@ -194,7 +130,7 @@ test_that("ir_check_r_version warns only on a real mismatch", {
   expect_silent(ir_check_r_version(list(R = "not-a-version"), r46))
 })
 
-# --- end-to-end glue (frontmatter -> deps -> refs), mocked history ----------
+# --- end-to-end glue (frontmatter -> deps -> refs) --------------------------
 
 test_that("the parse -> deps -> refs pipeline composes", {
   lines <- c(
@@ -210,7 +146,6 @@ test_that("the parse -> deps -> refs pipeline composes", {
   deps <- ir_deps(spec)
   expect_equal(deps, c("dplyr>=1.0", "secretbase<=1.2"))
 
-  refs <- vapply(deps, ir_to_ref, character(1L),
-                 history = hist_mock, USE.NAMES = FALSE)
-  expect_equal(refs, c("dplyr@>=1.0", "secretbase@1.2.0"))
+  refs <- vapply(deps, ir_to_ref, character(1L), USE.NAMES = FALSE)
+  expect_equal(refs, c("dplyr@>=1.0", "secretbase<=1.2"))
 })
