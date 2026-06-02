@@ -75,11 +75,11 @@ fn print_help() {
              ir run <script.R> [args...]\n\
          \n\
          `ir run` reads the YAML frontmatter from <script.R>, resolves its\n\
-         dependencies, builds an isolated package library, and runs the script\n\
+         dependencies, builds a dedicated package library, and runs the script\n\
          against it. Any trailing args are passed through to the script.\n\
          \n\
          ENVIRONMENT:\n    \
-             IR_CACHE_DIR   override the cache directory\n    \
+             IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n    \
              IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)",
         env!("CARGO_PKG_VERSION")
     );
@@ -92,12 +92,10 @@ fn cmd_run(script: &str, script_args: &[String]) -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("cannot read script `{script}`: {e}"))?;
 
     let rscript = rscript_command();
-    let cache = cache_dir()?;
-    fs::create_dir_all(&cache)
-        .map_err(|e| format!("cannot create cache directory `{}`: {e}", cache.display()))?;
 
     // Phase 1: private R session resolves deps and materialises the library.
-    let library = resolve_library(&rscript, &cache, &script_path)?;
+    // It owns the cache location (tools::R_user_dir), so we pass only paths.
+    let library = resolve_library(&rscript, &script_path)?;
 
     // Phase 2: run the user's script in an isolated R session.
     let code = run_script(&rscript, library.as_deref(), &script_path, script_args)?;
@@ -106,11 +104,7 @@ fn cmd_run(script: &str, script_args: &[String]) -> Result<(), Box<dyn Error>> {
 
 /// Phase 1 — run the embedded driver in a private R session and return the
 /// path to the materialised library.
-fn resolve_library(
-    rscript: &OsStr,
-    cache: &Path,
-    script: &Path,
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
+fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> {
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let out = unique_path(&tmp, "ir-libpath", "txt");
@@ -120,7 +114,6 @@ fn resolve_library(
         .arg("--vanilla")
         .arg(&driver)
         .arg(script)
-        .arg(cache)
         .arg(&out)
         .stdin(Stdio::null()) // resolution never reads stdin
         .status()
@@ -172,24 +165,6 @@ fn run_script(
 /// resolved via `PATH`.
 fn rscript_command() -> std::ffi::OsString {
     env::var_os("IR_RSCRIPT").unwrap_or_else(|| "Rscript".into())
-}
-
-/// The cache directory: `$IR_CACHE_DIR`, then `$XDG_CACHE_HOME/ir`, then the
-/// platform default (`~/Library/Caches/ir` on macOS, `~/.cache/ir` elsewhere).
-fn cache_dir() -> Result<PathBuf, Box<dyn Error>> {
-    if let Some(dir) = env::var_os("IR_CACHE_DIR").filter(|s| !s.is_empty()) {
-        return Ok(PathBuf::from(dir));
-    }
-    if let Some(xdg) = env::var_os("XDG_CACHE_HOME").filter(|s| !s.is_empty()) {
-        return Ok(PathBuf::from(xdg).join("ir"));
-    }
-    let home = env::var_os("HOME").ok_or("HOME is not set; cannot locate cache directory")?;
-    let home = PathBuf::from(home);
-    Ok(if cfg!(target_os = "macos") {
-        home.join("Library/Caches/ir")
-    } else {
-        home.join(".cache/ir")
-    })
 }
 
 /// A unique path in `dir` for this process, e.g. `ir-resolve-1234-987.R`.
