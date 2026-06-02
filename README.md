@@ -100,6 +100,23 @@ $ cargo build --release
 $ cp target/release/ir ~/.local/bin/   # or anywhere on PATH
 ```
 
+## Testing
+
+```console
+$ cargo test
+```
+
+`cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
+with `testthat` and `yaml12` is available, the R resolution suite
+(`tests/test-resolve.R`) — which covers every version operator, numeric version
+ordering, exotic-ref pass-through, frontmatter parsing, and error cases against
+a mocked version history (offline and deterministic). The R suite can also be
+run on its own:
+
+```console
+$ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'
+```
+
 ## Configuration
 
 | Variable        | Default                                              |
@@ -111,7 +128,7 @@ $ cp target/release/ir ~/.local/bin/   # or anywhere on PATH
 
 - Uses the `R`/`Rscript` already on `PATH`; the `R:` constraint is only a soft
   warning, not a version selector.
-- Dependency specs are limited to `>=`, `==`, and bare names. Other pak ref
-  forms (e.g. `user/repo` GitHub refs) are passed through untouched but
-  untested.
+- Dependency specs support bare names and the `>=`, `<=`, `<`, `>`, `==`
+  operators. Other pak ref forms (e.g. `user/repo` GitHub refs) are passed
+  through untouched but untested.
 - Repositories default to CRAN (`https://cran.r-project.org`).
