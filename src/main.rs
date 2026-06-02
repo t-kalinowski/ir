@@ -9,6 +9,7 @@
 //! #   - dplyr>=1.0
 //! #   - tidyr
 //! # R: ">= 4.0"
+//! # exclude after: "2024-01-15"
 //!
 //! library(dplyr)
 //! 1 + 1
@@ -88,8 +89,8 @@ fn print_help() {
 /// Resolve dependencies for `script`, then run it against the resulting library.
 /// Exits the process with the script's own exit code.
 fn cmd_run(script: &str, script_args: &[String]) -> Result<(), Box<dyn Error>> {
-    let script_path = fs::canonicalize(script)
-        .map_err(|e| format!("cannot read script `{script}`: {e}"))?;
+    let script_path =
+        fs::canonicalize(script).map_err(|e| format!("cannot read script `{script}`: {e}"))?;
 
     let rscript = rscript_command();
 

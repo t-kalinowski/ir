@@ -92,9 +92,17 @@ test_that("ir_frontmatter drops the shebang and strips one space after #", {
 # --- spec parsing -----------------------------------------------------------
 
 test_that("ir_read_spec parses YAML mappings", {
-  spec <- ir_read_spec("dependencies:\n  - dplyr\n  - tidyr\nR: \">= 4.0\"")
+  spec <- ir_read_spec(paste(
+    "dependencies:",
+    "  - dplyr",
+    "  - tidyr",
+    "R: \">= 4.0\"",
+    "exclude after: \"2024-01-15\"",
+    sep = "\n"
+  ))
   expect_equal(spec$dependencies, c("dplyr", "tidyr"))
   expect_equal(spec$R, ">= 4.0")
+  expect_equal(spec[["exclude after"]], "2024-01-15")
 })
 
 test_that("ir_read_spec treats non-mappings and empty input as no frontmatter", {
@@ -120,6 +128,34 @@ test_that("ir_deps returns character(0) when there are no dependencies", {
   expect_equal(ir_deps(list(dependencies = NULL)), character())
   expect_equal(ir_deps(list(dependencies = c("dplyr", "", "  ", "tidyr"))),
                c("dplyr", "tidyr"))
+})
+
+# --- exclude-after snapshots -----------------------------------------------
+
+test_that("ir_exclude_after reads an optional YYYY-MM-DD date", {
+  expect_null(ir_exclude_after(list()))
+  expect_equal(ir_exclude_after(list("exclude after" = "2024-01-15")),
+               "2024-01-15")
+  expect_equal(ir_exclude_after(list("exclude after" = " 2024-01-15 ")),
+               "2024-01-15")
+})
+
+test_that("ir_exclude_after rejects malformed dates", {
+  expect_error(ir_exclude_after(list("exclude after" = "2024-01")),
+               "YYYY-MM-DD")
+  expect_error(ir_exclude_after(list("exclude after" = "2024-02-31")),
+               "YYYY-MM-DD")
+})
+
+test_that("ir_repos uses a PPM snapshot when exclude after is present", {
+  expect_equal(ir_repos(list("exclude after" = "2024-01-15")),
+               c(CRAN = "https://packagemanager.posit.co/cran/2024-01-15"))
+})
+
+test_that("ir_repos keeps the CRAN fallback when exclude after is absent", {
+  withr::with_options(list(repos = c(CRAN = "@CRAN@")), {
+    expect_equal(ir_repos(list()), c(CRAN = "https://cran.r-project.org"))
+  })
 })
 
 # --- R version soft-check ---------------------------------------------------
@@ -164,6 +200,16 @@ test_that("ir_input_key changes with date, deps, R version, and platform", {
   expect_false(base == ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.6.0", "x86_64"))
 })
 
+test_that("ir_input_key separates dated PPM snapshots from daily latest resolution", {
+  daily <- ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.6.0", "aarch64")
+  snap1 <- ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.6.0", "aarch64",
+                        exclude_after = "2024-01-15")
+  snap2 <- ir_input_key(c("dplyr"), as.Date("2026-06-03"), "4.6.0", "aarch64",
+                        exclude_after = "2024-01-15")
+  expect_false(daily == snap1)
+  expect_identical(snap1, snap2)
+})
+
 # --- end-to-end glue (frontmatter -> deps -> refs) --------------------------
 
 test_that("the parse -> deps -> refs pipeline composes", {
@@ -178,7 +224,9 @@ test_that("the parse -> deps -> refs pipeline composes", {
   )
   spec <- ir_read_spec(ir_frontmatter(lines))
   deps <- ir_deps(spec)
+  exclude_after <- ir_exclude_after(spec)
   expect_equal(deps, c("dplyr>=1.0", "secretbase==1.2"))
+  expect_null(exclude_after)
 
   refs <- vapply(deps, ir_to_ref, character(1L), USE.NAMES = FALSE)
   expect_equal(refs, c("dplyr@>=1.0", "secretbase@1.2"))

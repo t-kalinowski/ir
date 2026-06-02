@@ -10,6 +10,7 @@ resolve them, build a dedicated package library, and run the script against it.
 #   dplyr>=1.0
 #   tidyr
 # R: ">= 4.0"
+# exclude after: "2024-01-15"
 
 library(dplyr)
 library(tidyr)
@@ -30,14 +31,18 @@ $ ./script.R
 1. **Resolve + materialise** (a private, throw-away R session).
    - The YAML frontmatter is parsed with the **yaml12** package.
    - A *resolution cache* short-circuits this whole phase: the declared
-     dependencies plus the current date (and R version / platform) are hashed,
-     and if that exact request was already resolved earlier today, its library
-     is reused and **pak is not invoked at all**. Folding the date into the key
-     forces a fresh resolution — picking up newly published versions — at most
-     once a day.
+     dependencies plus the resolution source (and R version / platform) are
+     hashed, and if that exact request was already resolved, its library is
+     reused and **pak is not invoked at all**. Latest resolution folds the
+     current date into the key, forcing a fresh resolution — picking up newly
+     published versions — at most once a day. Dated Posit Package Manager
+     snapshot resolution uses the snapshot date instead.
    - On a cache miss, the declared dependencies are resolved into concrete
      package versions with **pak** (`pak::pkg_deps`), including the full
      transitive closure.
+   - If the header has `exclude after: "YYYY-MM-DD"`, CRAN is resolved from the
+     Posit Package Manager snapshot for that date:
+     `https://packagemanager.posit.co/cran/YYYY-MM-DD`.
    - The resolved set is hashed (together with the R version and platform) into
      a content-addressed library path under the cache directory.
    - **renv** (`renv::use`) installs the packages into renv's package cache and
@@ -72,6 +77,7 @@ package, two YAML rules apply:
 #   tidyr             # latest
 #   cli==3.6.6        # exact version
 # R: ">= 4.0"         # optional; soft-checked against the running R
+# exclude after: "2024-01-15"  # optional; resolve from that PPM snapshot date
 ```
 
 Supported dependency specs in this prototype:
