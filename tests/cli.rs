@@ -51,7 +51,8 @@ fn run_with_missing_script_errors() {
 }
 
 /// Run the comprehensive R resolution suite under `cargo test`. Skips (passes
-/// as a no-op) when no usable R toolchain with testthat + yaml12 is present.
+/// as a no-op) when no usable R toolchain with the required R packages is
+/// present.
 #[test]
 fn r_resolve_suite_passes() {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -61,13 +62,15 @@ fn r_resolve_suite_passes() {
         .args([
             "-e",
             "stopifnot(requireNamespace('testthat', quietly = TRUE), \
-                       requireNamespace('yaml12',  quietly = TRUE))",
+                       requireNamespace('yaml12', quietly = TRUE), \
+                       requireNamespace('withr', quietly = TRUE), \
+                       requireNamespace('secretbase', quietly = TRUE))",
         ])
         .output();
     match probe {
         Err(_) => return eprintln!("skipping R suite: `{rscript}` not found"),
         Ok(o) if !o.status.success() => {
-            return eprintln!("skipping R suite: testthat/yaml12 unavailable");
+            return eprintln!("skipping R suite: required R packages unavailable");
         }
         Ok(_) => {}
     }

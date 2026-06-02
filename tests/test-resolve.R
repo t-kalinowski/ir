@@ -130,6 +130,35 @@ test_that("ir_check_r_version warns only on a real mismatch", {
   expect_silent(ir_check_r_version(list(R = "not-a-version"), r46))
 })
 
+# --- cache location ---------------------------------------------------------
+
+test_that("ir_cache_dir defaults to R_user_dir and honours IR_CACHE_DIR", {
+  withr::with_envvar(c(IR_CACHE_DIR = NA), {
+    expect_identical(ir_cache_dir(), tools::R_user_dir("ir", "cache"))
+  })
+  withr::with_envvar(c(IR_CACHE_DIR = "/tmp/ir-test-cache"), {
+    expect_identical(ir_cache_dir(), "/tmp/ir-test-cache")
+  })
+})
+
+# --- resolution cache key ---------------------------------------------------
+
+test_that("ir_input_key is deterministic and order independent", {
+  d <- as.Date("2026-06-02")
+  k1 <- ir_input_key(c("dplyr>=1.0", "tidyr"), d, "4.6.0", "aarch64")
+  k2 <- ir_input_key(c("tidyr", "dplyr>=1.0"), d, "4.6.0", "aarch64")  # reordered
+  expect_identical(k1, k2)
+  expect_match(k1, "^[0-9a-f]{64}$")  # sha256 hex
+})
+
+test_that("ir_input_key changes with date, deps, R version, and platform", {
+  base <- ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.6.0", "aarch64")
+  expect_false(base == ir_input_key(c("dplyr"), as.Date("2026-06-03"), "4.6.0", "aarch64"))
+  expect_false(base == ir_input_key(c("dplyr>=1.0"), as.Date("2026-06-02"), "4.6.0", "aarch64"))
+  expect_false(base == ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.5.0", "aarch64"))
+  expect_false(base == ir_input_key(c("dplyr"), as.Date("2026-06-02"), "4.6.0", "x86_64"))
+})
+
 # --- end-to-end glue (frontmatter -> deps -> refs) --------------------------
 
 test_that("the parse -> deps -> refs pipeline composes", {

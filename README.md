@@ -29,8 +29,15 @@ $ ./script.R
 
 1. **Resolve + materialise** (a private, throw-away R session).
    - The YAML frontmatter is parsed with the **yaml12** package.
-   - The declared dependencies are resolved into concrete package versions
-     with **pak** (`pak::pkg_deps`), including the full transitive closure.
+   - A *resolution cache* short-circuits this whole phase: the declared
+     dependencies plus the current date (and R version / platform) are hashed,
+     and if that exact request was already resolved earlier today, its library
+     is reused and **pak is not invoked at all**. Folding the date into the key
+     forces a fresh resolution — picking up newly published versions — at most
+     once a day.
+   - On a cache miss, the declared dependencies are resolved into concrete
+     package versions with **pak** (`pak::pkg_deps`), including the full
+     transitive closure.
    - The resolved set is hashed (together with the R version and platform) into
      a content-addressed library path under the cache directory.
    - **renv** (`renv::use`) installs the packages into renv's package cache and
@@ -101,7 +108,7 @@ $ cargo test
 ```
 
 `cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
-with `testthat` and `yaml12` is available, the R resolution suite
+with the required test packages is available, the R resolution suite
 (`tests/test-resolve.R`) — which covers pak ref normalisation, unsupported
 version-operator pass-through, exotic-ref pass-through, frontmatter parsing, and
 R-version checks. The R suite can also be run on its own:
@@ -112,10 +119,14 @@ $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE
 
 ## Configuration
 
-| Variable        | Default                                              |
-| --------------- | ---------------------------------------------------- |
-| `IR_CACHE_DIR`  | `~/Library/Caches/ir` (macOS), `~/.cache/ir` (Linux) |
-| `IR_RSCRIPT`    | `Rscript` (resolved via `PATH`)                      |
+| Variable       | Default                                          |
+| -------------- | ------------------------------------------------ |
+| `IR_CACHE_DIR` | `tools::R_user_dir("ir", "cache")`               |
+| `IR_RSCRIPT`   | `Rscript` (resolved via `PATH`)                  |
+
+The default cache directory follows R's per-package convention (e.g.
+`~/Library/Caches/org.R-project.R/R/ir` on macOS), and also honours R's own
+`R_USER_CACHE_DIR`.
 
 ## Limitations (prototype)
 
