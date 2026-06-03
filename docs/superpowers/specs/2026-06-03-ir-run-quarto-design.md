@@ -39,11 +39,10 @@ The R binary `ir` uses is "the selected Rscript" — today `IR_RSCRIPT` or
 `Rscript` on PATH. R-version *selection* is not implemented; `R:` is only a
 soft check inside the resolver.
 
-### Built on PR #14
+### Built on PR #14 (merged)
 
-This design assumes the architecture of open PR #14
-(`t-kalinowski/ir`, branch `move-yaml-parsing-to-rust`), which moves YAML
-parsing from R into Rust:
+This design assumes the architecture of PR #14 (`t-kalinowski/ir`), merged into
+`main` as `14e688f`, which moved YAML parsing from R into Rust:
 
 - Rust parses the frontmatter with `saphyr` into
   `ScriptSpec { dependencies, exclude_after, r_requirement }`
@@ -105,10 +104,12 @@ materialise) is unchanged. Phase 2 dispatches by file extension.
    clear error. Phase 1 (`resolve_library`) runs identically for both.
 
 5. **`run_quarto`.** Locate `quarto` on PATH. Build
-   `quarto render <doc> <passthrough args>`. Set `QUARTO_R=<selected Rscript>`
-   and, when dependencies resolved, `R_LIBS=<materialised library>`. Use the
-   same platform split as `run_script` (exec on Unix, spawn + status on
-   Windows). Propagate the exit code.
+   `quarto render <doc> <script_args>`. Set `QUARTO_R=<selected Rscript>` and,
+   when dependencies resolved, `R_LIBS=<materialised library>`. When
+   `rscript_args` are present, set `QUARTO_KNITR_RSCRIPT_ARGS` to those args,
+   comma-joined, so quarto's knitr Rscript receives them. Use the same platform
+   split as `run_script` (exec on Unix, spawn + status on Windows). Propagate
+   the exit code.
 
 ### Selected-Rscript seam
 
@@ -126,8 +127,9 @@ doc.qmd
   → parse_frontmatter, descend into `ir:` → ScriptSpec
   → deps on stdin + IR_EXCLUDE_AFTER + IR_R_REQUIREMENT → resolve.R
   → resolve + materialise content-addressed library → library path
-  → run_quarto: QUARTO_R=<rscript>, R_LIBS=<library>
-  → quarto render doc.qmd
+  → run_quarto: QUARTO_R=<rscript>, R_LIBS=<library>,
+                QUARTO_KNITR_RSCRIPT_ARGS=<rscript_args> (if any)
+  → quarto render doc.qmd <script_args>
   → quarto knitr spawns QUARTO_R Rscript, inherits R_LIBS
   → .libPaths() prepended → document renders
 ```
@@ -144,9 +146,19 @@ doc.qmd
 
 ## Passthrough arguments
 
-`ir run doc.qmd --to pdf` → `quarto render doc.qmd --to pdf`. Extra arguments
-are appended to the render command, mirroring how `script_args` already flow to
-a script.
+`ir run` takes two argument buckets (`parse_run_args`): leading `-`-prefixed
+tokens are `rscript_args`, the first bare token is the document, trailing tokens
+are `script_args`. The qmd flow maps each to the equivalent quarto target,
+preserving the #13 intent that leading options target the R running the code:
+
+- **`script_args` → `quarto render <doc> <script_args>`.** E.g.
+  `ir run doc.qmd --to pdf` → `quarto render doc.qmd --to pdf`.
+- **`rscript_args` → `QUARTO_KNITR_RSCRIPT_ARGS`** (comma-joined). E.g.
+  `ir run --vanilla doc.qmd` sets `QUARTO_KNITR_RSCRIPT_ARGS=--vanilla`, which
+  quarto splits on commas and passes to its knitr Rscript (`rmd.ts:434`).
+  Caveat: an `rscript_args` token containing a comma would break quarto's
+  comma-split; acceptable for now (R options rarely contain commas), noted as a
+  known limitation.
 
 ## Testing
 
@@ -167,11 +179,13 @@ a script.
 
 ## Dev workflow / sequencing
 
-- PR #14 is **open, not merged**. Base the implementation branch on #14's branch
-  (`move-yaml-parsing-to-rust`), or land after #14 merges. Building on current
-  `main` would mean reworking against the old R-side-parse code.
-- Push to the appropriate remote, open a PR against `main` (or #14's branch
-  while it is open), and link the work to the relevant tracking issue.
+- PR #14 is **merged** (`14e688f`); base the implementation branch on `main`.
+- PR #13 ("Pass Rscript options through `ir run`", `3e0e6ec`) already shaped the
+  `ir run` argument handling. The qmd passthrough must align with how #13 splits
+  Rscript options from the script path and trailing arguments — confirm during
+  planning before adding `quarto render` passthrough.
+- Push to the appropriate remote, open a PR against `main`, and link the work to
+  the relevant tracking issue.
 
 ## Rejected alternative
 
@@ -184,5 +198,5 @@ untouched.
 ## Naming note
 
 `ScriptSpec` / `read_script_spec` read awkwardly once documents are involved.
-Recommendation: keep #14's names to minimise diff against an open PR. A
-`RunSpec` rename is optional churn that can be skipped.
+Recommendation: keep #14's names to match the merged conventions and minimise
+diff. A `RunSpec` rename is optional churn that can be skipped.
