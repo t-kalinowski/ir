@@ -39,7 +39,7 @@ const EMBEDDED_AVAILABLE: &[AvailableCandidate<'static>] = &[
     },
 ];
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct AvailableR {
     name: String,
     version: String,
@@ -227,6 +227,8 @@ fn cached_rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let json = String::from_utf8(rig_output(&["available", "--json"])?)
         .map_err(|e| format!("`rig available --json` returned non-UTF-8 output: {e}"))?;
     let available = parse_rig_available_json(&json)?;
+    let json = serde_json::to_string_pretty(&available)
+        .map_err(|e| format!("failed to serialize cached rig available JSON: {e}"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create `{}`: {e}", parent.display()))?;
@@ -236,8 +238,25 @@ fn cached_rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
 }
 
 fn parse_rig_available_json(json: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    serde_json::from_str(json)
-        .map_err(|e| format!("failed to parse `rig available --json` JSON: {e}").into())
+    let mut versions: Vec<AvailableR> = serde_json::from_str(json)
+        .map_err(|e| format!("failed to parse `rig available --json` JSON: {e}"))?;
+
+    for version in &mut versions {
+        if let Some(date) = version.date.as_deref() {
+            version.date = Some(
+                iso_date_prefix(date)
+                    .ok_or_else(|| {
+                        format!(
+                            "rig available returned invalid release date `{}` for R {}",
+                            date, version.version
+                        )
+                    })?
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(versions)
 }
 
 fn released_before_or_on(version: &AvailableCandidate<'_>, exclude_newer: Option<&str>) -> bool {

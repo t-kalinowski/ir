@@ -456,8 +456,8 @@ fn run_reads_cached_rig_available_json_for_newer_exclude_newer() {
     fs::write(
         &available_cache,
         r#"[
-  {"name":"4.6.0","date":"2026-04-24T07:17:39Z","version":"4.6.0"},
-  {"name":"4.7.0","date":"2026-09-01T00:00:00Z","version":"4.7.0"}
+  {"name":"4.6.0","date":"2026-04-24","version":"4.6.0"},
+  {"name":"4.7.0","date":"2026-09-01","version":"4.7.0"}
 ]
 "#,
     )
