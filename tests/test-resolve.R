@@ -71,23 +71,17 @@ test_that("non-standard refs are passed through untouched", {
 
 # --- YAML frontmatter parsing ----------------------------------------------
 
-test_that("ir_read_spec parses YAML mappings", {
-  spec <- ir_read_spec(paste(
+test_that("ir_read_spec parses YAML frontmatter lines", {
+  spec <- ir_read_spec(c(
     "dependencies:",
     "  - dplyr",
     "  - tidyr",
     "R: \">= 4.0\"",
-    "exclude after: \"2024-01-15\"",
-    sep = "\n"
+    "exclude after: \"2024-01-15\""
   ))
   expect_equal(spec$dependencies, c("dplyr", "tidyr"))
   expect_equal(spec$R, ">= 4.0")
   expect_equal(spec[["exclude after"]], "2024-01-15")
-})
-
-test_that("ir_read_spec treats non-mappings and empty input as no YAML frontmatter", {
-  expect_equal(ir_read_spec(""), list())
-  expect_equal(ir_read_spec("just some prose, not a mapping"), list())
 })
 
 test_that("ir_read_spec errors on malformed YAML", {

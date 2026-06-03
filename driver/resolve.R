@@ -24,17 +24,14 @@
 
 ## --- YAML frontmatter parsing ----------------------------------------------
 
-# Parse YAML frontmatter text into a spec list. A non-mapping result (e.g. prose
-# that parses to a scalar) is treated as absent frontmatter, but invalid YAML is
-# an error.
+# Parse YAML frontmatter into a spec object. Invalid YAML is an error.
 ir_read_spec <- function(yaml_text) {
-  spec <- tryCatch(
-    if (nzchar(yaml_text)) yaml12::parse_yaml(yaml_text) else list(),
+  tryCatch(
+    yaml12::parse_yaml(yaml_text),
     error = function(e)
       stop(sprintf("could not parse script frontmatter as YAML: %s",
                    conditionMessage(e)), call. = FALSE)
   )
-  if (is.list(spec)) spec else list()
 }
 
 # The declared dependency specs. Accepts both a YAML list (`- dplyr`) and a
@@ -166,7 +163,7 @@ ir_resolve_main <- function() {
   cache_dir   <- ir_cache_dir()
 
   ## 1. Parse YAML frontmatter
-  spec <- ir_read_spec(paste(readLines(stdin(), warn = FALSE), collapse = "\n"))
+  spec <- ir_read_spec(readLines(stdin()))
   deps <- ir_deps(spec)
   exclude_after <- ir_exclude_after(spec)
   ir_check_r_version(spec)
