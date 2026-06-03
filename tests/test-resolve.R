@@ -69,7 +69,7 @@ test_that("non-standard refs are passed through untouched", {
   expect_equal(ref("url::https://x/y.tar.gz"), "url::https://x/y.tar.gz")
 })
 
-# --- spec parsing -----------------------------------------------------------
+# --- YAML frontmatter parsing ----------------------------------------------
 
 test_that("ir_read_spec parses YAML mappings", {
   spec <- ir_read_spec(paste(
@@ -85,7 +85,7 @@ test_that("ir_read_spec parses YAML mappings", {
   expect_equal(spec[["exclude after"]], "2024-01-15")
 })
 
-test_that("ir_read_spec treats non-mappings and empty input as no frontmatter", {
+test_that("ir_read_spec treats non-mappings and empty input as no YAML frontmatter", {
   expect_equal(ir_read_spec(""), list())
   expect_equal(ir_read_spec("just some prose, not a mapping"), list())
 })

@@ -1,7 +1,7 @@
 //! `ir` — self-describing R scripts.
 //!
-//! Runs a standalone R script whose dependencies are declared in a YAML
-//! comment block at the top of the file:
+//! Runs a standalone R script whose dependencies are declared in YAML
+//! frontmatter at the top of the file:
 //!
 //! ```r
 //! #!/usr/bin/env -S ir run
@@ -17,12 +17,12 @@
 //!
 //! The pipeline has two phases:
 //!
-//!   1. Rust extracts the leading `#| ` frontmatter block. A private R session
-//!      (`driver/resolve.R`) parses that YAML text, resolves the dependencies
-//!      with pak, hashes the resolved set into a content-addressed library path
-//!      under the cache directory, and materialises that path as a light-weight
-//!      library of symlinks into renv's package cache. The path is reported
-//!      back to us.
+//!   1. Rust extracts the leading `#| ` YAML frontmatter block. A private R
+//!      session (`driver/resolve.R`) parses that YAML frontmatter, resolves the
+//!      dependencies with pak, hashes the resolved set into a content-addressed
+//!      library path under the cache directory, and materialises that path as a
+//!      light-weight library of symlinks into renv's package cache. The path is
+//!      reported back to us.
 //!
 //!   2. We launch the user's script in a fresh, isolated R session whose
 //!      library path is exactly that library plus base R.
@@ -198,7 +198,7 @@ fn cmd_run(script: &str, script_args: &[String]) -> Result<(), Box<dyn Error>> {
     let rscript = rscript_command();
 
     // Phase 1: private R session resolves deps and materialises the library.
-    // Rust sends the extracted YAML on stdin and receives the library path.
+    // Rust sends the extracted YAML frontmatter on stdin and receives the library path.
     let library = resolve_library(&rscript, &script_path)?;
 
     // Phase 2: run the user's script in an isolated R session.

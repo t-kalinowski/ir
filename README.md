@@ -40,8 +40,8 @@ $ ./script.R
    - On a cache miss, the declared dependencies are resolved into concrete
      package versions with **pak** (`pak::pkg_deps`), including the full
      transitive closure.
-   - If the header has `exclude after: "YYYY-MM-DD"`, CRAN is resolved from the
-     Posit Package Manager snapshot for that date:
+   - If the YAML frontmatter has `exclude after: "YYYY-MM-DD"`, CRAN is
+     resolved from the Posit Package Manager snapshot for that date:
      `https://packagemanager.posit.co/cran/YYYY-MM-DD`.
    - The resolved set is hashed (together with the R version and platform) into
      a content-addressed library path under the cache directory.
@@ -73,10 +73,10 @@ cache, including materialised libraries and resolution markers.
 
 ## Frontmatter format
 
-The header is the leading block of lines that start exactly with `#| ` (after a
-single optional `#!` shebang line). Rust strips the `#| ` prefix and passes only
-the YAML text to the R resolver. Because it is parsed as real YAML by the
-`yaml12` package, two YAML rules apply:
+The YAML frontmatter is the leading block of lines that start exactly with
+`#| ` (after a single optional `#!` shebang line). Rust strips the `#| ` prefix
+and passes only the YAML frontmatter text to the R resolver. Because it is
+parsed as real YAML by the `yaml12` package, two YAML rules apply:
 
 - The `R:` constraint must be **quoted** — `R: ">= 4.0"` — because a bare value
   starting with `>` is not valid YAML.
@@ -128,8 +128,8 @@ $ cargo test
 `cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
 with the required test packages is available, the R resolution suite
 (`tests/test-resolve.R`) — which covers pak ref normalisation, unsupported
-version-operator pass-through, exotic-ref pass-through, YAML spec parsing, and
-R-version checks. The R suite can also be run on its own:
+version-operator pass-through, exotic-ref pass-through, YAML frontmatter
+parsing, and R-version checks. The R suite can also be run on its own:
 
 ```console
 $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'

@@ -22,11 +22,11 @@
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-## --- spec parsing -----------------------------------------------------------
+## --- YAML frontmatter parsing ----------------------------------------------
 
-# Parse frontmatter text into a spec list. A non-mapping result (e.g. a prose
-# comment that parses to a scalar) is treated as an absent header, but invalid
-# YAML is an error.
+# Parse YAML frontmatter text into a spec list. A non-mapping result (e.g. prose
+# that parses to a scalar) is treated as absent frontmatter, but invalid YAML is
+# an error.
 ir_read_spec <- function(yaml_text) {
   spec <- tryCatch(
     if (nzchar(yaml_text)) yaml12::parse_yaml(yaml_text) else list(),
@@ -165,7 +165,7 @@ ir_resolve_main <- function() {
   out_file    <- args[[1L]]
   cache_dir   <- ir_cache_dir()
 
-  ## 1. Parse frontmatter
+  ## 1. Parse YAML frontmatter
   spec <- ir_read_spec(paste(readLines(stdin(), warn = FALSE), collapse = "\n"))
   deps <- ir_deps(spec)
   exclude_after <- ir_exclude_after(spec)
