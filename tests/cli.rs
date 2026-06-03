@@ -86,6 +86,20 @@ fn run_without_a_script_errors() {
 }
 
 #[test]
+fn run_help_flag_shows_help() {
+    let out = ir().args(["run", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Run an R script"), "{stdout}");
+    assert!(stdout.contains("USAGE"), "{stdout}");
+    assert!(
+        stdout.contains("ir run [Rscript-options...] <script.R> [args...]"),
+        "{stdout}"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
 fn run_with_missing_script_errors() {
     let out = ir().args(["run", "/no/such/ir-script.R"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -195,7 +209,7 @@ printf '%s\n' "{}"
 
 #[cfg(unix)]
 #[test]
-fn run_enables_and_forwards_pak_progress_in_resolver() {
+fn run_pipes_frontmatter_and_forwards_pak_progress_in_resolver() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
 
@@ -210,14 +224,24 @@ for arg in "$@"; do
   fi
 done
 
-if [ "$#" = "3" ]; then
+if [ "$#" = "2" ]; then
   if [ "${R_PKG_SHOW_PROGRESS:-}" != "true" ]; then
     echo "pak progress disabled" >&2
     exit 7
   fi
+  actual="$(mktemp)"
+  expected="$(mktemp)"
+  cat > "$actual"
+  printf 'dependencies:\n  - dplyr>=1.0\nexclude after: "2024-01-15"\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    echo "--- actual ---" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
   echo "pak progress stdout"
   echo "pak progress stderr" >&2
-  echo "/tmp/ir-test-library" > "$3"
+  echo "/tmp/ir-test-library" > "$2"
   exit 0
 fi
 
@@ -229,7 +253,17 @@ fi
 echo "user script stdout"
 "#,
     );
-    fs::write(&script, "cat('unused by fake Rscript\\n')\n").unwrap();
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| dependencies:
+#|   - dplyr>=1.0
+#| exclude after: "2024-01-15"
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
 
     let out = ir()
         .env("IR_RSCRIPT", &fake_rscript)
@@ -270,8 +304,9 @@ if [ "$1" != "--vanilla" ]; then
       exit 9
     fi
   done
-  test "$#" = "3"
-  : > "$3"
+  test "$#" = "2"
+  cat > /dev/null
+  : > "$2"
   exit 0
 fi
 
@@ -324,9 +359,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-# Phase 1 (resolve) gets 3 args: report an empty library and succeed.
-if [ "$#" = "3" ]; then
-  : > "$3"
+# Phase 1 (resolve) gets the driver path and output path.
+if [ "$#" = "2" ]; then
+  cat > /dev/null
+  : > "$2"
   exit 0
 fi
 # Phase 2 (user script): exit with a distinctive code.
@@ -349,7 +385,7 @@ exit 42
 
 /// Windows has no `exec`, so `ir` runs R as a child and forwards its exit code
 /// via `status.code()`. The fake distinguishes phases by the presence of the
-/// resolver's 3rd (output-file) argument.
+/// resolver's output-file argument.
 #[cfg(windows)]
 #[test]
 fn run_propagates_user_script_exit_code() {
@@ -360,10 +396,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         concat!(
             "@echo off\r\n",
-            // Phase 1 (resolve): a 3rd arg is present — report an empty
-            // library to its path and succeed.
-            "if not \"%~3\"==\"\" (\r\n",
-            "  type nul > \"%~3\"\r\n",
+            // Phase 1 (resolve): an output-file arg is present — report an
+            // empty library to its path and succeed.
+            "if not \"%~2\"==\"\" (\r\n",
+            "  type nul > \"%~2\"\r\n",
             "  exit /b 0\r\n",
             ")\r\n",
             // Phase 2 (user script): exit with a distinctive code.
@@ -400,8 +436,9 @@ fn run_propagates_user_script_signal_death() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-if [ "$#" = "3" ]; then
-  : > "$3"
+if [ "$#" = "2" ]; then
+  cat > /dev/null
+  : > "$2"
   exit 0
 fi
 # Phase 2: after exec this shell *is* ir's process, so SIGKILL kills ir itself.
