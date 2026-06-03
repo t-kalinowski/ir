@@ -54,6 +54,10 @@ fn try_main() -> Result<(), Box<dyn Error>> {
             let script = args
                 .next()
                 .ok_or("`ir run` requires a script path (try `ir run script.R`)")?;
+            if script == "--help" || script == "-h" {
+                print_run_help();
+                return Ok(());
+            }
             let script_args: Vec<String> = args.collect();
             cmd_run(&script, &script_args)
         }
@@ -150,6 +154,23 @@ fn print_help() {
         ),
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn print_run_help() {
+    println!(concat!(
+        "Run an R script\n",
+        "\n",
+        "USAGE:\n",
+        "    ir run <script.R> [args...]\n",
+        "\n",
+        "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
+        "dependencies, builds a dedicated package library, and runs the script\n",
+        "against it. Any trailing args are passed through to the script.\n",
+        "\n",
+        "ENVIRONMENT:\n",
+        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
+        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
+    ));
 }
 
 fn print_cache_help() {

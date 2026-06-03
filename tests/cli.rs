@@ -84,6 +84,17 @@ fn run_without_a_script_errors() {
 }
 
 #[test]
+fn run_help_flag_shows_help() {
+    let out = ir().args(["run", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Run an R script"), "{stdout}");
+    assert!(stdout.contains("USAGE"), "{stdout}");
+    assert!(stdout.contains("ir run <script.R> [args...]"), "{stdout}");
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
 fn run_with_missing_script_errors() {
     let out = ir().args(["run", "/no/such/ir-script.R"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
