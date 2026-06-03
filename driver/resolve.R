@@ -2,7 +2,7 @@
 #
 # Run by the `ir` Rust binary in a private, throw-away R session.
 #
-#   Rscript --vanilla resolve.R <script_path> <cache_dir> <out_file>
+#   Rscript resolve.R <script_path> <out_file>
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
 #   1. Parse the commented YAML frontmatter of <script_path> with yaml12.
