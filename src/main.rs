@@ -17,12 +17,12 @@
 //!
 //! The pipeline has two phases:
 //!
-//!   1. Rust extracts the leading `#| ` YAML frontmatter block. A private R
-//!      session (`driver/resolve.R`) parses that YAML frontmatter, resolves the
-//!      dependencies with pak, hashes the resolved set into a content-addressed
-//!      library path under the cache directory, and materialises that path as a
-//!      light-weight library of symlinks into renv's package cache. The path is
-//!      reported back to us.
+//!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. A
+//!      private R session (`driver/resolve.R`) receives the dependency specs on
+//!      stdin, resolves them with pak, hashes the resolved set into a
+//!      content-addressed library path under the cache directory, and
+//!      materialises that path as a light-weight library of symlinks into renv's
+//!      package cache. The path is reported back to us.
 //!
 //!   2. We launch the user's script in a fresh, isolated R session whose
 //!      library path is exactly that library plus base R.
@@ -36,9 +36,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use saphyr::{LoadableYamlNode, Yaml};
+
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.
 const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
+
+#[derive(Debug, Default)]
+struct ScriptSpec {
+    dependencies: Vec<String>,
+    exclude_after: Option<String>,
+    r_requirement: Option<String>,
+}
 
 fn main() {
     if let Err(err) = try_main() {
@@ -246,7 +255,7 @@ fn cmd_run(
     let rscript = rscript_command();
 
     // Phase 1: private R session resolves deps and materialises the library.
-    // Rust sends the extracted YAML frontmatter on stdin and receives the library path.
+    // Rust parses the YAML frontmatter and sends dependency specs on stdin.
     let library = resolve_library(&rscript, &script_path)?;
 
     // Phase 2: run the user's script in an isolated R session.
@@ -265,35 +274,40 @@ fn cmd_run(
 fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> {
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
-    let out = unique_path(&tmp, "ir-libpath", "txt");
-    let frontmatter = read_op_frontmatter_to_string(script)?;
+    let result_file = unique_path(&tmp, "ir-libpath", "txt");
+    let spec = read_script_spec(script)?;
     fs::write(&driver, RESOLVE_DRIVER)?;
 
-    let mut child = Command::new(rscript)
-        .arg(&driver)
-        .arg(&out)
+    let mut cmd = Command::new(rscript);
+    cmd.arg(&driver)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        .env("IR_RESOLVE_RESULT_FILE", &result_file)
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
-        .env("R_PKG_SHOW_PROGRESS", "true")
-        .spawn()
-        .map_err(|e| spawn_error(rscript, e))?;
+        .env("R_PKG_SHOW_PROGRESS", "true");
+    if let Some(exclude_after) = &spec.exclude_after {
+        cmd.env("IR_EXCLUDE_AFTER", exclude_after);
+    }
+    if let Some(r_requirement) = &spec.r_requirement {
+        cmd.env("IR_R_REQUIREMENT", r_requirement);
+    }
 
-    let write_result = child
-        .stdin
-        .take()
-        .ok_or("failed to open resolver stdin")?
-        .write_all(frontmatter.as_bytes());
+    let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
+    {
+        let mut stdin = child.stdin.take().ok_or("failed to open resolver stdin")?;
+        for dependency in &spec.dependencies {
+            writeln!(stdin, "{dependency}")?;
+        }
+    }
     let status = child
         .wait()
         .map_err(|e| format!("failed to wait for dependency resolver: {e}"))?;
-    write_result?;
 
     let _ = fs::remove_file(&driver);
-    let result = fs::read_to_string(&out).unwrap_or_default();
-    let _ = fs::remove_file(&out);
+    let result = fs::read_to_string(&result_file).unwrap_or_default();
+    let _ = fs::remove_file(&result_file);
 
     if !status.success() {
         return Err("dependency resolution failed".into());
@@ -304,6 +318,88 @@ fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Bo
         None
     } else {
         Some(PathBuf::from(path))
+    })
+}
+
+fn read_script_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
+    parse_frontmatter(&read_op_frontmatter_to_string(script)?)
+}
+
+fn parse_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn Error>> {
+    if frontmatter.trim().is_empty() {
+        return Ok(ScriptSpec::default());
+    }
+
+    let docs = Yaml::load_from_str(frontmatter)
+        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
+    if docs.len() != 1 {
+        return Err("script frontmatter must contain exactly one YAML document".into());
+    }
+    if docs[0].is_null() {
+        return Ok(ScriptSpec::default());
+    }
+
+    let doc = &docs[0];
+    if !doc.is_mapping() {
+        return Err("script frontmatter must be a YAML mapping".into());
+    }
+
+    Ok(ScriptSpec {
+        dependencies: frontmatter_dependencies(doc)?,
+        exclude_after: frontmatter_optional_string(doc, "exclude after")?,
+        r_requirement: frontmatter_optional_string(doc, "R")?,
+    })
+}
+
+fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error>> {
+    let Some(value) = doc.as_mapping_get("dependencies") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let mut dependencies = Vec::new();
+    if let Some(seq) = value.as_vec() {
+        for item in seq {
+            push_dependency_words(&mut dependencies, item)?;
+        }
+    } else {
+        push_dependency_words(&mut dependencies, value)?;
+    }
+    Ok(dependencies)
+}
+
+fn push_dependency_words(
+    dependencies: &mut Vec<String>,
+    value: &Yaml<'_>,
+) -> Result<(), Box<dyn Error>> {
+    let Some(value) = value.as_str() else {
+        return Err("frontmatter `dependencies` entries must be strings".into());
+    };
+    dependencies.extend(value.split_whitespace().map(str::to_owned));
+    Ok(())
+}
+
+fn frontmatter_optional_string(
+    doc: &Yaml<'_>,
+    key: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(value) = doc.as_mapping_get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(value) = value.as_str() else {
+        return Err(format!("frontmatter `{key}` must be a string").into());
+    };
+    let value = value.trim();
+    Ok(if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
     })
 }
 

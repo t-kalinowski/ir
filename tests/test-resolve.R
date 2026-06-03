@@ -69,64 +69,27 @@ test_that("non-standard refs are passed through untouched", {
   expect_equal(ref("url::https://x/y.tar.gz"), "url::https://x/y.tar.gz")
 })
 
-# --- YAML frontmatter parsing ----------------------------------------------
-
-test_that("ir_read_spec parses YAML frontmatter lines", {
-  spec <- ir_read_spec(c(
-    "dependencies:",
-    "  - dplyr",
-    "  - tidyr",
-    "R: \">= 4.0\"",
-    "exclude after: \"2024-01-15\""
-  ))
-  expect_equal(spec$dependencies, c("dplyr", "tidyr"))
-  expect_equal(spec$R, ">= 4.0")
-  expect_equal(spec[["exclude after"]], "2024-01-15")
-})
-
-test_that("ir_read_spec errors on malformed YAML", {
-  expect_error(ir_read_spec("a: [1, 2"), "could not parse script frontmatter as YAML")
-})
-
-# --- dependency extraction --------------------------------------------------
-
-test_that("ir_deps handles YAML sequence dependencies", {
-  expect_equal(ir_deps(list(dependencies = c("dplyr>=1.0", "tidyr"))),
-               c("dplyr>=1.0", "tidyr"))
-})
-
-test_that("ir_deps returns character(0) when there are no dependencies", {
-  expect_equal(ir_deps(list()), character())
-  expect_equal(ir_deps(list(dependencies = NULL)), character())
-  expect_equal(ir_deps(list(dependencies = c("dplyr", "", "  ", "tidyr"))),
-               c("dplyr", "tidyr"))
-})
-
 # --- exclude-after snapshots -----------------------------------------------
 
 test_that("ir_exclude_after reads an optional YYYY-MM-DD date", {
-  expect_null(ir_exclude_after(list()))
-  expect_equal(ir_exclude_after(list("exclude after" = "2024-01-15")),
-               "2024-01-15")
-  expect_equal(ir_exclude_after(list("exclude after" = " 2024-01-15 ")),
-               "2024-01-15")
+  expect_null(ir_exclude_after(NULL))
+  expect_equal(ir_exclude_after("2024-01-15"), "2024-01-15")
+  expect_equal(ir_exclude_after(" 2024-01-15 "), "2024-01-15")
 })
 
 test_that("ir_exclude_after rejects malformed dates", {
-  expect_error(ir_exclude_after(list("exclude after" = "2024-01")),
-               "YYYY-MM-DD")
-  expect_error(ir_exclude_after(list("exclude after" = "2024-02-31")),
-               "YYYY-MM-DD")
+  expect_error(ir_exclude_after("2024-01"), "YYYY-MM-DD")
+  expect_error(ir_exclude_after("2024-02-31"), "YYYY-MM-DD")
 })
 
 test_that("ir_repos uses a PPM snapshot when exclude after is present", {
-  expect_equal(ir_repos(list("exclude after" = "2024-01-15")),
+  expect_equal(ir_repos("2024-01-15"),
                c(CRAN = "https://packagemanager.posit.co/cran/2024-01-15"))
 })
 
 test_that("ir_repos keeps the CRAN fallback when exclude after is absent", {
   withr::with_options(list(repos = c(CRAN = "@CRAN@")), {
-    expect_equal(ir_repos(list()), c(CRAN = "https://cran.r-project.org"))
+    expect_equal(ir_repos(), c(CRAN = "https://cran.r-project.org"))
   })
 })
 
@@ -134,13 +97,13 @@ test_that("ir_repos keeps the CRAN fallback when exclude after is absent", {
 
 test_that("ir_check_r_version warns only on a real mismatch", {
   r46 <- numeric_version("4.6.0")
-  expect_warning(ir_check_r_version(list(R = ">= 99.0"), r46), "requests R")
-  expect_warning(ir_check_r_version(list(R = "== 4.0"),  r46), "requests R")
-  expect_silent(ir_check_r_version(list(R = ">= 4.0"), r46))
-  expect_silent(ir_check_r_version(list(R = "4.0"),    r46))   # bare implies >=
-  expect_silent(ir_check_r_version(list(R = "<= 4.6"), r46))
-  expect_silent(ir_check_r_version(list(), r46))               # no R key
-  expect_silent(ir_check_r_version(list(R = "not-a-version"), r46))
+  expect_warning(ir_check_r_version(">= 99.0", r46), "requests R")
+  expect_warning(ir_check_r_version("== 4.0",  r46), "requests R")
+  expect_silent(ir_check_r_version(">= 4.0", r46))
+  expect_silent(ir_check_r_version("4.0",    r46))   # bare implies >=
+  expect_silent(ir_check_r_version("<= 4.6", r46))
+  expect_silent(ir_check_r_version(NULL, r46))        # no R key
+  expect_silent(ir_check_r_version("not-a-version", r46))
 })
 
 # --- cache location ---------------------------------------------------------
@@ -182,22 +145,10 @@ test_that("ir_input_key separates dated PPM snapshots from daily latest resoluti
   expect_identical(snap1, snap2)
 })
 
-# --- end-to-end glue (spec -> deps -> refs) ---------------------------------
+# --- dependency refs ---------------------------------------------------------
 
-test_that("the parse -> deps -> refs pipeline composes", {
-  yaml <- paste(
-    "dependencies:",
-    "  - dplyr>=1.0",
-    "  - secretbase==1.2",
-    "R: \">= 4.0\"",
-    sep = "\n"
-  )
-  spec <- ir_read_spec(yaml)
-  deps <- ir_deps(spec)
-  exclude_after <- ir_exclude_after(spec)
-  expect_equal(deps, c("dplyr>=1.0", "secretbase==1.2"))
-  expect_null(exclude_after)
-
+test_that("dependency specs are normalized to refs", {
+  deps <- c("dplyr>=1.0", "secretbase==1.2")
   refs <- vapply(deps, ir_to_ref, character(1L), USE.NAMES = FALSE)
   expect_equal(refs, c("dplyr@>=1.0", "secretbase@1.2"))
 })

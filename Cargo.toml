@@ -9,5 +9,8 @@ license = "MIT"
 name = "ir"
 path = "src/main.rs"
 
+[dependencies]
+saphyr = { git = "https://github.com/t-kalinowski/saphyr", rev = "73f6994fd5dbfa7350adb3fe2f01653bb03befaf", default-features = false }
+
 [profile.release]
 strip = true
