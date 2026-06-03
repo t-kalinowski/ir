@@ -602,6 +602,56 @@ fn run_script(
     }
 }
 
+/// Phase 2 (Quarto) — render `doc` with `quarto render`, pointed at the selected
+/// R and the materialised library.
+///
+/// `QUARTO_R` pins quarto's knitr R to `ir`'s selected Rscript (see
+/// `quarto_r_value`). `R_LIBS` injects the resolved library exactly as for a
+/// script. `rscript_args` (leading Rscript options) are forwarded to quarto's
+/// knitr Rscript via `QUARTO_KNITR_RSCRIPT_ARGS`, which quarto splits on commas
+/// with no escaping; `cmd_run` rejects comma-containing args before phase 1 (see
+/// `reject_comma_rscript_args`), so by here they are known comma-free.
+/// `script_args` (trailing) become `quarto render <doc> <script_args>`.
+///
+/// The quarto executable is `quarto_command()` (`IR_QUARTO` or bare `quarto`).
+/// As with `run_script`, on Unix we `exec` into quarto; on Windows it runs as a
+/// child and we return its exit code.
+// Wired into cmd_run dispatch in the quarto dispatch task (Task 4).
+#[allow(dead_code)]
+fn run_quarto(
+    rscript: &OsStr,
+    library: Option<&Path>,
+    doc: &Path,
+    rscript_args: &[String],
+    script_args: &[String],
+) -> Result<i32, Box<dyn Error>> {
+    let mut cmd = Command::new(quarto_command());
+    cmd.arg("render").arg(doc).args(script_args);
+
+    if let Some(value) = quarto_r_value(rscript) {
+        cmd.env("QUARTO_R", value);
+    }
+    if let Some(lib) = library {
+        cmd.env("R_LIBS", lib);
+    }
+    if !rscript_args.is_empty() {
+        cmd.env("QUARTO_KNITR_RSCRIPT_ARGS", rscript_args.join(","));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Replace ir with quarto; returns only if the exec fails.
+        Err(quarto_spawn_error(cmd.exec()).into())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = cmd.status().map_err(quarto_spawn_error)?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
 fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     let file = File::open(script)?;
     let mut reader = BufReader::new(file);
@@ -738,6 +788,41 @@ fn spawn_error(rscript: &OsStr, err: io::Error) -> String {
     }
 }
 
+/// The value to pass as `QUARTO_R`, or `None` to leave quarto's own R lookup in
+/// charge. `QUARTO_R` is pinned only when the selected Rscript is path-like — an
+/// existing path, or a value containing a path separator. A bare `Rscript`
+/// resolves identically on PATH for both `ir` and quarto, so leaving `QUARTO_R`
+/// unset there avoids quarto's "Specified QUARTO_R … does not exist" warning
+/// while preserving the same-R invariant.
+fn quarto_r_value(rscript: &OsStr) -> Option<std::ffi::OsString> {
+    let looks_like_path = rscript.to_string_lossy().contains(['/', '\\']);
+    if looks_like_path || Path::new(rscript).exists() {
+        Some(rscript.to_os_string())
+    } else {
+        None
+    }
+}
+
+/// The quarto executable to launch: `IR_QUARTO` if set, else bare `quarto`
+/// (resolved on PATH). Mirrors `rscript_command`. On Windows a bare `quarto`
+/// resolves only to `quarto.exe` — Rust's PATH search does not consult PATHEXT —
+/// so a dev build shipped as `quarto.cmd` must be selected via `IR_QUARTO`
+/// pointing at its full path.
+fn quarto_command() -> std::ffi::OsString {
+    env::var_os("IR_QUARTO").unwrap_or_else(|| "quarto".into())
+}
+
+/// Turn a failure to launch quarto into an actionable message.
+fn quarto_spawn_error(err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        "could not find `quarto`. Install Quarto (https://quarto.org/docs/get-started/) \
+         or set IR_QUARTO to a quarto executable."
+            .to_string()
+    } else {
+        format!("failed to launch `quarto`: {err}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,5 +896,31 @@ mod tests {
     #[test]
     fn extract_yaml_block_without_closing_fence_is_empty() {
         assert_eq!(extract_yaml_block("---\ntitle: Demo\nbody\n"), "");
+    }
+
+    #[test]
+    fn quarto_r_value_set_for_pathlike() {
+        assert_eq!(
+            quarto_r_value(OsStr::new("/usr/local/bin/Rscript")),
+            Some("/usr/local/bin/Rscript".into())
+        );
+        assert_eq!(
+            quarto_r_value(OsStr::new("some/dir/Rscript")),
+            Some("some/dir/Rscript".into())
+        );
+    }
+
+    #[test]
+    fn quarto_r_value_unset_for_bare_command() {
+        // A bare command name with no separator and no such file on disk: leave
+        // quarto's own PATH lookup in charge.
+        assert_eq!(quarto_r_value(OsStr::new("Rscript")), None);
+    }
+
+    #[test]
+    fn quarto_spawn_error_explains_missing_quarto() {
+        let err = quarto_spawn_error(io::Error::from(io::ErrorKind::NotFound));
+        assert!(err.contains("could not find `quarto`"), "{err}");
+        assert!(err.contains("IR_QUARTO"), "{err}");
     }
 }
