@@ -56,6 +56,7 @@ fn try_main() -> Result<(), Box<dyn Error>> {
             let script_args: Vec<String> = args.collect();
             cmd_run(&script, &script_args)
         }
+        Some("cache") => cmd_cache(args.collect()),
         Some("--version" | "-V") => {
             println!("ir {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -68,22 +69,123 @@ fn try_main() -> Result<(), Box<dyn Error>> {
     }
 }
 
+fn cmd_cache(args: Vec<String>) -> Result<(), Box<dyn Error>> {
+    match args.first().map(String::as_str) {
+        Some("clean") => cmd_cache_clean(&args[1..]),
+        Some("dir") => cmd_cache_dir(&args[1..]),
+        Some("--help" | "-h") => {
+            print_cache_help();
+            Ok(())
+        }
+        None => {
+            print_cache_help();
+            Err("`ir cache` requires a subcommand".into())
+        }
+        Some(other) => Err(format!("unrecognized subcommand `{other}`").into()),
+    }
+}
+
+fn cmd_cache_clean(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_cache_clean_help();
+        return Ok(());
+    }
+
+    for arg in args {
+        match arg.as_str() {
+            "--force" => {}
+            other => return Err(format!("unexpected argument `{other}`").into()),
+        }
+    }
+
+    let cache_dir = ir_cache_dir()?;
+    if !cache_dir.exists() {
+        println!("No cache found at: {}", cache_dir.display());
+        return Ok(());
+    }
+
+    let files = count_files(&cache_dir)?;
+    println!("Clearing cache at: {}", cache_dir.display());
+    fs::remove_dir_all(&cache_dir)
+        .map_err(|e| format!("failed to remove cache `{}`: {e}", cache_dir.display()))?;
+    println!(
+        "Removed {files} {}",
+        if files == 1 { "file" } else { "files" }
+    );
+    Ok(())
+}
+
+fn cmd_cache_dir(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_cache_dir_help();
+        return Ok(());
+    }
+    if let Some(arg) = args.first() {
+        return Err(format!("unexpected argument `{arg}`").into());
+    }
+
+    println!("{}", ir_cache_dir()?.display());
+    Ok(())
+}
+
 fn print_help() {
     println!(
-        "ir {} — a uv-style front-end to R\n\
-         \n\
-         USAGE:\n    \
-             ir run <script.R> [args...]\n\
-         \n\
-         `ir run` reads the YAML frontmatter from <script.R>, resolves its\n\
-         dependencies, builds a dedicated package library, and runs the script\n\
-         against it. Any trailing args are passed through to the script.\n\
-         \n\
-         ENVIRONMENT:\n    \
-             IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n    \
-             IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)",
+        concat!(
+            "ir {} — a uv-style front-end to R\n",
+            "\n",
+            "USAGE:\n",
+            "    ir run <script.R> [args...]\n",
+            "    ir cache <command>\n",
+            "\n",
+            "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
+            "dependencies, builds a dedicated package library, and runs the script\n",
+            "against it. Any trailing args are passed through to the script.\n",
+            "`ir cache` manages the dependency resolution and materialised library\n",
+            "cache.\n",
+            "\n",
+            "ENVIRONMENT:\n",
+            "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
+            "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
+        ),
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn print_cache_help() {
+    println!(concat!(
+        "Manage ir's cache\n",
+        "\n",
+        "USAGE:\n",
+        "    ir cache <COMMAND>\n",
+        "\n",
+        "COMMANDS:\n",
+        "    clean  Clear the cache, removing all entries\n",
+        "    dir    Show the cache directory\n",
+        "\n",
+        "ENVIRONMENT:\n",
+        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))"
+    ));
+}
+
+fn print_cache_clean_help() {
+    println!(concat!(
+        "Clear the cache, removing all entries\n",
+        "\n",
+        "USAGE:\n",
+        "    ir cache clean [OPTIONS]\n",
+        "\n",
+        "OPTIONS:\n",
+        "    --force  Force removal of the cache"
+    ));
+}
+
+fn print_cache_dir_help() {
+    println!(concat!(
+        "Show the cache directory\n",
+        "\n",
+        "USAGE:\n",
+        "    ir cache dir"
+    ));
 }
 
 /// Resolve dependencies for `script`, then run it against the resulting library.
@@ -112,7 +214,6 @@ fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Bo
     fs::write(&driver, RESOLVE_DRIVER)?;
 
     let status = Command::new(rscript)
-        .arg("--vanilla")
         .arg(&driver)
         .arg(script)
         .arg(&out)
@@ -141,7 +242,7 @@ fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Bo
     })
 }
 
-/// Phase 2 — run `script` in a vanilla R session pointed at `library`.
+/// Phase 2 — run `script` in an ordinary R session pointed at `library`.
 ///
 /// The script runs as an ordinary `Rscript script.R` — its `.Renviron`,
 /// `.Rprofile` and site files are read, so it sees the user's normal R
@@ -171,6 +272,52 @@ fn run_script(
 /// resolved via `PATH`.
 fn rscript_command() -> std::ffi::OsString {
     env::var_os("IR_RSCRIPT").unwrap_or_else(|| "Rscript".into())
+}
+
+/// The `ir` cache root, matching `tools::R_user_dir("ir", "cache")` unless
+/// `IR_CACHE_DIR` overrides it.
+fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = nonempty_env("IR_CACHE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let rscript = rscript_command();
+    let output = Command::new(&rscript)
+        .arg("-e")
+        .arg("writeLines(tools::R_user_dir(\"ir\", \"cache\"))")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| spawn_error(&rscript, e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to resolve cache dir with tools::R_user_dir: {stderr}").into());
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let path = stdout.trim();
+    if path.is_empty() {
+        return Err("tools::R_user_dir returned an empty cache dir".into());
+    }
+
+    Ok(PathBuf::from(path))
+}
+
+fn nonempty_env(name: &str) -> Option<std::ffi::OsString> {
+    env::var_os(name).filter(|value| !value.is_empty())
+}
+
+fn count_files(path: &Path) -> io::Result<u64> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(1);
+    }
+
+    let mut files = 0;
+    for entry in fs::read_dir(path)? {
+        files += count_files(&entry?.path())?;
+    }
+    Ok(files)
 }
 
 /// A unique path in `dir` for this process, e.g. `ir-resolve-1234-987.R`.

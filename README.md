@@ -59,6 +59,18 @@ Libraries are content-addressed: two scripts that resolve to the same set of
 package versions share one materialised library, and the individual packages
 are shared system-wide through renv's cache.
 
+## Cache management
+
+`ir` exposes `uv`-style cache commands:
+
+```console
+$ ir cache dir
+$ ir cache clean
+```
+
+`ir cache dir` prints the cache root. `ir cache clean` removes the whole `ir`
+cache, including materialised libraries and resolution markers.
+
 ## Frontmatter format
 
 The header is a block of leading `#` comments parsed as YAML (after a single
