@@ -5,11 +5,11 @@
 //!
 //! ```r
 //! #!/usr/bin/env -S ir run
-//! # dependencies:
-//! #   - dplyr>=1.0
-//! #   - tidyr
-//! # R: ">= 4.0"
-//! # exclude after: "2024-01-15"
+//! #| dependencies:
+//! #|   - dplyr>=1.0
+//! #|   - tidyr
+//! #| R: ">= 4.0"
+//! #| exclude after: "2024-01-15"
 //!
 //! library(dplyr)
 //! 1 + 1
@@ -17,11 +17,12 @@
 //!
 //! The pipeline has two phases:
 //!
-//!   1. A private R session (`driver/resolve.R`) parses the frontmatter,
-//!      resolves the dependencies with pak, hashes the resolved set into a
-//!      content-addressed library path under the cache directory, and
-//!      materialises that path as a light-weight library of symlinks into
-//!      renv's package cache. The path is reported back to us.
+//!   1. Rust extracts the leading `#| ` frontmatter block. A private R session
+//!      (`driver/resolve.R`) parses that YAML text, resolves the dependencies
+//!      with pak, hashes the resolved set into a content-addressed library path
+//!      under the cache directory, and materialises that path as a light-weight
+//!      library of symlinks into renv's package cache. The path is reported
+//!      back to us.
 //!
 //!   2. We launch the user's script in a fresh, isolated R session whose
 //!      library path is exactly that library plus base R.
@@ -29,8 +30,8 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -197,7 +198,7 @@ fn cmd_run(script: &str, script_args: &[String]) -> Result<(), Box<dyn Error>> {
     let rscript = rscript_command();
 
     // Phase 1: private R session resolves deps and materialises the library.
-    // It owns the cache location (tools::R_user_dir), so we pass only paths.
+    // Rust sends the extracted YAML on stdin and receives the library path.
     let library = resolve_library(&rscript, &script_path)?;
 
     // Phase 2: run the user's script in an isolated R session.
@@ -211,20 +212,30 @@ fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Bo
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let out = unique_path(&tmp, "ir-libpath", "txt");
+    let frontmatter = read_op_frontmatter_to_string(script)?;
     fs::write(&driver, RESOLVE_DRIVER)?;
 
-    let status = Command::new(rscript)
+    let mut child = Command::new(rscript)
         .arg(&driver)
-        .arg(script)
         .arg(&out)
-        .stdin(Stdio::null()) // resolution never reads stdin
+        .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true")
-        .status()
+        .spawn()
         .map_err(|e| spawn_error(rscript, e))?;
+
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or("failed to open resolver stdin")?
+        .write_all(frontmatter.as_bytes());
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait for dependency resolver: {e}"))?;
+    write_result?;
 
     let _ = fs::remove_file(&driver);
     let result = fs::read_to_string(&out).unwrap_or_default();
@@ -281,6 +292,32 @@ fn run_script(
         let status = cmd.status().map_err(|e| spawn_error(rscript, e))?;
         Ok(status.code().unwrap_or(1))
     }
+}
+
+fn read_op_frontmatter_to_string(op: &Path) -> Result<String, Box<dyn Error>> {
+    let file = File::open(op)?;
+    let mut reader = BufReader::new(file);
+    let mut frontmatter = String::new();
+    let mut line = String::new();
+
+    reader.read_line(&mut line)?;
+
+    if line.starts_with("#!") {
+        line.clear();
+        reader.read_line(&mut line)?;
+    }
+
+    while let Some(rest) = line.strip_prefix("#| ") {
+        frontmatter.push_str(rest.trim_end_matches(&['\r', '\n'][..]));
+        frontmatter.push('\n');
+
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+    }
+
+    Ok(frontmatter)
 }
 
 /// The Rscript executable to use: `$IR_RSCRIPT` if set, otherwise `Rscript`

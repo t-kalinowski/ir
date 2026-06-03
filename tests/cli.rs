@@ -193,7 +193,7 @@ printf '%s\n' "{}"
 
 #[cfg(unix)]
 #[test]
-fn run_enables_and_forwards_pak_progress_in_resolver() {
+fn run_pipes_frontmatter_and_forwards_pak_progress_in_resolver() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
 
@@ -208,14 +208,24 @@ for arg in "$@"; do
   fi
 done
 
-if [ "$#" = "3" ]; then
+if [ "$#" = "2" ]; then
   if [ "${R_PKG_SHOW_PROGRESS:-}" != "true" ]; then
     echo "pak progress disabled" >&2
     exit 7
   fi
+  actual="$(mktemp)"
+  expected="$(mktemp)"
+  cat > "$actual"
+  printf 'dependencies:\n  dplyr>=1.0\nexclude after: "2024-01-15"\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    echo "--- actual ---" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
   echo "pak progress stdout"
   echo "pak progress stderr" >&2
-  echo "/tmp/ir-test-library" > "$3"
+  echo "/tmp/ir-test-library" > "$2"
   exit 0
 fi
 
@@ -227,7 +237,19 @@ fi
 echo "user script stdout"
 "#,
     );
-    fs::write(&script, "cat('unused by fake Rscript\\n')\n").unwrap();
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| dependencies:
+#|   dplyr>=1.0
+#| exclude after: "2024-01-15"
+#|dependencies: ignored
+#| also_not_frontmatter: true
+# ordinary comments are not frontmatter
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
 
     let out = ir()
         .env("IR_RSCRIPT", &fake_rscript)

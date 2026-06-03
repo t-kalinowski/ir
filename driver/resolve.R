@@ -2,10 +2,10 @@
 #
 # Run by the `ir` Rust binary in a private, throw-away R session.
 #
-#   Rscript resolve.R <script_path> <out_file>
+#   Rscript resolve.R <out_file>
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
-#   1. Parse the commented YAML frontmatter of <script_path> with yaml12.
+#   1. Parse the YAML frontmatter from stdin with yaml12.
 #   2. Resolve the declared dependencies into concrete versions with pak.
 #   3. Hash the resolved set to derive a content-addressed library path
 #      under <cache_dir>.
@@ -22,19 +22,7 @@
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-## --- frontmatter parsing ----------------------------------------------------
-
-# Extract the YAML frontmatter text from a script's lines: drop a leading
-# shebang, take the leading contiguous block of `#` comments, and strip the
-# `#` (plus one optional space) from each.
-ir_frontmatter <- function(lines) {
-  if (length(lines) && grepl("^#!", lines[[1L]]))
-    lines <- lines[-1L]
-  is_comment <- grepl("^[[:space:]]*#", lines)
-  stop_at <- which(!is_comment)
-  block <- if (length(stop_at)) lines[seq_len(stop_at[[1L]] - 1L)] else lines
-  paste(sub("^[[:space:]]*#[[:space:]]?", "", block), collapse = "\n")
-}
+## --- spec parsing -----------------------------------------------------------
 
 # Parse frontmatter text into a spec list. A non-mapping result (e.g. a prose
 # comment that parses to a scalar) is treated as an absent header, but invalid
@@ -172,14 +160,13 @@ ir_input_key <- function(deps,
 ir_resolve_main <- function() {
 
   args <- commandArgs(trailingOnly = TRUE)
-  if (length(args) < 2L)
-    stop("usage: resolve.R <script_path> <out_file>", call. = FALSE)
-  script_path <- args[[1L]]
-  out_file    <- args[[2L]]
+  if (length(args) != 1L)
+    stop("usage: resolve.R <out_file>", call. = FALSE)
+  out_file    <- args[[1L]]
   cache_dir   <- ir_cache_dir()
 
   ## 1. Parse frontmatter
-  spec <- ir_read_spec(ir_frontmatter(readLines(script_path, warn = FALSE)))
+  spec <- ir_read_spec(paste(readLines(stdin(), warn = FALSE), collapse = "\n"))
   deps <- ir_deps(spec)
   exclude_after <- ir_exclude_after(spec)
   ir_check_r_version(spec)

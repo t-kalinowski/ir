@@ -69,26 +69,6 @@ test_that("non-standard refs are passed through untouched", {
   expect_equal(ref("url::https://x/y.tar.gz"), "url::https://x/y.tar.gz")
 })
 
-# --- frontmatter extraction -------------------------------------------------
-
-test_that("ir_frontmatter extracts the leading comment block", {
-  lines <- c(
-    "#!/usr/bin/env -S ir run",
-    "# dependencies:",
-    "#   dplyr>=1.0",
-    "",
-    "library(dplyr)"
-  )
-  expect_equal(ir_frontmatter(lines), "dependencies:\n  dplyr>=1.0")
-})
-
-test_that("ir_frontmatter drops the shebang and strips one space after #", {
-  expect_equal(ir_frontmatter(c("#!sh", "#a", "#  b", "code")), "a\n b")
-  expect_equal(ir_frontmatter(c("# only", "x <- 1")), "only")
-  expect_equal(ir_frontmatter(c("x <- 1")), "")          # no comment block
-  expect_equal(ir_frontmatter(character()), "")          # empty file
-})
-
 # --- spec parsing -----------------------------------------------------------
 
 test_that("ir_read_spec parses YAML mappings", {
@@ -210,19 +190,17 @@ test_that("ir_input_key separates dated PPM snapshots from daily latest resoluti
   expect_identical(snap1, snap2)
 })
 
-# --- end-to-end glue (frontmatter -> deps -> refs) --------------------------
+# --- end-to-end glue (spec -> deps -> refs) ---------------------------------
 
 test_that("the parse -> deps -> refs pipeline composes", {
-  lines <- c(
-    "#!/usr/bin/env -S ir run",
-    "# dependencies:",
-    "#   dplyr>=1.0",
-    "#   secretbase==1.2",
-    "# R: \">= 4.0\"",
-    "",
-    "library(dplyr)"
+  yaml <- paste(
+    "dependencies:",
+    "  dplyr>=1.0",
+    "  secretbase==1.2",
+    "R: \">= 4.0\"",
+    sep = "\n"
   )
-  spec <- ir_read_spec(ir_frontmatter(lines))
+  spec <- ir_read_spec(yaml)
   deps <- ir_deps(spec)
   exclude_after <- ir_exclude_after(spec)
   expect_equal(deps, c("dplyr>=1.0", "secretbase==1.2"))

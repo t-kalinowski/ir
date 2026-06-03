@@ -6,11 +6,11 @@ libraries and runs the script against them.
 
 ```r
 #!/usr/bin/env -S ir run
-# dependencies:
-#   dplyr>=1.0
-#   tidyr
-# R: ">= 4.0"
-# exclude after: "2024-01-15"
+#| dependencies:
+#|   dplyr>=1.0
+#|   tidyr
+#| R: ">= 4.0"
+#| exclude after: "2024-01-15"
 
 library(dplyr)
 library(tidyr)
@@ -73,9 +73,10 @@ cache, including materialised libraries and resolution markers.
 
 ## Frontmatter format
 
-The header is a block of leading `#` comments parsed as YAML (after a single
-optional `#!` shebang line). Because it is parsed as real YAML by the `yaml12`
-package, two YAML rules apply:
+The header is the leading block of lines that start exactly with `#| ` (after a
+single optional `#!` shebang line). Rust strips the `#| ` prefix and passes only
+the YAML text to the R resolver. Because it is parsed as real YAML by the
+`yaml12` package, two YAML rules apply:
 
 - The `R:` constraint must be **quoted** — `R: ">= 4.0"` — because a bare value
   starting with `>` is not valid YAML.
@@ -84,12 +85,12 @@ package, two YAML rules apply:
   package refs never contain spaces.)
 
 ```r
-# dependencies:
-#   dplyr>=1.0        # lower bound
-#   tidyr             # latest
-#   cli==3.6.6        # exact version
-# R: ">= 4.0"         # optional; soft-checked against the running R
-# exclude after: "2024-01-15"  # optional; resolve from that PPM snapshot date
+#| dependencies:
+#|   dplyr>=1.0        # lower bound
+#|   tidyr             # latest
+#|   cli==3.6.6        # exact version
+#| R: ">= 4.0"         # optional; soft-checked against the running R
+#| exclude after: "2024-01-15"  # optional; resolve from that PPM snapshot date
 ```
 
 Supported dependency specs in this prototype:
@@ -127,7 +128,7 @@ $ cargo test
 `cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
 with the required test packages is available, the R resolution suite
 (`tests/test-resolve.R`) — which covers pak ref normalisation, unsupported
-version-operator pass-through, exotic-ref pass-through, frontmatter parsing, and
+version-operator pass-through, exotic-ref pass-through, YAML spec parsing, and
 R-version checks. The R suite can also be run on its own:
 
 ```console
