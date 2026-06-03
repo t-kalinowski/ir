@@ -55,10 +55,11 @@ $ ir run --r-version 4.5 script.R            # select R with rig
      resolved from the Posit Package Manager snapshot for that date:
      `https://packagemanager.posit.co/cran/YYYY-MM-DD`.
    - If the YAML frontmatter has `r-version: "VERSION-SPEC"` or `ir run` is
-     called with `--r-version VERSION-SPEC`, the requested R version is resolved
-     with `rig available --json` and matched against installed versions from
-     `rig list --json`. If `exclude-newer` is present, R versions released after
-     that date are ignored.
+     called with `--r-version VERSION-SPEC`, the requested R version is selected
+     from installed versions reported by `rig list --json`. If no installed R
+     satisfies the request, `ir` consults `rig available --json` to suggest a
+     concrete `rig install` command. If `exclude-newer` is present, that install
+     suggestion ignores R versions released after the date.
    - The resolved set is hashed (together with the R version and platform) into
      a content-addressed library path under the cache directory.
    - **renv** (`renv::use`) installs the packages into renv's package cache and

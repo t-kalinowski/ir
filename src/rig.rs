@@ -44,44 +44,22 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
         .map(|value| parse_iso_date_field("exclude-newer", value))
         .transpose()?;
     let requirement = parse_version_requirement(req)?;
-    let available = rig_available()?;
     let installed = rig_list()?;
 
-    let required = available
+    if let Some(installed) = installed
         .iter()
-        .filter(|version| released_before_or_on(version, exclude_newer.as_deref()))
-        .filter(|version| requirement.matches(version))
+        .filter(|version| requirement.matches_installed(version))
         .max_by(|a, b| compare_versions(&a.version, &b.version))
-        .ok_or_else(|| {
-            let suffix = exclude_newer
-                .as_deref()
-                .map(|date| format!(" before or on {date}"))
-                .unwrap_or_default();
-            format!("could not resolve R version `{req}` with `rig available --json`{suffix}")
-        })?;
-
-    let installed = installed
-        .iter()
-        .find(|version| version.matches_available(required))
-        .ok_or_else(|| {
-            format!(
-                "R {} is required but is not installed. Run `rig install {}`.",
-                required.version, required.name
-            )
-        })?;
-
-    let rscript = rscript_from_r_binary(&installed.binary);
-    if !rscript.exists() {
-        return Err(format!(
-            "rig reported R {} at `{}`, but `{}` does not exist",
-            installed.version,
-            installed.binary.display(),
-            rscript.display()
-        )
-        .into());
+    {
+        return installed.rscript();
     }
 
-    Ok(rscript.into_os_string())
+    let required = required_available_version(req, &requirement, exclude_newer.as_deref())?;
+    Err(format!(
+        "R {} is required but is not installed. Run `rig install {}`.",
+        required.version, required.name
+    )
+    .into())
 }
 
 fn parse_iso_date_field(key: &str, value: &str) -> Result<String, Box<dyn Error>> {
@@ -137,6 +115,25 @@ fn rig_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T, Box<dyn 
         .map_err(|e| format!("failed to parse `rig {}` JSON: {e}", args.join(" ")).into())
 }
 
+fn required_available_version(
+    req: &str,
+    requirement: &VersionRequirement,
+    exclude_newer: Option<&str>,
+) -> Result<AvailableR, Box<dyn Error>> {
+    rig_available()?
+        .into_iter()
+        .filter(|version| released_before_or_on(version, exclude_newer))
+        .filter(|version| requirement.matches_available(version))
+        .max_by(|a, b| compare_versions(&a.version, &b.version))
+        .ok_or_else(|| {
+            let suffix = exclude_newer
+                .map(|date| format!(" before or on {date}"))
+                .unwrap_or_default();
+            format!("could not resolve R version `{req}` with `rig available --json`{suffix}")
+                .into()
+        })
+}
+
 fn released_before_or_on(version: &AvailableR, exclude_newer: Option<&str>) -> bool {
     let Some(exclude_newer) = exclude_newer else {
         return true;
@@ -180,28 +177,43 @@ fn parse_version_requirement(req: &str) -> Result<VersionRequirement, Box<dyn Er
 }
 
 impl VersionRequirement {
-    fn matches(&self, available: &AvailableR) -> bool {
+    fn matches_available(&self, available: &AvailableR) -> bool {
+        self.matches_candidate(&available.name, &available.version, &[])
+    }
+
+    fn matches_installed(&self, installed: &InstalledR) -> bool {
+        self.matches_candidate(&installed.name, &installed.version, &installed.aliases)
+    }
+
+    fn matches_candidate(&self, name: &str, candidate_version: &str, aliases: &[String]) -> bool {
         match self {
             VersionRequirement::Bare(req) => {
-                available.name == *req
-                    || available.version == *req
+                name == req
+                    || candidate_version == req
+                    || aliases.iter().any(|alias| alias == req)
                     || parse_version(req)
-                        .map(|_| available.version.starts_with(&format!("{req}.")))
+                        .map(|_| candidate_version.starts_with(&format!("{req}.")))
                         .unwrap_or(false)
             }
-            VersionRequirement::Comparison { op, version, raw } => {
-                let Some(candidate) = parse_version(&available.version) else {
+            VersionRequirement::Comparison {
+                op,
+                version: required_version,
+                raw,
+            } => {
+                let Some(candidate) = parse_version(candidate_version) else {
                     return false;
                 };
-                if matches!(op, VersionOp::Eq) && available.name == *raw {
+                if matches!(op, VersionOp::Eq)
+                    && (name == raw || aliases.iter().any(|alias| alias == raw))
+                {
                     return true;
                 }
                 match op {
-                    VersionOp::Gt => compare_version_parts(&candidate, version).is_gt(),
-                    VersionOp::Gte => compare_version_parts(&candidate, version).is_ge(),
-                    VersionOp::Lt => compare_version_parts(&candidate, version).is_lt(),
-                    VersionOp::Lte => compare_version_parts(&candidate, version).is_le(),
-                    VersionOp::Eq => compare_version_parts(&candidate, version).is_eq(),
+                    VersionOp::Gt => compare_version_parts(&candidate, required_version).is_gt(),
+                    VersionOp::Gte => compare_version_parts(&candidate, required_version).is_ge(),
+                    VersionOp::Lt => compare_version_parts(&candidate, required_version).is_lt(),
+                    VersionOp::Lte => compare_version_parts(&candidate, required_version).is_le(),
+                    VersionOp::Eq => compare_version_parts(&candidate, required_version).is_eq(),
                 }
             }
         }
@@ -209,10 +221,19 @@ impl VersionRequirement {
 }
 
 impl InstalledR {
-    fn matches_available(&self, available: &AvailableR) -> bool {
-        self.version == available.version
-            || self.name == available.name
-            || self.aliases.iter().any(|alias| alias == &available.name)
+    fn rscript(&self) -> Result<OsString, Box<dyn Error>> {
+        let rscript = rscript_from_r_binary(&self.binary);
+        if !rscript.exists() {
+            return Err(format!(
+                "rig reported R {} at `{}`, but `{}` does not exist",
+                self.version,
+                self.binary.display(),
+                rscript.display()
+            )
+            .into());
+        }
+
+        Ok(rscript.into_os_string())
     }
 }
 

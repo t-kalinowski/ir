@@ -527,17 +527,8 @@ case "$1 $2" in
 JSON
     ;;
   "available --json")
-    cat <<'JSON'
-[
-  {{
-    "name": "4.5",
-    "date": "2025-04-11",
-    "version": "4.5.3",
-    "type": "release",
-    "url": "https://example.invalid/R-4.5.3.pkg"
-  }}
-]
-JSON
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
     ;;
   *)
     echo "unexpected rig args: $*" >&2
@@ -622,17 +613,8 @@ case "$1 $2" in
 JSON
     ;;
   "available --json")
-    cat <<'JSON'
-[
-  {{
-    "name": "4.5",
-    "date": "2025-04-11",
-    "version": "4.5.3",
-    "type": "release",
-    "url": "https://example.invalid/R-4.5.3.pkg"
-  }}
-]
-JSON
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
     ;;
   *)
     echo "unexpected rig args: $*" >&2
@@ -727,7 +709,7 @@ echo "ran inline expr"
 
 #[cfg(unix)]
 #[test]
-fn run_filters_r_versions_by_exclude_newer_release_date() {
+fn run_uses_latest_installed_r_without_rig_available() {
     let Some((real_r, real_rscript)) = real_r_tools() else {
         return;
     };
@@ -774,24 +756,8 @@ case "$1 $2" in
 JSON
     ;;
   "available --json")
-    cat <<'JSON'
-[
-  {{
-    "name": "4.5",
-    "date": "2025-04-11",
-    "version": "4.5.3",
-    "type": "release",
-    "url": "https://example.invalid/R-4.5.3.pkg"
-  }},
-  {{
-    "name": "4.6",
-    "date": "2026-04-10",
-    "version": "4.6.0",
-    "type": "release",
-    "url": "https://example.invalid/R-4.6.0.pkg"
-  }}
-]
-JSON
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
     ;;
   *)
     echo "unexpected rig args: $*" >&2
@@ -838,8 +804,8 @@ cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
 
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("selected R 4.5"), "{stdout}");
-    assert!(!stdout.contains("selected R 4.6"), "{stdout}");
+    assert!(stdout.contains("selected R 4.6"), "{stdout}");
+    assert!(!stdout.contains("selected R 4.5"), "{stdout}");
 }
 
 #[cfg(unix)]
@@ -868,6 +834,13 @@ case "$1 $2" in
     "version": "4.5.3",
     "type": "release",
     "url": "https://example.invalid/R-4.5.3.pkg"
+  },
+  {
+    "name": "4.6",
+    "date": "2026-04-10",
+    "version": "4.6.0",
+    "type": "release",
+    "url": "https://example.invalid/R-4.6.0.pkg"
   }
 ]
 JSON
@@ -886,7 +859,8 @@ esac
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
-#| r-version: "4.5"
+#| r-version: ">= 4.5"
+#| exclude-newer: "2025-12-31"
 
 cat('unused by fake Rscript\n')
 "#,
@@ -910,6 +884,7 @@ cat('unused by fake Rscript\n')
         "{stderr}"
     );
     assert!(stderr.contains("rig install 4.5"), "{stderr}");
+    assert!(!stderr.contains("rig install 4.6"), "{stderr}");
 }
 
 /// Multiple `-e` flags are forwarded in order as repeated `-e <expr>` pairs,
