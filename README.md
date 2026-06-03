@@ -89,10 +89,14 @@ ir:
   dependencies:
     - dplyr>=1.0
     - gt@1.0
-  R: ">= 4.0"
-  exclude after: "2024-01-15"
+  r-version: ">= 4.0"
+  exclude-newer: "2024-01-15"
 ---
 ```
+
+The `ir:` key accepts the same fields as a script's frontmatter: `dependencies`,
+`r-version`, and `exclude-newer`. `r-version` selects an installed R through rig
+(see above), and the document is rendered with that same R.
 
 `ir run report.qmd` resolves those dependencies into the same cached, isolated
 library used for scripts, then runs `quarto render report.qmd` with that library

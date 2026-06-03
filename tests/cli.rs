@@ -5,6 +5,7 @@
 //! resolution logic is covered by `tests/test-resolve.R`, which this file also
 //! runs via `cargo test` when an R toolchain is available.
 
+#[cfg(unix)]
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ fn write_executable(path: &Path, contents: &str) {
     }
 }
 
+#[cfg(unix)]
 fn prepend_path(dir: &Path) -> OsString {
     let mut paths = vec![dir.to_path_buf()];
     if let Some(path) = std::env::var_os("PATH") {
@@ -1219,6 +1221,118 @@ echo "fake quarto rendered $2"
         String::from_utf8_lossy(&out.stdout).contains("fake quarto rendered"),
         "{:?}",
         out
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_qmd_r_version_selects_rig_r_and_pins_quarto_r() {
+    let dir = unique_path("ir-quarto-rig", "d");
+    let bin_dir = dir.join("bin");
+    let r_home = dir.join("r-4.5");
+    let cache_dir = dir.join("cache");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&r_home).unwrap();
+
+    let rig = bin_dir.join("rig");
+    let default_rscript = bin_dir.join("Rscript");
+    let r_binary = r_home.join("R");
+    let rig_rscript = r_home.join("Rscript");
+    let fake_quarto = bin_dir.join("quarto");
+    let doc = unique_path("ir-doc", "qmd");
+
+    // rig reports one installed R (4.5.3) whose binary lives in r_home; ir derives
+    // the sibling Rscript from that binary.
+    write_executable(
+        &rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  "list --json")
+    cat <<'JSON'
+[
+  {{
+    "name": "4.5-arm64",
+    "default": false,
+    "version": "4.5.3",
+    "aliases": [],
+    "path": "{home}",
+    "binary": "{binary}"
+  }}
+]
+JSON
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 64
+    ;;
+esac
+"#,
+            home = r_home.display(),
+            binary = r_binary.display()
+        ),
+    );
+
+    // The rig-selected Rscript only has to satisfy phase-1 resolution.
+    write_executable(
+        &rig_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  cat > /dev/null
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "rig Rscript should not run the document" >&2
+exit 5
+"#,
+    );
+    // A bare R binary so rscript() finds its sibling; never executed.
+    write_executable(&r_binary, "#!/bin/sh\nexit 9\n");
+    // The PATH Rscript must never run: the rig-selected one wins.
+    write_executable(
+        &default_rscript,
+        "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
+    );
+
+    // quarto asserts QUARTO_R is the rig-selected Rscript, not the PATH default.
+    write_executable(
+        &fake_quarto,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "$1" = "render"
+test "${{QUARTO_R:-}}" = "{rscript}"
+test "${{R_LIBS:-}}" = "/tmp/ir-test-library"
+echo "fake quarto rendered $2"
+"#,
+            rscript = rig_rscript.display()
+        ),
+    );
+
+    fs::write(
+        &doc,
+        "---\nir:\n  dependencies:\n    - dplyr>=1.0\n  r-version: \"4.5\"\n---\n\n```{r}\n1 + 1\n```\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env("IR_QUARTO", &fake_quarto)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", doc.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&doc);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("fake quarto rendered"),
+        "{out:?}"
     );
 }
 

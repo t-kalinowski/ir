@@ -10,7 +10,9 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-03-ir-run-quarto-design.md`
 
-**Base:** `origin/main` at `4f23532` (#13, #14, #17 merged). Branch: `ir-run-quarto`.
+**Base:** Implemented, then rebased onto `origin/main` after #15 (`-e`/`--with`) and #18 (rig-backed R resolution). The original base named below was `4f23532` (#13, #14, #17). Branch: `ir-run-quarto`.
+
+> **Adaptation for #18 (rig).** After this plan was executed, the branch was rebased onto #18. The task code blocks below predate that rebase and use the pre-#18 names — read them as historical. The shipped code differs only in surface details: frontmatter keys `R:`/`exclude after:` are now `r-version:`/`exclude-newer:` (`ScriptSpec` fields `r_requirement`/`exclude_newer`); R-version selection is realized by `rscript_for_spec` (rig) rather than an `IR_R_REQUIREMENT` env, and that selected Rscript flows into `QUARTO_R`; a `--r-version` CLI flag overrides the frontmatter and applies to Quarto runs. See the spec's *Adaptation* section for the full delta.
 
 ---
 

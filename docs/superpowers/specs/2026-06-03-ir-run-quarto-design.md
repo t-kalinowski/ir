@@ -1,7 +1,33 @@
 # Design: `ir run` for Quarto documents
 
 **Date:** 2026-06-03
-**Status:** Approved, pending implementation plan
+**Status:** Approved; implemented and rebased onto rig-backed resolution (#18)
+
+## Adaptation: rebased onto rig-backed R resolution (#18)
+
+This design was written before PR #18 ("rig-backed R version resolution") merged.
+It anticipated that integration (see the *Selected-Rscript seam* section: "future:
+a colleague's rig integration") and scoped R-version *selection* out. #18 landed
+that selection, and the Quarto work was rebased onto it. The integration is
+exactly the seam this design predicted, so the architecture is unchanged; only
+these surface details differ from the sections below, which describe the
+pre-#18 mechanism:
+
+- **Frontmatter keys renamed.** `R:` → `r-version:`, `exclude after:` →
+  `exclude-newer:`. The `ScriptSpec` fields are `exclude_newer` and
+  `r_requirement`. These keys are read under `ir:` for Quarto documents exactly
+  as for scripts.
+- **R-version selection is now in scope, realized by rig.** `rscript_for_spec`
+  maps a `r-version` spec to an installed R via `rig list --json` and returns its
+  sibling `Rscript`. That one Rscript is used for both phase-1 resolution and, for
+  Quarto, as `QUARTO_R` — preserving the same-R invariant for free.
+- **No `IR_R_REQUIREMENT` env.** The R version is realized by *selecting* the
+  Rscript, not by passing a requirement to `resolve.R`. Only `IR_EXCLUDE_NEWER`
+  (renamed from `IR_EXCLUDE_AFTER`) is still passed on stdin's env.
+- **A `--r-version` CLI flag** (from #18) overrides the frontmatter spec and
+  applies to Quarto runs too.
+- **Base.** The branch now sits on `origin/main` after #15 (`-e`/`--with`) and
+  #18 (rig), not the `4f23532` base named under *Dev workflow* below.
 
 ## Goal
 
@@ -19,8 +45,8 @@ ir:
   dependencies:
     - dplyr>=1.0
     - gt@1.0
-  R: ">= 4.6"
-  exclude after: "2024-01-15"
+  r-version: ">= 4.6"
+  exclude-newer: "2024-01-15"
 ---
 ```
 

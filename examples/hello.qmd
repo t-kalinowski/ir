@@ -4,6 +4,7 @@ ir:
   dependencies:
     - dplyr>=1.0
     - glue
+  r-version: ">= 4.0"
 ---
 
 ```{r}
