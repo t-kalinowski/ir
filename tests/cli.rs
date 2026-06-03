@@ -280,9 +280,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-# Phase 1 (resolve) gets 3 args: report an empty library and succeed.
-if [ "$#" = "3" ]; then
-  : > "$3"
+# Phase 1 (resolve) gets the driver path and output path.
+if [ "$#" = "2" ]; then
+  cat > /dev/null
+  : > "$2"
   exit 0
 fi
 # Phase 2 (user script): exit with a distinctive code.
@@ -305,7 +306,7 @@ exit 42
 
 /// Windows has no `exec`, so `ir` runs R as a child and forwards its exit code
 /// via `status.code()`. The fake distinguishes phases by the presence of the
-/// resolver's 3rd (output-file) argument.
+/// resolver's output-file argument.
 #[cfg(windows)]
 #[test]
 fn run_propagates_user_script_exit_code() {
@@ -316,10 +317,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         concat!(
             "@echo off\r\n",
-            // Phase 1 (resolve): a 3rd arg is present — report an empty
-            // library to its path and succeed.
-            "if not \"%~3\"==\"\" (\r\n",
-            "  type nul > \"%~3\"\r\n",
+            // Phase 1 (resolve): an output-file arg is present — report an
+            // empty library to its path and succeed.
+            "if not \"%~2\"==\"\" (\r\n",
+            "  type nul > \"%~2\"\r\n",
             "  exit /b 0\r\n",
             ")\r\n",
             // Phase 2 (user script): exit with a distinctive code.
@@ -356,8 +357,9 @@ fn run_propagates_user_script_signal_death() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-if [ "$#" = "3" ]; then
-  : > "$3"
+if [ "$#" = "2" ]; then
+  cat > /dev/null
+  : > "$2"
   exit 0
 fi
 # Phase 2: after exec this shell *is* ir's process, so SIGKILL kills ir itself.
