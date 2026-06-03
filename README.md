@@ -40,6 +40,13 @@ $ ir run --with dplyr,tidyr script.R         # add to the script's own deps
 
 1. **Resolve + materialise** (a private, throw-away R session).
    - The YAML frontmatter is parsed by Rust with **saphyr**.
+   - If the frontmatter has both `R:` and `exclude after: "YYYY-MM-DD"`, `ir`
+     picks the newest available R release on or before that date that satisfies
+     the `R:` constraint, then runs both phases with that installed R version.
+     Dates covered by the embedded available-version table do not parse JSON,
+     consult the filesystem, or call `rig available`; newer dates use a cached
+     `<cache>/rig/available.json`, fetching it with `rig available --json` only
+     when the cache is absent. `IR_RSCRIPT` remains an explicit override.
    - A *resolution cache* short-circuits this whole phase: the declared
      dependencies plus the resolution source (and R version / platform) are
      hashed, and if that exact request was already resolved, its library is
@@ -99,7 +106,7 @@ YAML rules apply:
 #|   - dplyr>=1.0      # lower bound
 #|   - tidyr           # latest
 #|   - cli==3.6.6      # exact version
-#| R: ">= 4.0"         # optional; soft-checked against the running R
+#| R: ">= 4.0"         # optional; selects R with `exclude after`
 #| exclude after: "2024-01-15"  # optional; resolve from that PPM snapshot date
 ```
 
@@ -145,7 +152,10 @@ once and is reused on later runs.
 ## Requirements
 
 - A Rust toolchain (to build `ir`).
-- `R` / `Rscript` on `PATH` (this prototype uses whatever R it finds).
+- `R` / `Rscript` on `PATH`, unless `rig` selects an installed R for a dated
+  `R:` spec.
+- `rig` on `PATH` when `R:` is combined with `exclude after` and `IR_RSCRIPT`
+  is not set.
 - The R packages `pak`, `renv`, and `secretbase` installed in that R.
 
 ## Build & install
@@ -177,7 +187,7 @@ $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE
 | Variable       | Default                                          |
 | -------------- | ------------------------------------------------ |
 | `IR_CACHE_DIR` | `tools::R_user_dir("ir", "cache")`               |
-| `IR_RSCRIPT`   | `Rscript` (resolved via `PATH`)                  |
+| `IR_RSCRIPT`   | explicit Rscript path; otherwise `rig` may select one for dated `R:` specs, falling back to `Rscript` on `PATH` |
 
 The default cache directory follows R's per-package convention (e.g.
 `~/Library/Caches/org.R-project.R/R/ir` on macOS), and also honours R's own
@@ -185,8 +195,8 @@ The default cache directory follows R's per-package convention (e.g.
 
 ## Limitations (prototype)
 
-- Uses the `R`/`Rscript` already on `PATH`; the `R:` constraint is only a soft
-  warning, not a version selector.
+- `R:` selects an installed rig-managed R only when paired with `exclude after`.
+  `ir` does not install missing R versions.
 - Dependency specs support bare names, `>=`, `==`, and pak package refs.
   Upper-bound syntax such as `pkg<=1.2` is not resolved by `ir`.
 - Repositories default to CRAN (`https://cran.r-project.org`).

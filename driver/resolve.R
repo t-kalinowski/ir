@@ -48,7 +48,9 @@ ir_exclude_after <- function(value) {
 }
 
 # Soft-check the optional `R:` version constraint against the running R; warn
-# on a mismatch but never stop (this prototype does not select R versions).
+# on a mismatch but never stop. Rust selects an installed R version when the
+# script pairs `R:` with `exclude after`; this check verifies the resolver
+# session is consistent with that selection.
 ir_check_r_version <- function(req = NULL, current = getRversion()) {
   if (is.null(req)) return(invisible())
   req <- trimws(as.character(req)[[1L]])

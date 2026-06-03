@@ -333,6 +333,180 @@ cat('unused by fake Rscript\n')
 
 #[cfg(unix)]
 #[test]
+fn run_resolves_r_version_from_embedded_available_versions_for_old_exclude_after() {
+    let bin_dir = unique_path("ir-fake-bin", "dir");
+    let fake_r_root = unique_path("ir-fake-r", "dir");
+    let fake_rscript = fake_r_root.join("Resources").join("bin").join("Rscript");
+    let fake_r_binary = fake_r_root.join("Resources").join("R");
+    let fake_rig = bin_dir.join("rig");
+    let script = unique_path("ir-script", "R");
+
+    fs::create_dir_all(fake_rscript.parent().unwrap()).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(&fake_r_binary, "").unwrap();
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  while IFS= read -r _line; do :; done
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "ran selected Rscript"
+"#,
+    );
+    write_executable(
+        &fake_rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  "list --json")
+    printf '%s\n' '[{{"name":"4.2-arm64","version":"4.2.3","binary":"{}"}}]'
+    ;;
+  "available --json")
+    echo "rig available should not run" >&2
+    exit 55
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 56
+    ;;
+esac
+"#,
+            fake_r_binary.display()
+        ),
+    );
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| R: ">= 4.0"
+#| exclude after: "2024-01-15"
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", &bin_dir)
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&fake_r_root);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran selected Rscript"),
+        "{out:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("rig available should not run"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_reads_cached_rig_available_json_for_newer_exclude_after() {
+    let bin_dir = unique_path("ir-fake-bin", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
+    let fake_r_root = unique_path("ir-fake-r", "dir");
+    let fake_rscript = fake_r_root.join("Resources").join("bin").join("Rscript");
+    let fake_r_binary = fake_r_root.join("Resources").join("R");
+    let fake_rig = bin_dir.join("rig");
+    let script = unique_path("ir-script", "R");
+    let available_cache = cache_dir.join("rig").join("available.json");
+
+    fs::create_dir_all(fake_rscript.parent().unwrap()).unwrap();
+    fs::create_dir_all(available_cache.parent().unwrap()).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(&fake_r_binary, "").unwrap();
+    fs::write(
+        &available_cache,
+        r#"[
+  {"name":"4.6.0","date":"2026-04-24T07:17:39Z","version":"4.6.0"},
+  {"name":"4.7.0","date":"2026-09-01T00:00:00Z","version":"4.7.0"}
+]
+"#,
+    )
+    .unwrap();
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  while IFS= read -r _line; do :; done
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "ran cached selected Rscript"
+"#,
+    );
+    write_executable(
+        &fake_rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  "list --json")
+    printf '%s\n' '[{{"name":"4.7-arm64","version":"4.7.0","binary":"{}"}}]'
+    ;;
+  "available --json")
+    echo "rig available should not run" >&2
+    exit 55
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 56
+    ;;
+esac
+"#,
+            fake_r_binary.display()
+        ),
+    );
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| R: ">= 4.7"
+#| exclude after: "2026-12-31"
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", &bin_dir)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fake_r_root);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran cached selected Rscript"),
+        "{out:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("rig available should not run"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_errors_on_malformed_frontmatter_before_resolver() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");

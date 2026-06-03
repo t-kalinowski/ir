@@ -27,6 +27,7 @@
 //!   2. We launch the user's script in a fresh, isolated R session whose
 //!      library path is exactly that library plus base R.
 
+use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
@@ -37,10 +38,42 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use saphyr::{LoadableYamlNode, Yaml};
+use serde::Deserialize;
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.
 const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
+
+/// `rig available --json`, captured when this embedded dataset was refreshed.
+/// Older `exclude after` dates can resolve R versions without consulting the
+/// filesystem or making rig's network-backed `available` call.
+const EMBEDDED_R_AVAILABLE_BUILD_DATE: &str = "2026-06-03";
+const EMBEDDED_R_AVAILABLE: &[AvailableRVersion<'static>] = &[
+    AvailableRVersion {
+        date: "2022-03-10",
+        version: "4.1.3",
+    },
+    AvailableRVersion {
+        date: "2023-03-15",
+        version: "4.2.3",
+    },
+    AvailableRVersion {
+        date: "2024-02-29",
+        version: "4.3.3",
+    },
+    AvailableRVersion {
+        date: "2025-02-28",
+        version: "4.4.3",
+    },
+    AvailableRVersion {
+        date: "2026-03-11",
+        version: "4.5.3",
+    },
+    AvailableRVersion {
+        date: "2026-04-24",
+        version: "4.6.0",
+    },
+];
 
 #[derive(Debug, Default)]
 struct ScriptSpec {
@@ -332,8 +365,6 @@ fn cmd_run(
     with_deps: &[String],
     script_args: &[String],
 ) -> Result<(), Box<dyn Error>> {
-    let rscript = rscript_command();
-
     // A script file declares its dependencies (and `exclude after` / `R`) in
     // YAML frontmatter and is canonicalised so the run is independent of the
     // working directory. An inline `-e` expression has no frontmatter; its deps
@@ -348,6 +379,7 @@ fn cmd_run(
         RunSource::Expressions(_) => (None, ScriptSpec::default()),
     };
     spec.dependencies.extend(with_deps.iter().cloned());
+    let rscript = rscript_command_for_spec(&spec)?;
 
     // Phase 1: private R session resolves deps and materialises the library.
     // Rust parses the frontmatter and sends the dependency specs on stdin.
@@ -591,6 +623,377 @@ fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>
 /// resolved via `PATH`.
 fn rscript_command() -> std::ffi::OsString {
     env::var_os("IR_RSCRIPT").unwrap_or_else(|| "Rscript".into())
+}
+
+fn rscript_command_for_spec(spec: &ScriptSpec) -> Result<std::ffi::OsString, Box<dyn Error>> {
+    if let Some(rscript) = nonempty_env("IR_RSCRIPT") {
+        return Ok(rscript);
+    }
+
+    let (Some(r_requirement), Some(exclude_after)) =
+        (spec.r_requirement.as_deref(), spec.exclude_after.as_deref())
+    else {
+        return Ok("Rscript".into());
+    };
+    let Some(requirement) = RRequirement::parse(r_requirement) else {
+        return Ok("Rscript".into());
+    };
+
+    let exclude_after = SimpleDate::parse(exclude_after, "`exclude after`")?;
+    let selected = select_r_version(&requirement, exclude_after)?;
+    installed_rscript_for_r_version(&selected)
+}
+
+#[derive(Debug, Deserialize)]
+struct CachedRigAvailableVersion {
+    date: Option<String>,
+    version: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AvailableRVersion<'a> {
+    date: &'a str,
+    version: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct RigInstalledVersion {
+    name: String,
+    version: Option<String>,
+    binary: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct SimpleDate {
+    year: u16,
+    month: u8,
+    day: u8,
+}
+
+impl SimpleDate {
+    fn parse(value: &str, label: &str) -> Result<Self, Box<dyn Error>> {
+        let value = value.trim();
+        let bytes = value.as_bytes();
+        if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        }
+
+        let Some(year) = parse_digits_u16(&bytes[0..4]) else {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        };
+        let Some(month) = parse_digits_u8(&bytes[5..7]) else {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        };
+        let Some(day) = parse_digits_u8(&bytes[8..10]) else {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        };
+
+        if month == 0 || month > 12 {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        }
+        let max_day = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if is_leap_year(year) => 29,
+            2 => 28,
+            _ => unreachable!(),
+        };
+        if day == 0 || day > max_day {
+            return Err(format!("{label} must be a date string in YYYY-MM-DD format").into());
+        }
+
+        Ok(Self { year, month, day })
+    }
+}
+
+fn parse_digits_u16(bytes: &[u8]) -> Option<u16> {
+    let mut value = 0u16;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u16::from(byte - b'0');
+    }
+    Some(value)
+}
+
+fn parse_digits_u8(bytes: &[u8]) -> Option<u8> {
+    let value = parse_digits_u16(bytes)?;
+    u8::try_from(value).ok()
+}
+
+fn is_leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RVersion(Vec<u32>);
+
+impl RVersion {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        for part in value.split('.') {
+            if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            parts.push(part.parse().ok()?);
+        }
+        Some(Self(parts))
+    }
+}
+
+impl Ord for RVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let len = self.0.len().max(other.0.len());
+        for idx in 0..len {
+            let left = self.0.get(idx).copied().unwrap_or(0);
+            let right = other.0.get(idx).copied().unwrap_or(0);
+            match left.cmp(&right) {
+                Ordering::Equal => {}
+                ordering => return ordering,
+            }
+        }
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for RVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum VersionOp {
+    GreaterEqual,
+    Greater,
+    LessEqual,
+    Less,
+    Equal,
+}
+
+#[derive(Clone, Debug)]
+struct RRequirement {
+    op: VersionOp,
+    version: RVersion,
+}
+
+impl RRequirement {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        let (op, rest) = if let Some(rest) = value.strip_prefix(">=") {
+            (VersionOp::GreaterEqual, rest)
+        } else if let Some(rest) = value.strip_prefix(">") {
+            (VersionOp::Greater, rest)
+        } else if let Some(rest) = value.strip_prefix("<=") {
+            (VersionOp::LessEqual, rest)
+        } else if let Some(rest) = value.strip_prefix("<") {
+            (VersionOp::Less, rest)
+        } else if let Some(rest) = value.strip_prefix("==") {
+            (VersionOp::Equal, rest)
+        } else {
+            (VersionOp::GreaterEqual, value)
+        };
+
+        Some(Self {
+            op,
+            version: RVersion::parse(rest.trim())?,
+        })
+    }
+
+    fn matches(&self, version: &RVersion) -> bool {
+        match self.op {
+            VersionOp::GreaterEqual => version >= &self.version,
+            VersionOp::Greater => version > &self.version,
+            VersionOp::LessEqual => version <= &self.version,
+            VersionOp::Less => version < &self.version,
+            VersionOp::Equal => version == &self.version,
+        }
+    }
+}
+
+fn select_r_version(
+    requirement: &RRequirement,
+    exclude_after: SimpleDate,
+) -> Result<String, Box<dyn Error>> {
+    let embedded_build_date = SimpleDate::parse(
+        EMBEDDED_R_AVAILABLE_BUILD_DATE,
+        "embedded R version build date",
+    )?;
+    if exclude_after <= embedded_build_date {
+        return select_r_version_from_available(
+            requirement,
+            exclude_after,
+            EMBEDDED_R_AVAILABLE.iter().copied(),
+        );
+    }
+
+    let cached = cached_rig_available_versions()?;
+    let versions = cached.iter().filter_map(|available| {
+        Some(AvailableRVersion {
+            date: available.date.as_deref()?,
+            version: &available.version,
+        })
+    });
+    select_r_version_from_available(requirement, exclude_after, versions)
+}
+
+fn select_r_version_from_available<'a>(
+    requirement: &RRequirement,
+    exclude_after: SimpleDate,
+    versions: impl IntoIterator<Item = AvailableRVersion<'a>>,
+) -> Result<String, Box<dyn Error>> {
+    let mut best: Option<(RVersion, String)> = None;
+
+    for available in versions {
+        let date = SimpleDate::parse(
+            available
+                .date
+                .get(..10)
+                .ok_or("rig available date must start with YYYY-MM-DD")?,
+            "rig available date",
+        )?;
+        if date > exclude_after {
+            continue;
+        }
+
+        let version = RVersion::parse(available.version).ok_or_else(|| {
+            format!(
+                "rig available returned invalid R version `{}`",
+                available.version
+            )
+        })?;
+        if requirement.matches(&version)
+            && best
+                .as_ref()
+                .map(|(best_version, _)| version > *best_version)
+                .unwrap_or(true)
+        {
+            best = Some((version, available.version.to_owned()));
+        }
+    }
+
+    best.map(|(_, version)| version)
+        .ok_or_else(|| "no available R version matches `R:` before `exclude after`".into())
+}
+
+fn cached_rig_available_versions() -> Result<Vec<CachedRigAvailableVersion>, Box<dyn Error>> {
+    let json = cached_rig_available_json()?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+fn cached_rig_available_json() -> Result<String, Box<dyn Error>> {
+    let cache_file = ir_cache_dir()?.join("rig").join("available.json");
+    if cache_file.exists() {
+        return Ok(fs::read_to_string(&cache_file)?);
+    }
+
+    let json = fetch_rig_available_json()?;
+    let _: Vec<CachedRigAvailableVersion> = serde_json::from_str(&json)?;
+    dir_create_parent(&cache_file)?;
+    fs::write(&cache_file, &json)?;
+    Ok(json)
+}
+
+fn fetch_rig_available_json() -> Result<String, Box<dyn Error>> {
+    let output = Command::new("rig")
+        .args(["available", "--json"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(rig_spawn_error)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to run `rig available --json`: {stderr}").into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+fn installed_rscript_for_r_version(version: &str) -> Result<std::ffi::OsString, Box<dyn Error>> {
+    let output = Command::new("rig")
+        .args(["list", "--json"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(rig_spawn_error)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to run `rig list --json`: {stderr}").into());
+    }
+
+    let installed: Vec<RigInstalledVersion> = serde_json::from_slice(&output.stdout)?;
+    let Some(installed) = installed
+        .iter()
+        .find(|installed| installed.version.as_deref() == Some(version))
+        .or_else(|| installed.iter().find(|installed| installed.name == version))
+    else {
+        return Err(format!(
+            "R {version} is required by `R:` and `exclude after`, but rig does not list it as installed. Install it with `rig add {version}`."
+        )
+        .into());
+    };
+    let binary = installed
+        .binary
+        .as_deref()
+        .ok_or_else(|| format!("rig did not report an R binary for R {version}"))?;
+    let rscript = rscript_from_r_binary(Path::new(binary))?;
+    if !rscript.exists() {
+        return Err(format!("derived Rscript path does not exist: {}", rscript.display()).into());
+    }
+
+    Ok(rscript.into_os_string())
+}
+
+fn rscript_from_r_binary(binary: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let file_name = binary
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| format!("invalid R binary path `{}`", binary.display()))?;
+    let rscript_name = if file_name == "R" {
+        "Rscript"
+    } else if file_name.eq_ignore_ascii_case("R.exe") {
+        "Rscript.exe"
+    } else {
+        return Err(format!(
+            "rig reported unsupported R binary path `{}`",
+            binary.display()
+        )
+        .into());
+    };
+
+    let parent = binary
+        .parent()
+        .ok_or_else(|| format!("invalid R binary path `{}`", binary.display()))?;
+    if parent.file_name().and_then(OsStr::to_str) == Some("bin") {
+        return Ok(parent.join(rscript_name));
+    }
+    if parent.file_name().and_then(OsStr::to_str) == Some("Resources") {
+        return Ok(parent.join("bin").join(rscript_name));
+    }
+
+    Err(format!(
+        "rig reported unsupported R binary path `{}`",
+        binary.display()
+    )
+    .into())
+}
+
+fn dir_create_parent(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn rig_spawn_error(err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        "could not find `rig` on PATH. Install rig, or set IR_RSCRIPT to an explicit Rscript path."
+            .to_string()
+    } else {
+        format!("failed to launch `rig`: {err}")
+    }
 }
 
 /// The `ir` cache root, matching `tools::R_user_dir("ir", "cache")` unless
