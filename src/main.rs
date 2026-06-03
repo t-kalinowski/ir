@@ -265,9 +265,14 @@ fn print_help() {
             "the user-code phase; trailing args are passed through to the program.\n",
             "`ir cache` manages the dependency resolution and materialised library cache.\n",
             "\n",
+            "Quarto documents (.qmd, .Rmd) are also supported: declare\n",
+            "dependencies under an `ir:` key in the document's YAML frontmatter\n",
+            "and ir renders them with `quarto render`.\n",
+            "\n",
             "ENVIRONMENT:\n",
             "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-            "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
+            "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)\n",
+            "    IR_QUARTO      path to the quarto executable (default: quarto on PATH)"
         ),
         env!("CARGO_PKG_VERSION")
     );
@@ -300,9 +305,14 @@ fn print_run_help() {
         "                  Select the R version for this run with rig. Overrides\n",
         "                  `r-version:` in script frontmatter.\n",
         "\n",
+        "Quarto documents (.qmd, .Rmd) are also supported: declare\n",
+        "dependencies under an `ir:` key in the document's YAML frontmatter\n",
+        "and ir renders them with `quarto render`.\n",
+        "\n",
         "ENVIRONMENT:\n",
         "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
+        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)\n",
+        "    IR_QUARTO      path to the quarto executable (default: quarto on PATH)"
     ));
 }
 
