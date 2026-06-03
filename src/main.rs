@@ -8,8 +8,8 @@
 //! #| dependencies:
 //! #|   - dplyr>=1.0
 //! #|   - tidyr
-//! #| R: ">= 4.0"
-//! #| exclude after: "2024-01-15"
+//! #| r-version: ">= 4.0"
+//! #| exclude-newer: "2024-01-15"
 //!
 //! library(dplyr)
 //! 1 + 1
@@ -38,6 +38,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use saphyr::{LoadableYamlNode, Yaml};
 
+mod rig;
+
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.
 const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
@@ -45,7 +47,7 @@ const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
 #[derive(Debug, Default)]
 struct ScriptSpec {
     dependencies: Vec<String>,
-    exclude_after: Option<String>,
+    exclude_newer: Option<String>,
     r_requirement: Option<String>,
 }
 
@@ -71,6 +73,7 @@ fn try_main() -> Result<(), Box<dyn Error>> {
                 &run.source,
                 &run.rscript_args,
                 &run.with_deps,
+                run.r_requirement.as_deref(),
                 &run.script_args,
             )
         }
@@ -97,23 +100,27 @@ enum RunSource {
 struct RunArgs {
     rscript_args: Vec<String>,
     with_deps: Vec<String>,
+    r_requirement: Option<String>,
     source: RunSource,
     script_args: Vec<String>,
 }
 
 /// Split the leading region of `ir run`'s arguments into Rscript options,
-/// `--with` dependency specs, and the program source (a script path or `-e`
-/// expressions), with everything after the source treated as program args.
+/// `--with` dependency specs, an optional `--r-version` spec, and the program
+/// source (a script path or `-e` expressions), with everything after the source
+/// treated as program args.
 ///
-/// `-e <expr>` and `--with <spec>` are `ir`-level flags handled here: `-e`
-/// supplies inline R to run instead of a file, and `--with` declares extra
-/// dependencies (not forwarded to Rscript). Any other `-…` argument is an
-/// Rscript option, forwarded verbatim to the user-code phase. Scanning stops at
-/// the first non-option, which is the script path unless `-e` was given (in
-/// which case it, and everything after, are program args — as with Rscript).
+/// `-e <expr>`, `--with <spec>`, and `--r-version <spec>` are `ir`-level flags
+/// handled here: `-e` supplies inline R to run instead of a file, `--with`
+/// declares extra dependencies, and `--r-version` chooses the R version via
+/// rig. Any other `-…` argument is an Rscript option, forwarded verbatim to the
+/// user-code phase. Scanning stops at the first non-option, which is the script
+/// path unless `-e` was given (in which case it, and everything after, are
+/// program args — as with Rscript).
 fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     let mut rscript_args = Vec::new();
     let mut with_deps = Vec::new();
+    let mut r_requirement = None;
     let mut expressions = Vec::new();
     let mut iter = args.into_iter();
     let mut positional = None;
@@ -131,6 +138,13 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
             push_with_deps(&mut with_deps, &value);
         } else if let Some(value) = arg.strip_prefix("--with=") {
             push_with_deps(&mut with_deps, value);
+        } else if arg == "--r-version" {
+            let value = iter.next().ok_or(
+                "`--r-version` requires a version spec (try `ir run --r-version 4.5 script.R`)",
+            )?;
+            r_requirement = Some(value);
+        } else if let Some(value) = arg.strip_prefix("--r-version=") {
+            r_requirement = Some(value.to_string());
         } else if arg.starts_with('-') {
             rscript_args.push(arg);
         } else {
@@ -157,6 +171,7 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     Ok(RunArgs {
         rscript_args,
         with_deps,
+        r_requirement,
         source,
         script_args,
     })
@@ -238,17 +253,17 @@ fn print_help() {
             "ir {} — self-describing R scripts\n",
             "\n",
             "USAGE:\n",
-            "    ir run [Rscript-options...] [--with <pkg>]... <script.R> [args...]\n",
-            "    ir run [Rscript-options...] [--with <pkg>]... -e <expr> [args...]\n",
+            "    ir run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
+            "    ir run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] -e <expr> [args...]\n",
             "    ir cache <command>\n",
             "\n",
             "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
             "dependencies, builds a dedicated package library, and runs the script\n",
             "against it. With -e it evaluates inline R expressions instead of a file,\n",
-            "and --with adds dependencies on the command line. Leading Rscript options\n",
-            "are passed to Rscript for the user-code phase; trailing args are passed\n",
-            "through to the program. `ir cache` manages the dependency resolution and\n",
-            "materialised library cache.\n",
+            "--with adds dependencies on the command line, and --r-version selects\n",
+            "the R version with rig. Leading Rscript options are passed to Rscript for\n",
+            "the user-code phase; trailing args are passed through to the program.\n",
+            "`ir cache` manages the dependency resolution and materialised library cache.\n",
             "\n",
             "ENVIRONMENT:\n",
             "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
@@ -263,14 +278,15 @@ fn print_run_help() {
         "Run an R script\n",
         "\n",
         "USAGE:\n",
-        "    ir run [Rscript-options...] [--with <pkg>]... <script.R> [args...]\n",
-        "    ir run [Rscript-options...] [--with <pkg>]... -e <expr> [-e <expr>]... [args...]\n",
+        "    ir run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
+        "    ir run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] -e <expr> [-e <expr>]... [args...]\n",
         "\n",
         "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
         "dependencies, builds a dedicated package library, and runs the script\n",
         "against it. With -e it instead evaluates inline R expressions (mirroring\n",
-        "Rscript) against the same isolated library. Leading Rscript options are\n",
-        "passed to Rscript for the user-code phase; trailing args are passed\n",
+        "Rscript) against the same isolated library. --r-version selects the R\n",
+        "version with rig and overrides script frontmatter. Leading Rscript options\n",
+        "are passed to Rscript for the user-code phase; trailing args are passed\n",
         "through to the program.\n",
         "\n",
         "OPTIONS:\n",
@@ -280,6 +296,9 @@ fn print_run_help() {
         "                  in the script frontmatter. May be repeated and accepts a\n",
         "                  comma-separated list (e.g. --with dplyr,tidyr). Uses the\n",
         "                  same spec format as `dependencies:` (e.g. cli==3.6.6).\n",
+        "    --r-version <spec>\n",
+        "                  Select the R version for this run with rig. Overrides\n",
+        "                  `r-version:` in script frontmatter.\n",
         "\n",
         "ENVIRONMENT:\n",
         "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
@@ -330,11 +349,10 @@ fn cmd_run(
     source: &RunSource,
     rscript_args: &[String],
     with_deps: &[String],
+    r_requirement: Option<&str>,
     script_args: &[String],
 ) -> Result<(), Box<dyn Error>> {
-    let rscript = rscript_command();
-
-    // A script file declares its dependencies (and `exclude after` / `R`) in
+    // A script file declares its dependencies, `exclude-newer`, and `r-version` in
     // YAML frontmatter and is canonicalised so the run is independent of the
     // working directory. An inline `-e` expression has no frontmatter; its deps
     // come solely from `--with`.
@@ -348,6 +366,10 @@ fn cmd_run(
         RunSource::Expressions(_) => (None, ScriptSpec::default()),
     };
     spec.dependencies.extend(with_deps.iter().cloned());
+    if let Some(req) = r_requirement {
+        spec.r_requirement = Some(req.to_string());
+    }
+    let rscript = rscript_for_spec(&spec)?;
 
     // Phase 1: private R session resolves deps and materialises the library.
     // Rust parses the frontmatter and sends the dependency specs on stdin.
@@ -387,11 +409,8 @@ fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true");
-    if let Some(exclude_after) = &spec.exclude_after {
-        cmd.env("IR_EXCLUDE_AFTER", exclude_after);
-    }
-    if let Some(r_requirement) = &spec.r_requirement {
-        cmd.env("IR_R_REQUIREMENT", r_requirement);
+    if let Some(exclude_newer) = &spec.exclude_newer {
+        cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
     }
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
@@ -446,9 +465,17 @@ fn parse_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn Error>> {
 
     Ok(ScriptSpec {
         dependencies: frontmatter_dependencies(doc)?,
-        exclude_after: frontmatter_optional_string(doc, "exclude after")?,
-        r_requirement: frontmatter_optional_string(doc, "R")?,
+        exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
+        r_requirement: frontmatter_optional_string(doc, "r-version")?,
     })
+}
+
+fn rscript_for_spec(spec: &ScriptSpec) -> Result<std::ffi::OsString, Box<dyn Error>> {
+    let Some(req) = &spec.r_requirement else {
+        return Ok(rscript_command());
+    };
+
+    rig::resolve_rscript(req, spec.exclude_newer.as_deref())
 }
 
 fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error>> {
