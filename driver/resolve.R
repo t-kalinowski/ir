@@ -2,10 +2,10 @@
 #
 # Run by the `ir` Rust binary in a private, throw-away R session.
 #
-#   Rscript resolve.R <out_file>
+#   IR_RESOLVE_OUT_FILE=<out_file> Rscript resolve.R <dependencies...>
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
-#   1. Parse the YAML frontmatter from stdin with yaml12.
+#   1. Consume package dependency specs from command-line args.
 #   2. Resolve the declared dependencies into concrete versions with pak.
 #   3. Hash the resolved set to derive a content-addressed library path
 #      under <cache_dir>.
@@ -20,33 +20,17 @@
 # (see tests/test-resolve.R). The pipeline runs only when this file is executed
 # as a script -- `sys.nframe() == 0L` is false when the file is sourced.
 
-`%||%` <- function(x, y) if (is.null(x)) y else x
+## --- resolver input ---------------------------------------------------------
 
-## --- YAML frontmatter parsing ----------------------------------------------
-
-# Parse YAML frontmatter into a spec object. Invalid YAML is an error.
-ir_read_spec <- function(yaml_text) {
-  tryCatch(
-    yaml12::parse_yaml(yaml_text),
-    error = function(e)
-      stop(sprintf("could not parse script frontmatter as YAML: %s",
-                   conditionMessage(e)), call. = FALSE)
-  )
-}
-
-# The declared dependency specs from the YAML `dependencies:` sequence.
-# Package refs are expected to be whitespace-free.
-ir_deps <- function(spec) {
-  deps <- as.character(spec$dependencies %||% character())
-  deps <- as.character(unlist(strsplit(trimws(deps), "[[:space:]]+")))
-  deps[nzchar(deps)]
+ir_env_optional <- function(name) {
+  value <- Sys.getenv(name, unset = NA_character_)
+  if (is.na(value) || !nzchar(value)) NULL else value
 }
 
 # Optional date-bounded resolution. `exclude after` is a YAML mapping key whose
 # value is an ISO date; resolution then uses that day's Posit Package Manager
 # CRAN snapshot instead of the latest CRAN repository.
-ir_exclude_after <- function(spec) {
-  value <- spec[["exclude after"]]
+ir_exclude_after <- function(value) {
   if (is.null(value)) return(NULL)
 
   value <- trimws(as.character(value)[[1L]])
@@ -64,9 +48,9 @@ ir_exclude_after <- function(spec) {
 
 # Soft-check the optional `R:` version constraint against the running R; warn
 # on a mismatch but never stop (this prototype does not select R versions).
-ir_check_r_version <- function(spec, current = getRversion()) {
-  if (is.null(spec$R)) return(invisible())
-  req <- trimws(as.character(spec$R)[[1L]])
+ir_check_r_version <- function(req = NULL, current = getRversion()) {
+  if (is.null(req)) return(invisible())
+  req <- trimws(as.character(req)[[1L]])
   m <- regmatches(req, regexec("^(>=|>|<=|<|==)?[[:space:]]*([0-9][0-9.-]*)$", req))[[1L]]
   if (length(m) == 3L) {
     op <- if (nzchar(m[[2L]])) m[[2L]] else ">="
@@ -114,8 +98,7 @@ ir_ppm_snapshot_url <- function(exclude_after) {
   sprintf("https://packagemanager.posit.co/cran/%s", exclude_after)
 }
 
-ir_repos <- function(spec, repos = getOption("repos")) {
-  exclude_after <- ir_exclude_after(spec)
+ir_repos <- function(exclude_after = NULL, repos = getOption("repos")) {
   if (!is.null(exclude_after))
     return(c(CRAN = ir_ppm_snapshot_url(exclude_after)))
 
@@ -155,18 +138,15 @@ ir_input_key <- function(deps,
 
 ir_resolve_main <- function() {
 
-  args <- commandArgs(trailingOnly = TRUE)
-  if (length(args) != 1L)
-    stop("usage: resolve.R <out_file>", call. = FALSE)
-  out_file    <- args[[1L]]
+  deps        <- commandArgs(trailingOnly = TRUE)
+  out_file    <- ir_env_optional("IR_RESOLVE_OUT_FILE")
+  stopifnot(!is.null(out_file))
   cache_dir   <- ir_cache_dir()
 
-  ## 1. Parse YAML frontmatter
-  spec <- ir_read_spec(readLines(stdin()))
-  deps <- ir_deps(spec)
-  exclude_after <- ir_exclude_after(spec)
-  ir_check_r_version(spec)
-  repos <- ir_repos(spec)
+  ## 1. Consume inputs parsed by Rust from script frontmatter
+  exclude_after <- ir_exclude_after(ir_env_optional("IR_EXCLUDE_AFTER"))
+  ir_check_r_version(ir_env_optional("IR_R_REQUIREMENT"))
+  repos <- ir_repos(exclude_after)
   options(repos = repos)
 
   ## 1b. Resolution cache: if this exact request was resolved already and its

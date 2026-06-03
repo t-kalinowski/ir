@@ -204,7 +204,7 @@ printf '%s\n' "{}"
 
 #[cfg(unix)]
 #[test]
-fn run_pipes_frontmatter_and_forwards_pak_progress_in_resolver() {
+fn run_passes_dependencies_as_resolver_args_and_forwards_pak_progress() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
 
@@ -219,24 +219,30 @@ for arg in "$@"; do
   fi
 done
 
-if [ "$#" = "2" ]; then
+if [ "${IR_RESOLVE_OUT_FILE:-}" != "" ]; then
   if [ "${R_PKG_SHOW_PROGRESS:-}" != "true" ]; then
     echo "pak progress disabled" >&2
     exit 7
   fi
-  actual="$(mktemp)"
-  expected="$(mktemp)"
-  cat > "$actual"
-  printf 'dependencies:\n  - dplyr>=1.0\nexclude after: "2024-01-15"\n' > "$expected"
-  if ! cmp -s "$actual" "$expected"; then
+  if [ -n "$(cat)" ]; then
     echo "unexpected resolver stdin" >&2
-    echo "--- actual ---" >&2
-    cat "$actual" >&2
     exit 10
+  fi
+  if [ "$#" != "3" ] || [ "$2" != "dplyr>=1.0" ] || [ "$3" != "tidyr" ]; then
+    echo "unexpected resolver dependency args: $*" >&2
+    exit 11
+  fi
+  if [ "${IR_EXCLUDE_AFTER:-}" != "2024-01-15" ]; then
+    echo "missing IR_EXCLUDE_AFTER" >&2
+    exit 13
+  fi
+  if [ "${IR_R_REQUIREMENT:-}" != ">= 4.0" ]; then
+    echo "missing IR_R_REQUIREMENT" >&2
+    exit 14
   fi
   echo "pak progress stdout"
   echo "pak progress stderr" >&2
-  echo "/tmp/ir-test-library" > "$2"
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_OUT_FILE"
   exit 0
 fi
 
@@ -253,6 +259,8 @@ echo "user script stdout"
         r#"#!/usr/bin/env -S ir run
 #| dependencies:
 #|   - dplyr>=1.0
+#|   - tidyr
+#| R: ">= 4.0"
 #| exclude after: "2024-01-15"
 
 cat('unused by fake Rscript\n')
@@ -278,6 +286,47 @@ cat('unused by fake Rscript\n')
     assert!(stderr.contains("pak progress stderr"), "{stderr}");
 }
 
+#[cfg(unix)]
+#[test]
+fn run_errors_on_malformed_frontmatter_before_resolver() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let script = unique_path("ir-script", "R");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+echo "resolver should not run" >&2
+exit 17
+"#,
+    );
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| dependencies: [dplyr
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_file(&script);
+
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not parse script frontmatter as YAML"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("resolver should not run"), "{stderr}");
+}
+
 /// The user script's exit code surfaces unchanged as `ir`'s exit code. On Unix
 /// this rides on the `exec` into R; the Windows spawn+wait fallback is covered
 /// by the variant below.
@@ -291,10 +340,9 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-# Phase 1 (resolve) gets the driver path and output path.
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  : > "$2"
+# Phase 1 (resolve) gets the driver path and IR_RESOLVE_OUT_FILE.
+if [ "${IR_RESOLVE_OUT_FILE:-}" != "" ]; then
+  : > "$IR_RESOLVE_OUT_FILE"
   exit 0
 fi
 # Phase 2 (user script): exit with a distinctive code.
@@ -316,8 +364,8 @@ exit 42
 }
 
 /// Windows has no `exec`, so `ir` runs R as a child and forwards its exit code
-/// via `status.code()`. The fake distinguishes phases by the presence of the
-/// resolver's output-file argument.
+/// via `status.code()`. The fake distinguishes phases by the presence of
+/// `IR_RESOLVE_OUT_FILE`.
 #[cfg(windows)]
 #[test]
 fn run_propagates_user_script_exit_code() {
@@ -328,10 +376,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         concat!(
             "@echo off\r\n",
-            // Phase 1 (resolve): an output-file arg is present — report an
-            // empty library to its path and succeed.
-            "if not \"%~2\"==\"\" (\r\n",
-            "  type nul > \"%~2\"\r\n",
+            // Phase 1 (resolve): report an empty library to its output path
+            // and succeed.
+            "if not \"%IR_RESOLVE_OUT_FILE%\"==\"\" (\r\n",
+            "  type nul > \"%IR_RESOLVE_OUT_FILE%\"\r\n",
             "  exit /b 0\r\n",
             ")\r\n",
             // Phase 2 (user script): exit with a distinctive code.
@@ -368,9 +416,8 @@ fn run_propagates_user_script_signal_death() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  : > "$2"
+if [ "${IR_RESOLVE_OUT_FILE:-}" != "" ]; then
+  : > "$IR_RESOLVE_OUT_FILE"
   exit 0
 fi
 # Phase 2: after exec this shell *is* ir's process, so SIGKILL kills ir itself.
@@ -404,7 +451,6 @@ fn r_resolve_suite_passes() {
         .args([
             "-e",
             "stopifnot(requireNamespace('testthat', quietly = TRUE), \
-                       requireNamespace('yaml12', quietly = TRUE), \
                        requireNamespace('withr', quietly = TRUE), \
                        requireNamespace('secretbase', quietly = TRUE))",
         ])

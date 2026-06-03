@@ -29,7 +29,7 @@ $ ./script.R
 `ir run script.R` runs in two phases:
 
 1. **Resolve + materialise** (a private, throw-away R session).
-   - The YAML frontmatter is parsed with the **yaml12** package.
+   - The YAML frontmatter is parsed by Rust with **saphyr**.
    - A *resolution cache* short-circuits this whole phase: the declared
      dependencies plus the resolution source (and R version / platform) are
      hashed, and if that exact request was already resolved, its library is
@@ -74,9 +74,10 @@ cache, including materialised libraries and resolution markers.
 ## Frontmatter format
 
 The YAML frontmatter is the leading block of lines that start exactly with
-`#| ` (after a single optional `#!` shebang line). Rust strips the `#| ` prefix
-and passes only the YAML frontmatter text to the R resolver. Because it is
-parsed as real YAML by the `yaml12` package, two YAML rules apply:
+`#| ` (after a single optional `#!` shebang line). Rust strips the `#| ` prefix,
+parses the YAML, and passes the declared dependency specs to the R resolver as
+ordinary command-line arguments. Because the block is parsed as real YAML, two
+YAML rules apply:
 
 - The `R:` constraint must be **quoted** — `R: ">= 4.0"` — because a bare value
   starting with `>` is not valid YAML.
@@ -108,7 +109,7 @@ and `pkg!=1.2`, are not resolved by `ir`.
 
 - A Rust toolchain (to build `ir`).
 - `R` / `Rscript` on `PATH` (this prototype uses whatever R it finds).
-- The R packages `yaml12`, `pak`, `renv`, and `secretbase` installed in that R.
+- The R packages `pak`, `renv`, and `secretbase` installed in that R.
 
 ## Build & install
 
@@ -126,8 +127,9 @@ $ cargo test
 `cargo test` runs the Rust CLI tests (`tests/cli.rs`) and, when an R toolchain
 with the required test packages is available, the R resolution suite
 (`tests/test-resolve.R`) — which covers pak ref normalisation, unsupported
-version-operator pass-through, exotic-ref pass-through, YAML frontmatter
-parsing, and R-version checks. The R suite can also be run on its own:
+version-operator pass-through, exotic-ref pass-through, snapshot repository
+selection, cache keys, and R-version checks. The R suite can also be run on its
+own:
 
 ```console
 $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'
