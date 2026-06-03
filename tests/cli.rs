@@ -66,6 +66,54 @@ fn prepend_path(dir: &Path) -> OsString {
     std::env::join_paths(paths).unwrap()
 }
 
+#[cfg(unix)]
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+#[cfg(unix)]
+fn real_r_tools() -> Option<(PathBuf, PathBuf)> {
+    let r = executable_on_path("R")?;
+    let rscript = executable_on_path("Rscript")?;
+    let probe = Command::new(&rscript)
+        .args([
+            "-e",
+            "stopifnot(requireNamespace('secretbase', quietly = TRUE))",
+        ])
+        .output()
+        .ok()?;
+    if probe.status.success() {
+        Some((r, rscript))
+    } else {
+        eprintln!("skipping real Rscript test: required R package `secretbase` unavailable");
+        None
+    }
+}
+
+#[cfg(unix)]
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn write_r_home_wrappers(r_home: &Path, real_r: &Path, real_rscript: &Path, marker: &str) {
+    write_executable(
+        &r_home.join("R"),
+        &format!("#!/bin/sh\nexec {} \"$@\"\n", sh_quote(real_r)),
+    );
+    write_executable(
+        &r_home.join("Rscript"),
+        &format!(
+            "#!/bin/sh\nIR_TEST_SELECTED_R={} exec {} \"$@\"\n",
+            marker,
+            sh_quote(real_rscript)
+        ),
+    );
+}
+
 #[test]
 fn help_outputs_match_snapshots() {
     for (name, args) in [
@@ -444,8 +492,12 @@ echo "user Rscript args received"
 #[cfg(unix)]
 #[test]
 fn run_uses_r_version_key_to_select_installed_rscript_with_rig() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
     let bin_dir = unique_path("ir-bin", "dir");
     let r_home = unique_path("ir-r-45", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
     let script = unique_path("ir-script", "R");
     fs::create_dir_all(&bin_dir).unwrap();
     fs::create_dir_all(&r_home).unwrap();
@@ -453,7 +505,6 @@ fn run_uses_r_version_key_to_select_installed_rscript_with_rig() {
     let rig = bin_dir.join("rig");
     let default_rscript = bin_dir.join("Rscript");
     let r_binary = r_home.join("R");
-    let selected_rscript = r_home.join("Rscript");
 
     write_executable(
         &rig,
@@ -502,33 +553,20 @@ esac
         &default_rscript,
         "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
     );
-    write_executable(&r_binary, "#!/bin/sh\nexit 0\n");
-    write_executable(
-        &selected_rscript,
-        r#"#!/bin/sh
-set -eu
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  echo "/tmp/ir-test-library" > "$2"
-  exit 0
-fi
-echo "selected R 4.5"
-"#,
-    );
+    write_r_home_wrappers(&r_home, &real_r, &real_rscript, "4.5");
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
-#| dependencies:
-#|   - dplyr>=1.0
 #| r-version: "4.5" # selected via rig
 
-cat('unused by fake Rscript\n')
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
 "#,
     )
     .unwrap();
 
     let out = ir()
         .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
         .env_remove("IR_RSCRIPT")
         .args(["run", script.to_str().unwrap()])
         .output()
@@ -536,6 +574,7 @@ cat('unused by fake Rscript\n')
 
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r_home);
+    let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_file(&script);
 
     assert!(out.status.success(), "{out:?}");
@@ -548,8 +587,12 @@ cat('unused by fake Rscript\n')
 #[cfg(unix)]
 #[test]
 fn run_r_version_arg_overrides_frontmatter_r_version() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
     let bin_dir = unique_path("ir-bin", "dir");
     let r_home = unique_path("ir-r-45", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
     let script = unique_path("ir-script", "R");
     fs::create_dir_all(&bin_dir).unwrap();
     fs::create_dir_all(&r_home).unwrap();
@@ -557,7 +600,6 @@ fn run_r_version_arg_overrides_frontmatter_r_version() {
     let rig = bin_dir.join("rig");
     let default_rscript = bin_dir.join("Rscript");
     let r_binary = r_home.join("R");
-    let selected_rscript = r_home.join("Rscript");
 
     write_executable(
         &rig,
@@ -606,31 +648,20 @@ esac
         &default_rscript,
         "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
     );
-    write_executable(&r_binary, "#!/bin/sh\nexit 0\n");
-    write_executable(
-        &selected_rscript,
-        r#"#!/bin/sh
-set -eu
-if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
-  cat > /dev/null
-  : > "$IR_RESOLVE_RESULT_FILE"
-  exit 0
-fi
-echo "selected R 4.5"
-"#,
-    );
+    write_r_home_wrappers(&r_home, &real_r, &real_rscript, "4.5");
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
 #| r-version: "4.6"
 
-cat('unused by fake Rscript\n')
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
 "#,
     )
     .unwrap();
 
     let out = ir()
         .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
         .env_remove("IR_RSCRIPT")
         .args(["run", "--r-version", "4.5", script.to_str().unwrap()])
         .output()
@@ -638,6 +669,7 @@ cat('unused by fake Rscript\n')
 
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r_home);
+    let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_file(&script);
 
     assert!(out.status.success(), "{out:?}");
@@ -696,9 +728,13 @@ echo "ran inline expr"
 #[cfg(unix)]
 #[test]
 fn run_filters_r_versions_by_exclude_newer_release_date() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
     let bin_dir = unique_path("ir-bin", "dir");
     let r45_home = unique_path("ir-r-45", "dir");
     let r46_home = unique_path("ir-r-46", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
     let script = unique_path("ir-script", "R");
     fs::create_dir_all(&bin_dir).unwrap();
     fs::create_dir_all(&r45_home).unwrap();
@@ -708,8 +744,6 @@ fn run_filters_r_versions_by_exclude_newer_release_date() {
     let default_rscript = bin_dir.join("Rscript");
     let r45_binary = r45_home.join("R");
     let r46_binary = r46_home.join("R");
-    let r45_rscript = r45_home.join("Rscript");
-    let r46_rscript = r46_home.join("Rscript");
 
     write_executable(
         &rig,
@@ -775,47 +809,22 @@ esac
         &default_rscript,
         "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
     );
-    write_executable(&r45_binary, "#!/bin/sh\nexit 0\n");
-    write_executable(&r46_binary, "#!/bin/sh\nexit 0\n");
-    write_executable(
-        &r45_rscript,
-        r#"#!/bin/sh
-set -eu
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  echo "/tmp/ir-test-library" > "$2"
-  exit 0
-fi
-echo "selected R 4.5"
-"#,
-    );
-    write_executable(
-        &r46_rscript,
-        r#"#!/bin/sh
-set -eu
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  echo "/tmp/ir-test-library" > "$2"
-  exit 0
-fi
-echo "selected R 4.6"
-"#,
-    );
+    write_r_home_wrappers(&r45_home, &real_r, &real_rscript, "4.5");
+    write_r_home_wrappers(&r46_home, &real_r, &real_rscript, "4.6");
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
-#| dependencies:
-#|   - dplyr>=1.0
 #| r-version: ">= 4.5"
 #| exclude-newer: "2025-12-31"
 
-cat('unused by fake Rscript\n')
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
 "#,
     )
     .unwrap();
 
     let out = ir()
         .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
         .env_remove("IR_RSCRIPT")
         .args(["run", script.to_str().unwrap()])
         .output()
@@ -824,6 +833,7 @@ cat('unused by fake Rscript\n')
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r45_home);
     let _ = fs::remove_dir_all(&r46_home);
+    let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_file(&script);
 
     assert!(out.status.success(), "{out:?}");
