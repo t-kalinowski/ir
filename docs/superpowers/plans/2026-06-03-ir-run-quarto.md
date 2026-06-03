@@ -360,7 +360,8 @@ Add `run_quarto` after `run_script` (`src/main.rs:446`):
 /// `quarto_r_value`). `R_LIBS` injects the resolved library exactly as for a
 /// script. `rscript_args` (leading Rscript options) are forwarded to quarto's
 /// knitr Rscript via `QUARTO_KNITR_RSCRIPT_ARGS`, which quarto splits on commas
-/// with no escaping — so an arg containing a comma is rejected up front.
+/// with no escaping; `cmd_run` rejects comma-containing args before phase 1 (see
+/// `reject_comma_rscript_args`), so by here they are known comma-free.
 /// `script_args` (trailing) become `quarto render <doc> <script_args>`.
 ///
 /// As with `run_script`, on Unix we `exec` into quarto; on Windows it runs as a
@@ -372,15 +373,6 @@ fn run_quarto(
     rscript_args: &[String],
     script_args: &[String],
 ) -> Result<i32, Box<dyn Error>> {
-    if let Some(arg) = rscript_args.iter().find(|arg| arg.contains(',')) {
-        return Err(format!(
-            "Rscript option `{arg}` contains a comma, which cannot be forwarded to \
-             quarto's knitr engine: QUARTO_KNITR_RSCRIPT_ARGS is comma-separated \
-             with no escaping."
-        )
-        .into());
-    }
-
     let quarto: std::ffi::OsString = "quarto".into();
     let mut cmd = Command::new(&quarto);
     cmd.arg("render").arg(doc).args(script_args);
@@ -588,7 +580,7 @@ echo "ran as R script"
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test --test cli run_qmd run_extensionless`
+Run: `cargo test --test cli -- run_qmd run_extensionless`
 Expected: FAIL — `.qmd` currently takes the R-script path (no quarto dispatch), so `run_qmd_renders_with_quarto_and_injects_env` does not reach the fake quarto, and the comma check does not exist yet.
 
 - [ ] **Step 3: Add `is_quarto` and thread the flag**
@@ -640,6 +632,29 @@ fn resolve_library(
     // ... unchanged below ...
 ```
 
+Add `reject_comma_rscript_args` near `is_quarto`. quarto's
+`QUARTO_KNITR_RSCRIPT_ARGS` is comma-separated with no escaping, so an Rscript
+option containing a comma cannot be forwarded faithfully. Reject it **before
+phase-1 resolution** (fail fast — no point resolving packages for a run that
+cannot be launched) rather than mis-splitting silently:
+
+```rust
+/// quarto's QUARTO_KNITR_RSCRIPT_ARGS is comma-separated with no escaping, so an
+/// Rscript option containing a comma cannot be forwarded faithfully. Reject it up
+/// front, before resolution, rather than mis-splitting silently.
+fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), Box<dyn Error>> {
+    if let Some(arg) = rscript_args.iter().find(|arg| arg.contains(',')) {
+        return Err(format!(
+            "Rscript option `{arg}` contains a comma, which cannot be forwarded to \
+             quarto's knitr engine: QUARTO_KNITR_RSCRIPT_ARGS is comma-separated \
+             with no escaping."
+        )
+        .into());
+    }
+    Ok(())
+}
+```
+
 Replace the body of `cmd_run` (`src/main.rs:252-269`):
 
 ```rust
@@ -648,6 +663,12 @@ Replace the body of `cmd_run` (`src/main.rs:252-269`):
 
     let rscript = rscript_command();
     let quarto = is_quarto(&script_path);
+
+    // Reject comma-bearing Rscript options before resolving, so a run that could
+    // never be launched fails fast instead of after phase-1 resolution.
+    if quarto {
+        reject_comma_rscript_args(rscript_args)?;
+    }
 
     // Phase 1: private R session resolves deps and materialises the library.
     let library = resolve_library(&rscript, &script_path, quarto)?;
@@ -677,7 +698,7 @@ If you added `#[allow(dead_code)]` on `read_yaml_block_to_string` or `run_quarto
 
 - [ ] **Step 4: Run the new tests to verify they pass**
 
-Run: `cargo test --test cli run_qmd run_extensionless`
+Run: `cargo test --test cli -- run_qmd run_extensionless`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Verify the whole suite + clippy**
@@ -719,7 +740,7 @@ Place this line inside both `concat!(...)` blocks, immediately before the `"\n",
 
 - [ ] **Step 2: Run the help tests to verify they fail**
 
-Run: `cargo test --test cli help_outputs_match_snapshots help_is_shown run_help`
+Run: `cargo test --test cli -- help_outputs_match_snapshots help_is_shown run_help`
 Expected: FAIL — `assert_help_snapshot` compares against the old `tests/snapshots/help.stdout` and `run-help.stdout`, which do not yet contain the new sentence.
 
 - [ ] **Step 3: Regenerate the snapshots**
@@ -749,7 +770,7 @@ directly with an editor set to LF — the content is static.
 
 - [ ] **Step 4: Run the help tests to verify they pass**
 
-Run: `cargo test --test cli help_outputs_match_snapshots help_is_shown run_help`
+Run: `cargo test --test cli -- help_outputs_match_snapshots help_is_shown run_help`
 Expected: PASS.
 
 - [ ] **Step 5: Update the README**
