@@ -19,10 +19,10 @@
 - **Modify `src/main.rs`** — all production code:
   - `parse_frontmatter` gains a `nested` parameter and an `ir:` descent.
   - New `extract_yaml_block` (pure) + `read_yaml_block_to_string` (file reader).
-  - New `is_quarto`, `quarto_r_value`, `quarto_spawn_error`, `run_quarto`.
-  - `read_script_spec`, `resolve_library`, `cmd_run` thread a `quarto: bool`.
+  - New `is_quarto`, `quarto_r_value`, `quarto_command` (`IR_QUARTO`/PATH selector), `quarto_spawn_error`, `reject_comma_rscript_args`, `run_quarto`.
+  - `read_script_spec`, `resolve_library`, `cmd_run` thread a `quarto: bool`; `cmd_run` also rejects comma-bearing `rscript_args` before phase 1.
   - A `#[cfg(test)] mod tests` for the pure functions.
-- **Modify `tests/cli.rs`** — integration tests for quarto dispatch (fake `quarto` on `PATH`, fake Rscript via `IR_RSCRIPT`).
+- **Modify `tests/cli.rs`** — integration tests for quarto dispatch (fake quarto via `IR_QUARTO`, fake Rscript via `IR_RSCRIPT`).
 - **Modify `tests/snapshots/help.stdout`, `tests/snapshots/run-help.stdout`** — updated help text.
 - **Modify `README.md`** — document the qmd frontmatter form.
 - **Create `examples/hello.qmd`** — a runnable example.
@@ -277,10 +277,10 @@ git commit -m "Extract the leading YAML block from Quarto documents"
 
 ## Task 3: Quarto run helpers
 
-Add `quarto_r_value` (the path-like `QUARTO_R` rule), `quarto_spawn_error`, and `run_quarto` (with comma rejection). Not wired into dispatch yet — Task 4 does that — so this task is verified by unit tests on the pure helper.
+Add `quarto_r_value` (the path-like `QUARTO_R` rule), `quarto_command` (the `IR_QUARTO`/PATH quarto selector, mirroring `rscript_command`), `quarto_spawn_error`, and `run_quarto`. Comma rejection lives in `cmd_run` (Task 4), not here. Not wired into dispatch yet — Task 4 does that — so this task is verified by unit tests on the pure helpers.
 
 **Files:**
-- Modify: `src/main.rs` (add the three functions; place `run_quarto` after `run_script` at `:446`, helpers near `spawn_error` at `:538`)
+- Modify: `src/main.rs` (add the four functions; place `run_quarto` after `run_script` at `:446`, helpers near `spawn_error` at `:538`)
 - Test: `src/main.rs` (`#[cfg(test)] mod tests`)
 
 - [ ] **Step 1: Write the failing unit tests**
@@ -310,7 +310,8 @@ Add inside `mod tests` (`OsStr` is already in scope via `use super::*`, since `s
     #[test]
     fn quarto_spawn_error_explains_missing_quarto() {
         let err = quarto_spawn_error(io::Error::from(io::ErrorKind::NotFound));
-        assert!(err.contains("could not find `quarto` on PATH"), "{err}");
+        assert!(err.contains("could not find `quarto`"), "{err}");
+        assert!(err.contains("IR_QUARTO"), "{err}");
     }
 ```
 
@@ -339,10 +340,20 @@ fn quarto_r_value(rscript: &OsStr) -> Option<std::ffi::OsString> {
     }
 }
 
+/// The quarto executable to launch: `IR_QUARTO` if set, else bare `quarto`
+/// (resolved on PATH). Mirrors `rscript_command`. On Windows a bare `quarto`
+/// resolves only to `quarto.exe` — Rust's PATH search does not consult PATHEXT —
+/// so a dev build shipped as `quarto.cmd` must be selected via `IR_QUARTO`
+/// pointing at its full path.
+fn quarto_command() -> std::ffi::OsString {
+    env::var_os("IR_QUARTO").unwrap_or_else(|| "quarto".into())
+}
+
 /// Turn a failure to launch quarto into an actionable message.
 fn quarto_spawn_error(err: io::Error) -> String {
     if err.kind() == io::ErrorKind::NotFound {
-        "could not find `quarto` on PATH. Install Quarto: https://quarto.org/docs/get-started/"
+        "could not find `quarto`. Install Quarto (https://quarto.org/docs/get-started/) \
+         or set IR_QUARTO to a quarto executable."
             .to_string()
     } else {
         format!("failed to launch `quarto`: {err}")
@@ -364,6 +375,7 @@ Add `run_quarto` after `run_script` (`src/main.rs:446`):
 /// `reject_comma_rscript_args`), so by here they are known comma-free.
 /// `script_args` (trailing) become `quarto render <doc> <script_args>`.
 ///
+/// The quarto executable is `quarto_command()` (`IR_QUARTO` or bare `quarto`).
 /// As with `run_script`, on Unix we `exec` into quarto; on Windows it runs as a
 /// child and we return its exit code.
 fn run_quarto(
@@ -373,8 +385,7 @@ fn run_quarto(
     rscript_args: &[String],
     script_args: &[String],
 ) -> Result<i32, Box<dyn Error>> {
-    let quarto: std::ffi::OsString = "quarto".into();
-    let mut cmd = Command::new(&quarto);
+    let mut cmd = Command::new(quarto_command());
     cmd.arg("render").arg(doc).args(script_args);
 
     if let Some(value) = quarto_r_value(rscript) {
@@ -423,7 +434,7 @@ git commit -m "Add run_quarto and its QUARTO_R and launch helpers"
 
 ## Task 4: Extension dispatch wiring
 
-Route `.qmd`/`.Rmd` to `run_quarto` and everything else (including extensionless scripts) to `run_script`, threading the `quarto` flag through `read_script_spec` and `resolve_library`. Integration-tested end to end with a fake `quarto` on `PATH`.
+Route `.qmd`/`.Rmd` to `run_quarto` and everything else (including extensionless scripts) to `run_script`, threading the `quarto` flag through `read_script_spec` and `resolve_library`. Integration-tested end to end with a fake `quarto` selected via `IR_QUARTO`.
 
 **Files:**
 - Modify: `src/main.rs` — `cmd_run` (`:247-270`), `resolve_library` (`:274-322`), `read_script_spec` (`:324-326`); add `is_quarto`.
@@ -431,19 +442,11 @@ Route `.qmd`/`.Rmd` to `run_quarto` and everything else (including extensionless
 
 - [ ] **Step 1: Write the failing integration tests**
 
-Add to `tests/cli.rs`. The first fakes both a resolver (via `IR_RSCRIPT`) and a `quarto` on `PATH`; the helper below builds a `PATH` with the fake's directory prepended.
+Add to `tests/cli.rs`. The fakes are selected by env var, mirroring `IR_RSCRIPT`:
+the resolver via `IR_RSCRIPT` and quarto via `IR_QUARTO`. No PATH manipulation is
+needed — `IR_QUARTO` points directly at the fake's full path.
 
 ```rust
-/// Build a `PATH` value with `dir` prepended to the current process `PATH`.
-fn path_with_prefix(dir: &Path) -> std::ffi::OsString {
-    let mut prefixed = std::ffi::OsString::from(dir);
-    if let Some(existing) = std::env::var_os("PATH") {
-        prefixed.push(if cfg!(windows) { ";" } else { ":" });
-        prefixed.push(existing);
-    }
-    prefixed
-}
-
 #[cfg(unix)]
 #[test]
 fn run_qmd_renders_with_quarto_and_injects_env() {
@@ -494,7 +497,7 @@ echo "fake quarto rendered $2"
 
     let out = ir()
         .env("IR_RSCRIPT", &fake_rscript)
-        .env("PATH", path_with_prefix(&dir))
+        .env("IR_QUARTO", &fake_quarto)
         .args(["run", "--vanilla", doc.to_str().unwrap(), "--to", "pdf"])
         .output()
         .unwrap();
@@ -576,11 +579,125 @@ echo "ran as R script"
         out
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn run_rmd_routes_to_quarto() {
+    // `.Rmd` is a first-class Quarto target alongside `.qmd`; assert it reaches
+    // quarto rather than the R-script path. Extension match is case-insensitive.
+    let dir = unique_path("ir-rmd-test", "d");
+    fs::create_dir_all(&dir).unwrap();
+    let fake_rscript = dir.join("fake-rscript.sh");
+    let fake_quarto = dir.join("quarto");
+    let doc = unique_path("ir-doc", "Rmd");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  cat > /dev/null
+  : > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "fake Rscript should not run the document" >&2
+exit 5
+"#,
+    );
+    write_executable(
+        &fake_quarto,
+        "#!/bin/sh\nset -eu\ntest \"$1\" = \"render\"\necho \"fake quarto rendered $2\"\n",
+    );
+    fs::write(&doc, "---\ntitle: doc\n---\n\n```{r}\n1\n```\n").unwrap();
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .env("IR_QUARTO", &fake_quarto)
+        .args(["run", doc.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&doc);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(out.status.success(), "{:?}", out);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("fake quarto rendered"),
+        "{:?}",
+        out
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn run_qmd_renders_with_quarto_and_injects_env_windows() {
+    // Windows analogue of the Unix dispatch test: fake quarto is a `.cmd` selected
+    // via `IR_QUARTO` (a full path, so no PATH/PATHEXT lookup is involved; Rust
+    // runs an explicit `.cmd` through cmd.exe). The Unix run_quarto path `exec`s;
+    // the Windows path spawns a child and propagates its exit code, so this also
+    // covers that platform split. The batch validates argv and the injected
+    // environment and exits non-zero on any mismatch.
+    let dir = unique_path("ir-quarto-test", "d");
+    fs::create_dir_all(&dir).unwrap();
+    let fake_rscript = dir.join("fake-rscript.cmd");
+    let fake_quarto = dir.join("quarto.cmd");
+    let doc = unique_path("ir-doc", "qmd");
+
+    // Fake Rscript (.cmd): phase-1 resolver writes a library path and exits.
+    write_executable(
+        &fake_rscript,
+        "@echo off\r\nif defined IR_RESOLVE_RESULT_FILE (\r\n  echo C:\\ir-test-library> \"%IR_RESOLVE_RESULT_FILE%\"\r\n  exit /b 0\r\n)\r\nexit /b 5\r\n",
+    );
+
+    // Fake quarto (.cmd): assert argv + injected env, then succeed. `%~3`/`%~4`
+    // strip surrounding quotes from arguments.
+    write_executable(
+        &fake_quarto,
+        &format!(
+            "@echo off\r\n\
+             if not \"%1\"==\"render\" exit /b 10\r\n\
+             if not \"%~3\"==\"--to\" exit /b 11\r\n\
+             if not \"%~4\"==\"pdf\" exit /b 12\r\n\
+             if not \"%QUARTO_R%\"==\"{rscript}\" exit /b 13\r\n\
+             if not \"%R_LIBS%\"==\"C:\\ir-test-library\" exit /b 14\r\n\
+             if not \"%QUARTO_KNITR_RSCRIPT_ARGS%\"==\"--vanilla\" exit /b 15\r\n\
+             echo fake quarto rendered\r\n",
+            rscript = fake_rscript.display()
+        ),
+    );
+
+    fs::write(
+        &doc,
+        "---\nir:\n  dependencies:\n    - dplyr>=1.0\n---\n\n```{r}\n1 + 1\n```\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .env("IR_QUARTO", &fake_quarto)
+        .args(["run", "--vanilla", doc.to_str().unwrap(), "--to", "pdf"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&doc);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        out.status.success(),
+        "quarto.cmd exit code signals which assertion failed: {:?}",
+        out
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("fake quarto rendered"),
+        "{:?}",
+        out
+    );
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test --test cli -- run_qmd run_extensionless`
+Run: `cargo test --test cli -- run_qmd run_rmd run_extensionless`
 Expected: FAIL — `.qmd` currently takes the R-script path (no quarto dispatch), so `run_qmd_renders_with_quarto_and_injects_env` does not reach the fake quarto, and the comma check does not exist yet.
 
 - [ ] **Step 3: Add `is_quarto` and thread the flag**
@@ -698,8 +815,10 @@ If you added `#[allow(dead_code)]` on `read_yaml_block_to_string` or `run_quarto
 
 - [ ] **Step 4: Run the new tests to verify they pass**
 
-Run: `cargo test --test cli -- run_qmd run_extensionless`
-Expected: PASS (3 tests).
+Run: `cargo test --test cli -- run_qmd run_rmd run_extensionless`
+Expected: PASS. On Unix this is 4 tests (`run_qmd_renders…`, `run_qmd_with_comma…`,
+`run_rmd_routes_to_quarto`, `run_extensionless…`); on Windows the Unix-only tests
+compile out and `run_qmd_renders…_windows` runs instead.
 
 - [ ] **Step 5: Verify the whole suite + clippy**
 
@@ -728,7 +847,7 @@ Document Quarto support in help output (updating #17's snapshots), the README, a
 
 - [ ] **Step 1: Update the help text**
 
-In `print_help` (`src/main.rs:175-180`) and `print_run_help` (`src/main.rs:197-200`), the body currently reads "reads the YAML frontmatter from <script.R>". Add a sentence after each existing description paragraph:
+In `print_help` (`src/main.rs:175-180`) and `print_run_help` (`src/main.rs:197-200`), the body currently reads "reads the YAML frontmatter from <script.R>". Add a sentence after each existing description paragraph (inside both `concat!(...)` blocks, immediately before the `"\n", "ENVIRONMENT:\n"` lines):
 
 ```rust
             "Quarto documents (.qmd, .Rmd) are also supported: declare\n",
@@ -736,7 +855,16 @@ In `print_help` (`src/main.rs:175-180`) and `print_run_help` (`src/main.rs:197-2
             "and ir renders them with `quarto render`.\n",
 ```
 
-Place this line inside both `concat!(...)` blocks, immediately before the `"\n", "ENVIRONMENT:\n"` lines. Keep the existing `<script.R>` USAGE lines unchanged (they remain accurate for scripts).
+Then add `IR_QUARTO` to the ENVIRONMENT block of both functions. The current last
+line (`IR_RSCRIPT …`, no trailing `\n`) gains a `\n`, and `IR_QUARTO` becomes the
+new final line:
+
+```rust
+            "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)\n",
+            "    IR_QUARTO      path to the quarto executable (default: quarto on PATH)"
+```
+
+Keep the existing `<script.R>` USAGE lines unchanged (they remain accurate for scripts).
 
 - [ ] **Step 2: Run the help tests to verify they fail**
 
@@ -844,7 +972,8 @@ Run once on a machine with R, the `pak`/`renv`/`secretbase` packages, and Quarto
 - [ ] `cargo build --release`
 - [ ] `./target/release/ir run examples/hello.qmd` — confirm it resolves the library and produces `examples/hello.html`, and that `dplyr`/`glue` load from the materialised library (not a pre-existing user library). Optionally set `IR_CACHE_DIR` to a fresh temp dir to force a real resolve.
 - [ ] `./target/release/ir run examples/hello.qmd --to pdf` (if LaTeX available) — confirm the trailing arg reaches `quarto render`.
-- [ ] Temporarily rename `quarto` off `PATH` and confirm `ir run examples/hello.qmd` prints the "could not find `quarto` on PATH" error.
+- [ ] Temporarily rename `quarto` off `PATH` and confirm `ir run examples/hello.qmd` prints the "could not find `quarto`" error mentioning `IR_QUARTO`.
+- [ ] On Windows with a dev quarto: `IR_QUARTO=C:\path\to\dev\quarto.cmd ir run examples/hello.qmd` renders via that build (bare `quarto` finds only `quarto.exe`).
 
 ## Dev workflow / handoff
 
@@ -858,4 +987,5 @@ Run once on a machine with R, the `pak`/`renv`/`secretbase` packages, and Quarto
 - **No quarto preflight.** A missing `quarto` is reported at the render step, after phase 1. On a resolution cache-miss the resolver runs before the failure; this is accepted to keep the happy path free of an extra `quarto --version` spawn. (Decision confirmed with Chris.)
 - **`QUARTO_R` only when path-like.** Avoids quarto's "does not exist" warning for the bare `Rscript` default while preserving the same-R invariant. (Decision confirmed with Chris.)
 - **Comma in `rscript_args` is rejected**, not escaped — quarto's `QUARTO_KNITR_RSCRIPT_ARGS` split has no escape mechanism.
+- **`IR_QUARTO` selects the quarto executable** (mirrors `IR_RSCRIPT`); bare `quarto` otherwise. On Windows, Rust's PATH search finds only `quarto.exe`, so a dev `quarto.cmd` must be named via `IR_QUARTO`'s full path. (Decision confirmed with Chris.)
 - **`resolve.R` is untouched** — the qmd flow produces the same stdin + env inputs a script does.

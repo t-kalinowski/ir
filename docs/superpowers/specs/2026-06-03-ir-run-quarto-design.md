@@ -107,15 +107,19 @@ materialise) is unchanged. Phase 2 dispatches by file extension.
    (`#!/usr/bin/env -S ir run` executed as a bare, often extensionless, file
    name). Phase 1 (`resolve_library`) runs identically for both.
 
-5. **`run_quarto`.** Locate `quarto` on PATH. Build
-   `quarto render <doc> <script_args>`. Environment:
+5. **`run_quarto`.** Select the quarto executable via `quarto_command()` —
+   `IR_QUARTO` if set, else bare `quarto` resolved on PATH (mirrors
+   `IR_RSCRIPT`/`rscript_command`). Build `quarto render <doc> <script_args>`.
+   Environment:
    - **`QUARTO_R`** — set to the selected Rscript **only when it is path-like**
      (an existing path, or a value containing a path separator). For the bare
      `Rscript` default, `QUARTO_R` is left unset so quarto resolves `Rscript` on
      PATH — the same binary `ir` used — which avoids quarto's "Specified
      `QUARTO_R` … does not exist" warning while preserving the same-R invariant.
    - **`R_LIBS`** — set to the materialised library only when dependencies were
-     resolved (the sole conditional env var).
+     resolved (the only env var conditional on dependency resolution; `QUARTO_R`
+     and `QUARTO_KNITR_RSCRIPT_ARGS` are conditional on path-likeness and on
+     having any `rscript_args`, respectively).
    - **`QUARTO_KNITR_RSCRIPT_ARGS`** — set to the comma-joined `rscript_args`
      when any are present, so quarto's knitr Rscript receives them.
 
@@ -130,6 +134,16 @@ or PATH `Rscript`; future: a colleague's rig integration). It feeds: phase-1
 resolve, the `.R` run (`R_LIBS` + exec), and the qmd run (becomes `QUARTO_R`).
 Keeping a single source enforces the invariant above. R-version *selection*
 itself is out of scope — this work only plumbs the chosen Rscript to `QUARTO_R`.
+
+### Quarto-executable seam
+
+The quarto binary is selected the same way: `IR_QUARTO` if set, else bare
+`quarto` on PATH (`quarto_command()`, mirroring `rscript_command()`). The bare
+default covers an installed quarto. On **Windows**, Rust's bare-name PATH search
+resolves only `quarto.exe` (it does not consult `PATHEXT`), so a dev build
+shipped as `quarto.cmd` is unreachable by bare name — `IR_QUARTO` set to that
+file's full path selects it (an explicit `.cmd` runs via Rust's cmd.exe
+wrapping). This also lets tests fake quarto without touching PATH.
 
 ## Data flow (qmd)
 
@@ -153,9 +167,9 @@ doc.qmd
   against the **ambient library paths**. `QUARTO_R` is still pinned per the rule
   above, so the R *binary* selection is unchanged — only the library set differs.
   Parallels a no-dependency script.
-- **`quarto` not on PATH** → clear error from `run_quarto` ("could not find
-  `quarto` on PATH …"). No preflight check: a missing `quarto` is reported at
-  the render step, after phase 1. The tradeoff is that on a resolution
+- **`quarto` not found** → clear error from `run_quarto` ("could not find
+  `quarto` … or set IR_QUARTO …"). No preflight check: a missing `quarto` is
+  reported at the render step, after phase 1. The tradeoff is that on a resolution
   cache-miss the resolver runs before the failure; cache hits resolve instantly,
   so the wasted work is normally negligible, and the happy path is not burdened
   with an extra `quarto --version` spawn (~1s of Deno startup) on every run.
@@ -197,13 +211,13 @@ preserving the #13 intent that leading options target the R running the code:
   into `ir:` (present, absent, null, non-mapping); comma-rejection of
   `rscript_args`.
 - **Integration** (fake executables, as in `tests/cli.rs`): a `.qmd` resolves
-  via the fake Rscript then invokes a fake `quarto` on `PATH`, asserting the
-  `quarto render <doc>` argv, `QUARTO_R` set/unset per the path-like rule,
-  `R_LIBS`, and `QUARTO_KNITR_RSCRIPT_ARGS`. A non-`.R`/non-qmd or extensionless
-  script still takes the R-script path. A missing `quarto` yields the clear
-  error. Reuse the existing harness; faking `quarto` requires putting it on a
-  test-scoped `PATH` (the `.R` tests fake Rscript via `IR_RSCRIPT`, but there is
-  no `IR_QUARTO`, so the test prepends a temp dir to `PATH`).
+  via the fake Rscript (`IR_RSCRIPT`) then invokes a fake quarto selected via
+  `IR_QUARTO`, asserting the `quarto render <doc>` argv, `QUARTO_R` set/unset per
+  the path-like rule, `R_LIBS`, and `QUARTO_KNITR_RSCRIPT_ARGS`. A `.Rmd` target
+  is asserted to route to quarto too. A non-`.R`/non-qmd or extensionless script
+  still takes the R-script path. Because `IR_QUARTO` takes a full path, no PATH
+  manipulation is needed; a Windows variant uses a `.cmd` fake to cover the
+  spawn-and-propagate-exit-code path.
 - **Docs/snapshots:** updating `ir run` help text to mention Quarto documents
   requires updating the `tests/snapshots/*.stdout` files added by #17 and the
   `contains(...)` assertions in `tests/cli.rs`, since help is snapshot-tested by
@@ -214,8 +228,6 @@ preserving the #13 intent that leading options target the R running the code:
 - R-version *selection* (separate rig integration; this work only carries the
   selected Rscript to `QUARTO_R`).
 - Quarto verbs other than `render` (e.g. `preview`).
-- An `IR_QUARTO` override for locating quarto (PATH only for now; add later only
-  if needed).
 - Jupyter / `.ipynb` documents (Python engine).
 
 ## Dev workflow / sequencing
