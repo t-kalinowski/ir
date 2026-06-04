@@ -1735,7 +1735,8 @@ fn run_qmd_renders_with_quarto_and_injects_env() {
         r#"#!/bin/sh
 set -eu
 if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
-  cat > /dev/null
+  actual="$(cat)"
+  test "$actual" = "dplyr>=1.0"
   echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
   exit 0
 fi

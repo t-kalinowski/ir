@@ -38,6 +38,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use saphyr::{LoadableYamlNode, Yaml};
 
+mod quarto;
 mod rig;
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
@@ -581,7 +582,7 @@ fn cmd_run(
         RunSource::Script(script) => {
             let path = fs::canonicalize(script)
                 .map_err(|e| format!("cannot read script `{script}`: {e}"))?;
-            let quarto = is_quarto(&path);
+            let quarto = quarto::is_quarto(&path);
             let spec = read_script_spec(&path, quarto)?;
             (Some(path), spec, quarto)
         }
@@ -598,7 +599,7 @@ fn cmd_run(
     // forwards them via comma-separated QUARTO_KNITR_RSCRIPT_ARGS, which has no
     // escaping.
     if quarto {
-        reject_comma_rscript_args(rscript_args)?;
+        quarto::reject_comma_rscript_args(rscript_args)?;
     }
 
     // Phase 1: private R session resolves deps and materialises the library.
@@ -611,7 +612,7 @@ fn cmd_run(
         let doc = script_path
             .as_deref()
             .expect("is_quarto is only true for a RunSource::Script path");
-        run_quarto(
+        quarto::run(
             &rscript,
             library.as_deref(),
             doc,
@@ -878,7 +879,7 @@ fn shebang_mentions(shebang: &str, name: &str) -> bool {
 
 fn read_script_spec(script: &Path, quarto: bool) -> Result<ScriptSpec, Box<dyn Error>> {
     let frontmatter = if quarto {
-        read_yaml_block_to_string(script)?
+        quarto::read_yaml_block_to_string(script)?
     } else {
         read_op_frontmatter_to_string(script)?
     };
@@ -1057,61 +1058,6 @@ fn run_script(
     }
 }
 
-/// Phase 2 (Quarto) — render `doc` with `quarto render`, pointed at the selected
-/// R and the materialised library.
-///
-/// `QUARTO_R` pins quarto's knitr R to `ir`'s selected Rscript (see
-/// `quarto_r_value`). `R_LIBS` injects the resolved library exactly as for a
-/// script. `rscript_args` (leading Rscript options) are forwarded to quarto's
-/// knitr Rscript via `QUARTO_KNITR_RSCRIPT_ARGS`, which quarto splits on commas
-/// with no escaping; `cmd_run` rejects comma-containing args before phase 1 (see
-/// `reject_comma_rscript_args`), so by here they are known comma-free.
-/// `script_args` (trailing) become `quarto render <doc> <script_args>`.
-///
-/// When `isolated` is set, the user library is dropped with `R_LIBS_USER=NULL`,
-/// matching `run_script`.
-///
-/// The quarto executable is `quarto_command()` (`IR_QUARTO` or bare `quarto`).
-/// As with `run_script`, on Unix we `exec` into quarto; on Windows it runs as a
-/// child and we return its exit code.
-fn run_quarto(
-    rscript: &OsStr,
-    library: Option<&Path>,
-    doc: &Path,
-    rscript_args: &[String],
-    script_args: &[String],
-    isolated: bool,
-) -> Result<i32, Box<dyn Error>> {
-    let mut cmd = Command::new(quarto_command());
-    cmd.arg("render").arg(doc).args(script_args);
-
-    if let Some(value) = quarto_r_value(rscript) {
-        cmd.env("QUARTO_R", value);
-    }
-    if let Some(lib) = library {
-        cmd.env("R_LIBS", lib);
-    }
-    if !rscript_args.is_empty() {
-        cmd.env("QUARTO_KNITR_RSCRIPT_ARGS", rscript_args.join(","));
-    }
-    if isolated {
-        cmd.env("R_LIBS_USER", "NULL");
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // Replace ir with quarto; returns only if the exec fails.
-        Err(quarto_spawn_error(cmd.exec()).into())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = cmd.status().map_err(quarto_spawn_error)?;
-        Ok(status.code().unwrap_or(1))
-    }
-}
-
 fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     let file = File::open(script)?;
     let mut reader = BufReader::new(file);
@@ -1138,68 +1084,6 @@ fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>
     }
 
     Ok(frontmatter)
-}
-
-/// Read the leading YAML metadata block from a Quarto document.
-fn read_yaml_block_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
-    let content = fs::read_to_string(script)?;
-    Ok(extract_yaml_block(&content))
-}
-
-/// Extract the leading YAML metadata block delimited by `---` fences, returning
-/// the inner text. `str::lines` strips a trailing `\r`, so CRLF input is handled.
-/// Returns an empty string when there is no opening fence on the first line or
-/// no closing `---`/`...` line — both mean "no frontmatter", never an error.
-fn extract_yaml_block(content: &str) -> String {
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let mut lines = content.lines();
-
-    match lines.next() {
-        Some(first) if first.trim_end() == "---" => {}
-        _ => return String::new(),
-    }
-
-    let mut block = String::new();
-    for line in lines {
-        let trimmed = line.trim_end();
-        if trimmed == "---" || trimmed == "..." {
-            return block;
-        }
-        block.push_str(line);
-        block.push('\n');
-    }
-
-    // No closing fence: treat as no frontmatter.
-    String::new()
-}
-
-/// True for Quarto documents dispatched to `quarto render`. Every other name —
-/// `.R`, `.r`, and extensionless scripts run via shebang — keeps the R-script
-/// flow, preserving backward compatibility.
-fn is_quarto(script: &Path) -> bool {
-    matches!(
-        script
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("qmd") | Some("rmd")
-    )
-}
-
-/// quarto's QUARTO_KNITR_RSCRIPT_ARGS is comma-separated with no escaping, so an
-/// Rscript option containing a comma cannot be forwarded faithfully. Reject it up
-/// front, before resolution, rather than mis-splitting silently.
-fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), Box<dyn Error>> {
-    if let Some(arg) = rscript_args.iter().find(|arg| arg.contains(',')) {
-        return Err(format!(
-            "Rscript option `{arg}` contains a comma, which cannot be forwarded to \
-             quarto's knitr engine: QUARTO_KNITR_RSCRIPT_ARGS is comma-separated \
-             with no escaping."
-        )
-        .into());
-    }
-    Ok(())
 }
 
 /// The Rscript executable to use: `$IR_RSCRIPT` if set, otherwise `Rscript`
@@ -1272,145 +1156,5 @@ fn spawn_error(rscript: &OsStr, err: io::Error) -> String {
         )
     } else {
         format!("failed to launch `{}`: {err}", rscript.to_string_lossy())
-    }
-}
-
-/// The value to pass as `QUARTO_R`, or `None` to leave quarto's own R lookup in
-/// charge. `QUARTO_R` is pinned only when the selected Rscript is path-like — an
-/// existing path, or a value containing a path separator. A bare `Rscript`
-/// resolves identically on PATH for both `ir` and quarto, so leaving `QUARTO_R`
-/// unset there avoids quarto's "Specified QUARTO_R … does not exist" warning
-/// while preserving the same-R invariant.
-fn quarto_r_value(rscript: &OsStr) -> Option<std::ffi::OsString> {
-    let looks_like_path = rscript.to_string_lossy().contains(['/', '\\']);
-    if looks_like_path || Path::new(rscript).exists() {
-        Some(rscript.to_os_string())
-    } else {
-        None
-    }
-}
-
-/// The quarto executable to launch: `IR_QUARTO` if set, else bare `quarto`
-/// (resolved on PATH). Mirrors `rscript_command`. On Windows a bare `quarto`
-/// resolves only to `quarto.exe` — Rust's PATH search does not consult PATHEXT —
-/// so a dev build shipped as `quarto.cmd` must be selected via `IR_QUARTO`
-/// pointing at its full path.
-fn quarto_command() -> std::ffi::OsString {
-    env::var_os("IR_QUARTO").unwrap_or_else(|| "quarto".into())
-}
-
-/// Turn a failure to launch quarto into an actionable message.
-fn quarto_spawn_error(err: io::Error) -> String {
-    if err.kind() == io::ErrorKind::NotFound {
-        "could not find `quarto`. Install Quarto (https://quarto.org/docs/get-started/) \
-         or set IR_QUARTO to a quarto executable."
-            .to_string()
-    } else {
-        format!("failed to launch `quarto`: {err}")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_frontmatter_reads_top_level_for_scripts() {
-        let spec = parse_frontmatter(
-            "dependencies:\n  - dplyr>=1.0\n  - tidyr\nr-version: \">= 4.0\"\n",
-            false,
-        )
-        .unwrap();
-        assert_eq!(spec.dependencies, vec!["dplyr>=1.0", "tidyr"]);
-        assert_eq!(spec.r_requirement.as_deref(), Some(">= 4.0"));
-    }
-
-    #[test]
-    fn parse_frontmatter_descends_into_ir_for_quarto() {
-        let yaml =
-            "title: Demo\nir:\n  dependencies:\n    - gt@1.0\n  exclude-newer: \"2024-01-15\"\n";
-        let spec = parse_frontmatter(yaml, true).unwrap();
-        assert_eq!(spec.dependencies, vec!["gt@1.0"]);
-        assert_eq!(spec.exclude_newer.as_deref(), Some("2024-01-15"));
-    }
-
-    #[test]
-    fn parse_frontmatter_quarto_without_ir_key_is_empty() {
-        let spec = parse_frontmatter("title: Demo\nformat: html\n", true).unwrap();
-        assert!(spec.dependencies.is_empty());
-        assert!(spec.exclude_newer.is_none());
-        assert!(spec.r_requirement.is_none());
-    }
-
-    #[test]
-    fn parse_frontmatter_quarto_null_ir_key_is_empty() {
-        let spec = parse_frontmatter("ir:\n", true).unwrap();
-        assert!(spec.dependencies.is_empty());
-    }
-
-    #[test]
-    fn parse_frontmatter_quarto_non_mapping_ir_errors() {
-        let err = parse_frontmatter("ir: nope\n", true)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("`ir`"), "{err}");
-    }
-
-    #[test]
-    fn extract_yaml_block_reads_fenced_block() {
-        let doc = "---\ntitle: Demo\nir:\n  dependencies:\n    - gt\n---\n\nbody\n";
-        assert_eq!(
-            extract_yaml_block(doc),
-            "title: Demo\nir:\n  dependencies:\n    - gt\n"
-        );
-    }
-
-    #[test]
-    fn extract_yaml_block_handles_crlf_and_dot_terminator() {
-        let doc = "---\r\ntitle: Demo\r\n...\r\nbody\r\n";
-        assert_eq!(extract_yaml_block(doc), "title: Demo\n");
-    }
-
-    #[test]
-    fn extract_yaml_block_strips_optional_bom() {
-        let doc = "\u{feff}---\ntitle: Demo\n---\n";
-        assert_eq!(extract_yaml_block(doc), "title: Demo\n");
-    }
-
-    #[test]
-    fn extract_yaml_block_without_opening_fence_is_empty() {
-        assert_eq!(extract_yaml_block("title: Demo\nbody\n"), "");
-        assert_eq!(extract_yaml_block(""), "");
-    }
-
-    #[test]
-    fn extract_yaml_block_without_closing_fence_is_empty() {
-        assert_eq!(extract_yaml_block("---\ntitle: Demo\nbody\n"), "");
-    }
-
-    #[test]
-    fn quarto_r_value_set_for_pathlike() {
-        assert_eq!(
-            quarto_r_value(OsStr::new("/usr/local/bin/Rscript")),
-            Some("/usr/local/bin/Rscript".into())
-        );
-        assert_eq!(
-            quarto_r_value(OsStr::new("some/dir/Rscript")),
-            Some("some/dir/Rscript".into())
-        );
-    }
-
-    #[test]
-    fn quarto_r_value_unset_for_bare_command() {
-        // A bare command name with no separator and no such file on disk: leave
-        // quarto's own PATH lookup in charge.
-        assert_eq!(quarto_r_value(OsStr::new("Rscript")), None);
-    }
-
-    #[test]
-    fn quarto_spawn_error_explains_missing_quarto() {
-        let err = quarto_spawn_error(io::Error::from(io::ErrorKind::NotFound));
-        assert!(err.contains("could not find `quarto`"), "{err}");
-        assert!(err.contains("IR_QUARTO"), "{err}");
     }
 }
