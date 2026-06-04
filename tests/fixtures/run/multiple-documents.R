@@ -7,6 +7,9 @@
 
 library(glue)
 
+lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
+stopifnot(file.exists(file.path(lib, "glue", "DESCRIPTION")))
+
 cat("ir.fixture=multi-doc\n")
 cat(
   "multi.packages=glue:",

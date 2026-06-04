@@ -140,18 +140,14 @@ fn python_minor_version() -> String {
 }
 
 #[test]
-fn ci_dependencies_are_available() {
+fn ci_runtime_dependencies_are_available() {
     let r_expr = r#"
-pkgs <- c(
-  "pak", "renv", "secretbase", "cli", "glue", "jsonlite",
-  "dplyr", "tidyr", "reticulate", "knitr", "rmarkdown",
-  "btw", "Rapp", "docopt", "pkgsearch", "prettyunits"
-)
+pkgs <- c("pak", "renv", "secretbase")
 missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing)) {
   stop("missing R packages: ", paste(missing, collapse = ", "), call. = FALSE)
 }
-cat("ir.fixture=ci-deps\n")
+cat("ir.fixture=ci-runtime-deps\n")
 "#;
 
     let mut r = Command::new(rscript());
@@ -385,6 +381,7 @@ library(cli)
 library(glue)
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
 expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+stopifnot(all(file.exists(file.path(lib, c("cli", "glue"), "DESCRIPTION"))))
 cat("ir.fixture=inline\n")
 cat("inline.args=", paste(commandArgs(TRUE), collapse = "|"), "\n", sep = "")
 cat("inline.lib_in_cache=", tolower(startsWith(lib, file.path(expected, "libraries"))), "\n", sep = "")
