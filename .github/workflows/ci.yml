@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # DEBUG (#54): windows-only while diagnosing the 0xC0000005 segfault.
+        # Restore [ubuntu-latest, macos-latest, windows-latest] before merge.
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,7 +105,26 @@ jobs:
           echo "IR_TEST_R_VERSION=4.4.3" >> "$GITHUB_ENV"
 
       - run: cargo build --verbose
-      - run: cargo test --verbose
+
+      # DEBUG (#54): isolate which package's namespace load segfaults
+      # (0xC0000005) on the runner. Each package loads in its own Rscript so a
+      # crash names exactly one package instead of killing the whole probe.
+      - name: Diagnose segfaulting package (system library)
+        shell: bash
+        run: |
+          echo "=== R library paths ==="
+          Rscript -e 'print(.libPaths())'
+          for pkg in pak renv secretbase cli glue jsonlite dplyr tidyr reticulate knitr rmarkdown btw Rapp docopt pkgsearch prettyunits; do
+            echo "=== $pkg ==="
+            if Rscript -e "suppressMessages(requireNamespace('$pkg', quietly = TRUE)); cat('loaded', '$pkg', as.character(packageVersion('$pkg')), '\n')"; then
+              echo "ok $pkg"
+            else
+              echo "FAILED $pkg (exit $?)"
+            fi
+          done
+
+      # DEBUG (#54): run only the crashing tests for a fast loop.
+      - run: cargo test --verbose -- ci_dependencies_are_available run_inline_expression_resolves_with_dependencies
 
   lint:
     name: rustfmt + clippy
