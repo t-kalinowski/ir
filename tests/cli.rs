@@ -543,6 +543,49 @@ fn run_quarto_selects_requested_r_version() {
 }
 
 #[test]
+fn run_script_frontmatter_selects_r_version() {
+    let _guard = e2e_lock();
+
+    // The fixture pins `#| r-version` to this version, so the test only runs
+    // when CI has provisioned that exact R through rig (signalled by
+    // IR_TEST_R_VERSION). Unlike the flag, the frontmatter value can't come from
+    // the environment because it lives in the static fixture.
+    const FIXTURE_R_VERSION: &str = "4.4.3";
+    if std::env::var("IR_TEST_R_VERSION").ok().as_deref() != Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP run_script_frontmatter_selects_r_version: set IR_TEST_R_VERSION={FIXTURE_R_VERSION} (rig plus that R) to match the fixture's `#| r-version`"
+        );
+        return;
+    }
+
+    // Selecting the version the default path already uses would prove nothing.
+    if default_r_version().as_deref() == Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP run_script_frontmatter_selects_r_version: the fixture's R ({FIXTURE_R_VERSION}) matches the default R; nothing to select"
+        );
+        return;
+    }
+
+    let cache_dir = unique_dir("ir-e2e-rversion-fm-cache");
+    let script = fixture("run/r-version-frontmatter.R");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&cache_dir);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=r-version-frontmatter");
+    assert_stdout_contains(&out, &format!("version.r_version={FIXTURE_R_VERSION}"));
+    assert_stdout_contains(&out, "version.lib_in_cache=true");
+}
+
+#[test]
 fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-e2e-reticulate-cache");
