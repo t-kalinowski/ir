@@ -607,8 +607,6 @@ fn run_script_frontmatter_selects_r_version() {
 fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-e2e-reticulate-cache");
-    let reticulate_cache = unique_dir("ir-e2e-reticulate-r-cache");
-    let reticulate_data = unique_dir("ir-e2e-reticulate-r-data");
     let script = fixture("run/reticulate.R");
     let python_version = python_minor_version();
 
@@ -616,18 +614,13 @@ fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
         .env("IR_CACHE_DIR", &cache_dir)
         .env("IR_EXPECT_CACHE_DIR", &cache_dir)
         .env("IR_TEST_PYTHON_VERSION", &python_version)
-        .env("R_USER_CACHE_DIR", &reticulate_cache)
-        .env("R_USER_DATA_DIR", &reticulate_data)
         .env("RETICULATE_PYTHON", "managed")
-        .env("UV_PYTHON_PREFERENCE", "only-system")
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
 
     let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&reticulate_cache);
-    let _ = fs::remove_dir_all(&reticulate_data);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=reticulate");
