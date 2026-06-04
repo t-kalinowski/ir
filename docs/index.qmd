@@ -28,6 +28,7 @@ library(tidyr)
 - Evaluate inline expressions with `ir run -e` and add command-line dependencies with `--with`.
 - Render Quarto documents through `ir run report.qmd` using the same dependency metadata model.
 - Run package-shipped executables from an installed package's `exec/` directory with `ir tool run`.
+- Install persistent launchers for package executables with `ir tool install`.
 - Inspect and clear the cache with `ir cache dir` and `ir cache clean`.
 
 ## Common commands
@@ -37,5 +38,6 @@ $ ir run script.R
 $ ir run --with cli -e 'cli::cli_alert_success("hi")'
 $ ir run --r-version 4.5 report.qmd --to html
 $ ir tool run --from btw btw --help
+$ ir tool install btw
 $ ir cache dir
 ```

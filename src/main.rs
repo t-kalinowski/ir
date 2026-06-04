@@ -37,7 +37,8 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
-use saphyr::{LoadableYamlNode, Yaml};
+use saphyr::{Yaml, YamlLoader};
+use saphyr_parser::Parser;
 
 mod quarto;
 mod rig;
@@ -139,6 +140,7 @@ fn tool_command() -> ClapCommand {
         .about("Run package executables")
         .arg_required_else_help(true)
         .subcommand(tool_run_command())
+        .subcommand(tool_install_command())
 }
 
 fn tool_run_command() -> ClapCommand {
@@ -177,6 +179,45 @@ fn tool_run_command() -> ClapCommand {
         ))
 }
 
+fn tool_install_command() -> ClapCommand {
+    ClapCommand::new("install")
+        .about("Install package executable launchers")
+        .arg(
+            Arg::new("with")
+                .long("with")
+                .value_name("PKG")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help("Add a dependency for installed launchers; may be repeated"),
+        )
+        .arg(
+            Arg::new("r-version")
+                .long("r-version")
+                .value_name("SPEC")
+                .num_args(1)
+                .help("Select the R version for installed launchers with rig"),
+        )
+        .arg(
+            Arg::new("bin-dir")
+                .long("bin-dir")
+                .value_name("DIR")
+                .num_args(1)
+                .help("Directory where launchers are written"),
+        )
+        .arg(
+            Arg::new("force")
+                .long("force")
+                .action(ArgAction::SetTrue)
+                .help("Overwrite an existing launcher path"),
+        )
+        .arg(
+            Arg::new("package-ref")
+                .value_name("PKG_REF")
+                .required(true)
+                .help("Package ref that resolves to the package exposing exec/ launchers"),
+        )
+}
+
 fn cache_command() -> ClapCommand {
     ClapCommand::new("cache")
         .about("Manage ir's cache")
@@ -203,11 +244,91 @@ fn raw_args_arg(help: &'static str) -> Arg {
         .help(help)
 }
 
-/// Where the user's program comes from: a script file, or one or more inline
-/// `-e` expressions evaluated in its place (mirroring `Rscript -e`).
+/// Where the user's program comes from.
 enum RunSource {
-    Script(String),
+    Script(PathBuf),
+    Quarto(PathBuf),
     Expressions(Vec<String>),
+    Stdin,
+}
+
+enum RscriptSource<'a> {
+    Script(&'a Path),
+    Expressions(&'a [String]),
+    Stdin,
+}
+
+impl RunSource {
+    fn from_script_arg(script: String) -> Result<Self, Box<dyn Error>> {
+        if script == "-" {
+            return Ok(Self::Stdin);
+        }
+
+        let path =
+            fs::canonicalize(&script).map_err(|e| format!("cannot read script `{script}`: {e}"))?;
+        if quarto::is_quarto(&path) {
+            Ok(Self::Quarto(path))
+        } else {
+            Ok(Self::Script(path))
+        }
+    }
+
+    fn script_spec(&self) -> Result<ScriptSpec, Box<dyn Error>> {
+        match self {
+            Self::Script(script) => read_script_spec(script, false),
+            Self::Quarto(doc) => read_script_spec(doc, true),
+            Self::Expressions(_) | Self::Stdin => Ok(ScriptSpec::default()),
+        }
+    }
+
+    fn reject_unsupported_rscript_args(
+        &self,
+        rscript_args: &[String],
+    ) -> Result<(), Box<dyn Error>> {
+        match self {
+            Self::Quarto(_) => quarto::reject_comma_rscript_args(rscript_args),
+            Self::Script(_) | Self::Expressions(_) | Self::Stdin => Ok(()),
+        }
+    }
+
+    fn run_user_code(
+        &self,
+        rscript: &OsStr,
+        library: Option<&Path>,
+        rscript_args: &[String],
+        script_args: &[String],
+        isolated: bool,
+    ) -> Result<i32, Box<dyn Error>> {
+        match self {
+            Self::Quarto(doc) => {
+                quarto::run(rscript, library, doc, rscript_args, script_args, isolated)
+            }
+            Self::Script(script) => run_script(
+                rscript,
+                library,
+                RscriptSource::Script(script),
+                rscript_args,
+                script_args,
+                isolated,
+            ),
+            Self::Expressions(expressions) => run_script(
+                rscript,
+                library,
+                RscriptSource::Expressions(expressions),
+                rscript_args,
+                script_args,
+                isolated,
+            ),
+            Self::Stdin => run_script(
+                rscript,
+                library,
+                RscriptSource::Stdin,
+                rscript_args,
+                script_args,
+                isolated,
+            ),
+        }
+    }
 }
 
 struct PackageExecTarget {
@@ -231,6 +352,14 @@ struct ToolRunArgs {
     r_requirement: Option<String>,
     target: PackageExecTarget,
     tool_args: Vec<String>,
+}
+
+struct ToolInstallArgs {
+    package_ref: String,
+    with_deps: Vec<String>,
+    r_requirement: Option<String>,
+    bin_dir: PathBuf,
+    force: bool,
 }
 
 /// Split the leading region of `ir run`'s arguments into Rscript options,
@@ -277,6 +406,9 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
             r_requirement = Some(value.to_string());
         } else if arg == "--isolated" {
             isolated = true;
+        } else if arg == "-" {
+            positional = Some(arg);
+            break;
         } else if arg.starts_with('-') {
             rscript_args.push(arg);
         } else {
@@ -290,7 +422,7 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     let (source, script_args) = if expressions.is_empty() {
         let script = positional
             .ok_or("`ir run` requires a script path or -e expression (try `ir run script.R`)")?;
-        (RunSource::Script(script), script_args)
+        (RunSource::from_script_arg(script)?, script_args)
     } else {
         // With `-e`, there is no script file; the first non-option and anything
         // after it are program args (commandArgs), matching Rscript.
@@ -422,6 +554,68 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
     })
 }
 
+fn parse_tool_install_args(args: Vec<String>) -> Result<ToolInstallArgs, Box<dyn Error>> {
+    let mut with_deps = Vec::new();
+    let mut r_requirement = None;
+    let mut bin_dir = None;
+    let mut force = false;
+    let mut iter = args.into_iter();
+    let mut positional = None;
+
+    while let Some(arg) = iter.next() {
+        if arg == "--with" {
+            let value = iter
+                .next()
+                .ok_or("`--with` requires a package (try `ir tool install --with cli btw`)")?;
+            push_with_deps(&mut with_deps, &value);
+        } else if let Some(value) = arg.strip_prefix("--with=") {
+            push_with_deps(&mut with_deps, value);
+        } else if arg == "--r-version" {
+            let value = iter.next().ok_or(
+                "`--r-version` requires a version spec (try `ir tool install --r-version 4.5 btw`)",
+            )?;
+            r_requirement = Some(value);
+        } else if let Some(value) = arg.strip_prefix("--r-version=") {
+            r_requirement = Some(value.to_string());
+        } else if arg == "--bin-dir" {
+            let value = iter
+                .next()
+                .ok_or("`--bin-dir` requires a directory (try `ir tool install --bin-dir ~/.local/bin btw`)")?;
+            bin_dir = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--bin-dir=") {
+            if value.is_empty() {
+                return Err("`--bin-dir` requires a directory".into());
+            }
+            bin_dir = Some(PathBuf::from(value));
+        } else if arg == "--force" {
+            force = true;
+        } else if arg == "-e" {
+            return Err("`-e` is not supported by `ir tool install`".into());
+        } else if arg.starts_with('-') {
+            return Err(format!("unexpected option `{arg}` for `ir tool install`").into());
+        } else {
+            positional = Some(arg);
+            break;
+        }
+    }
+
+    let package_arg =
+        positional.ok_or("`ir tool install` requires a package ref (try `ir tool install btw`)")?;
+    if let Some(extra) = iter.next() {
+        return Err(
+            format!("unexpected argument `{extra}` after package ref `{package_arg}`").into(),
+        );
+    }
+
+    Ok(ToolInstallArgs {
+        package_ref: package_arg,
+        with_deps,
+        r_requirement,
+        bin_dir: bin_dir.unwrap_or(tool_install_bin_dir()?),
+        force,
+    })
+}
+
 /// Append the dependency specs in a `--with` value, which may be a single spec
 /// or a comma-separated list, to `with_deps`. Blank entries are ignored.
 fn push_with_deps(with_deps: &mut Vec<String>, value: &str) {
@@ -438,6 +632,11 @@ fn cmd_tool(matches: &ArgMatches, argv: &[String]) -> Result<(), Box<dyn Error>>
         Some(("run", _)) => {
             let run = parse_tool_run_args(argv[3..].to_vec())?;
             cmd_tool_run(&run)
+        }
+        Some(("install", _)) => {
+            let install_args = argv[3..].to_vec();
+            let install = parse_tool_install_args(install_args)?;
+            cmd_tool_install(&install)
         }
         _ => unreachable!("clap requires a tool subcommand"),
     }
@@ -484,22 +683,7 @@ fn cmd_run(
     script_args: &[String],
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // A script file declares its dependencies, `exclude-newer`, and `r-version` in
-    // YAML frontmatter and is canonicalised so the run is independent of the
-    // working directory. Quarto documents (.qmd/.Rmd) declare them under an
-    // `ir:` key in that frontmatter. An inline `-e` expression has no
-    // frontmatter and is never a Quarto document; its deps come solely from
-    // `--with`.
-    let (script_path, mut spec, quarto) = match source {
-        RunSource::Script(script) => {
-            let path = fs::canonicalize(script)
-                .map_err(|e| format!("cannot read script `{script}`: {e}"))?;
-            let quarto = quarto::is_quarto(&path);
-            let spec = read_script_spec(&path, quarto)?;
-            (Some(path), spec, quarto)
-        }
-        RunSource::Expressions(_) => (None, ScriptSpec::default(), false),
-    };
+    let mut spec = source.script_spec()?;
     spec.dependencies.extend(with_deps.iter().cloned());
     if let Some(req) = r_requirement {
         spec.r_requirement = Some(req.to_string());
@@ -510,9 +694,7 @@ fn cmd_run(
     // never be launched fails fast instead of after phase-1 resolution. quarto
     // forwards them via comma-separated QUARTO_KNITR_RSCRIPT_ARGS, which has no
     // escaping.
-    if quarto {
-        quarto::reject_comma_rscript_args(rscript_args)?;
-    }
+    source.reject_unsupported_rscript_args(rscript_args)?;
 
     // Phase 1: private R session resolves deps and materialises the library.
     // Rust parses the frontmatter and sends the dependency specs on stdin.
@@ -520,33 +702,13 @@ fn cmd_run(
 
     // Phase 2: render the document, or run the user's program, in an isolated
     // R session.
-    let code = if quarto {
-        let doc = script_path
-            .as_deref()
-            .expect("is_quarto is only true for a RunSource::Script path");
-        quarto::run(
-            &rscript,
-            library.as_deref(),
-            doc,
-            rscript_args,
-            script_args,
-            isolated,
-        )?
-    } else {
-        let expressions: &[String] = match source {
-            RunSource::Expressions(exprs) => exprs,
-            RunSource::Script(_) => &[],
-        };
-        run_script(
-            &rscript,
-            library.as_deref(),
-            script_path.as_deref(),
-            expressions,
-            rscript_args,
-            script_args,
-            isolated,
-        )?
-    };
+    let code = source.run_user_code(
+        &rscript,
+        library.as_deref(),
+        rscript_args,
+        script_args,
+        isolated,
+    )?;
     std::process::exit(code);
 }
 
@@ -579,13 +741,108 @@ fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     std::process::exit(code);
 }
 
+fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
+    let mut spec = ScriptSpec {
+        dependencies: vec![install.package_ref.clone()],
+        ..ScriptSpec::default()
+    };
+    spec.dependencies.extend(install.with_deps.iter().cloned());
+    if let Some(req) = &install.r_requirement {
+        spec.r_requirement = Some(req.clone());
+    }
+
+    let rscript = rscript_for_spec(&spec)?;
+    let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
+    let executables = discover_package_executables(&library, &package_name)?;
+    if executables.is_empty() {
+        return Err(format!(
+            "package `{}` does not expose Rscript or Rapp executables in `{}`",
+            package_name,
+            library.join(&package_name).join("exec").display()
+        )
+        .into());
+    }
+
+    fs::create_dir_all(&install.bin_dir).map_err(|e| {
+        format!(
+            "failed to create launcher directory `{}`: {e}",
+            install.bin_dir.display()
+        )
+    })?;
+
+    let path_prefix = resolved_runtime_path_prefix(&library, &rscript)?;
+    let reinstall_command = tool_install_recovery_command(install);
+    for executable in &executables {
+        let target = launcher_target_path(&install.bin_dir, &executable.name);
+        if target.exists() && !install.force {
+            return Err(format!(
+                "launcher `{}` already exists; pass --force to overwrite it",
+                target.display()
+            )
+            .into());
+        }
+    }
+
+    let mut installed = Vec::new();
+    for executable in executables {
+        let target = launcher_target_path(&install.bin_dir, &executable.name);
+        let contents = installed_launcher_contents(
+            &rscript,
+            &library,
+            &executable,
+            &path_prefix,
+            &reinstall_command,
+        )?;
+        fs::write(&target, contents)
+            .map_err(|e| format!("failed to write launcher `{}`: {e}", target.display()))?;
+        make_executable(&target)?;
+        installed.push(executable.name);
+    }
+
+    println!(
+        "Installed {} executable{}: {}",
+        installed.len(),
+        if installed.len() == 1 { "" } else { "s" },
+        installed.join(", ")
+    );
+    Ok(())
+}
+
 /// Phase 1 — run the embedded driver in a private R session and return the
 /// path to the materialised library. The dependency specs in `spec` (the
 /// script's frontmatter plus any `--with` packages) are streamed on stdin.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    Ok(resolve_library_inner(rscript, spec, false)?.library)
+}
+
+fn resolve_library_and_primary_package(
+    rscript: &OsStr,
+    spec: &ScriptSpec,
+) -> Result<(PathBuf, String), Box<dyn Error>> {
+    let resolved = resolve_library_inner(rscript, spec, true)?;
+    let library = resolved
+        .library
+        .ok_or("dependency resolver did not return a library path")?;
+    let package = resolved
+        .primary_package
+        .ok_or("dependency resolver did not return a package name")?;
+    Ok((library, package))
+}
+
+struct ResolvedLibrary {
+    library: Option<PathBuf>,
+    primary_package: Option<String>,
+}
+
+fn resolve_library_inner(
+    rscript: &OsStr,
+    spec: &ScriptSpec,
+    primary_package: bool,
+) -> Result<ResolvedLibrary, Box<dyn Error>> {
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let result_file = unique_path(&tmp, "ir-libpath", "txt");
+    let package_result_file = primary_package.then(|| unique_path(&tmp, "ir-package", "txt"));
     fs::write(&driver, RESOLVE_DRIVER)?;
 
     let mut cmd = Command::new(rscript);
@@ -597,6 +854,9 @@ fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true");
+    if let Some(package_result_file) = &package_result_file {
+        cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
+    }
     if let Some(exclude_newer) = &spec.exclude_newer {
         cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
     }
@@ -615,16 +875,35 @@ fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>
     let _ = fs::remove_file(&driver);
     let result = fs::read_to_string(&result_file).unwrap_or_default();
     let _ = fs::remove_file(&result_file);
+    let package_result = package_result_file
+        .as_ref()
+        .map(|path| {
+            let result = fs::read_to_string(path).unwrap_or_default();
+            let _ = fs::remove_file(path);
+            result
+        })
+        .unwrap_or_default();
 
     if !status.success() {
         return Err("dependency resolution failed".into());
     }
 
     let path = result.trim();
-    Ok(if path.is_empty() {
+    let library = if path.is_empty() {
         None
     } else {
         Some(PathBuf::from(path))
+    };
+    let package = package_result.trim();
+    let primary_package = if package.is_empty() {
+        None
+    } else {
+        Some(package.to_string())
+    };
+
+    Ok(ResolvedLibrary {
+        library,
+        primary_package,
     })
 }
 
@@ -687,7 +966,86 @@ fn find_package_executable_in_dir(exec_dir: &Path, executable: &str) -> Option<P
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Box<dyn Error>> {
+struct PackageExecutable {
+    name: String,
+    path: PathBuf,
+    launcher: PackageLauncher,
+}
+
+fn discover_package_executables(
+    library: &Path,
+    package: &str,
+) -> Result<Vec<PackageExecutable>, Box<dyn Error>> {
+    let exec_dir = library.join(package).join("exec");
+    if !exec_dir.is_dir() {
+        return Err(format!(
+            "package `{package}` does not have an exec directory in `{}`",
+            library.display()
+        )
+        .into());
+    }
+
+    let mut executables = Vec::new();
+    for entry in fs::read_dir(&exec_dir)
+        .map_err(|e| format!("cannot read exec directory `{}`: {e}", exec_dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(launcher) = package_executable_launcher_kind(&path)? else {
+            continue;
+        };
+        let name = package_executable_launcher_name(&path)?;
+        if executables
+            .iter()
+            .any(|executable: &PackageExecutable| executable.name == name)
+        {
+            return Err(format!(
+                "multiple package executables map to launcher `{name}` in `{}`",
+                exec_dir.display()
+            )
+            .into());
+        }
+        executables.push(PackageExecutable {
+            name,
+            path,
+            launcher,
+        });
+    }
+
+    executables.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(executables)
+}
+
+fn package_executable_launcher_name(path: &Path) -> Result<String, Box<dyn Error>> {
+    let name = if path
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("R"))
+    {
+        path.file_stem()
+    } else {
+        path.file_name()
+    }
+    .and_then(OsStr::to_str)
+    .ok_or_else(|| format!("package executable `{}` is not valid UTF-8", path.display()))?;
+
+    if !is_package_executable_name(name) {
+        return Err(format!(
+            "package executable `{}` maps to unsupported launcher name `{name}`",
+            path.display()
+        )
+        .into());
+    }
+
+    Ok(name.to_string())
+}
+
+fn resolved_runtime_path_prefix(
+    library: &Path,
+    rscript: &OsStr,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut entries = Vec::new();
 
     let rscript_path = Path::new(rscript);
@@ -707,6 +1065,11 @@ fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Bo
         }
     }
 
+    Ok(entries)
+}
+
+fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Box<dyn Error>> {
+    let mut entries = resolved_runtime_path_prefix(library, rscript)?;
     let current_path = env::var_os("PATH").unwrap_or_default();
     entries.extend(env::split_paths(&current_path));
     Ok(env::join_paths(entries)?)
@@ -750,12 +1113,25 @@ fn run_package_executable(
     }
 }
 
+#[derive(Clone, Copy)]
 enum PackageLauncher {
     Rscript,
     Rapp,
 }
 
 fn package_executable_launcher(executable: &Path) -> Result<PackageLauncher, Box<dyn Error>> {
+    package_executable_launcher_kind(executable)?.ok_or_else(|| {
+        format!(
+            "package executable `{}` must use a Rscript or Rapp shebang",
+            executable.display()
+        )
+        .into()
+    })
+}
+
+fn package_executable_launcher_kind(
+    executable: &Path,
+) -> Result<Option<PackageLauncher>, Box<dyn Error>> {
     let file = File::open(executable)
         .map_err(|e| format!("cannot read executable `{}`: {e}", executable.display()))?;
     let mut reader = BufReader::new(file);
@@ -763,23 +1139,15 @@ fn package_executable_launcher(executable: &Path) -> Result<PackageLauncher, Box
     reader.read_line(&mut shebang)?;
 
     if !shebang.starts_with("#!") {
-        return Err(format!(
-            "package executable `{}` must start with a Rscript or Rapp shebang",
-            executable.display()
-        )
-        .into());
+        return Ok(None);
     }
 
     if shebang_mentions(&shebang, "Rapp") {
-        Ok(PackageLauncher::Rapp)
+        Ok(Some(PackageLauncher::Rapp))
     } else if shebang_mentions(&shebang, "Rscript") {
-        Ok(PackageLauncher::Rscript)
+        Ok(Some(PackageLauncher::Rscript))
     } else {
-        Err(format!(
-            "package executable `{}` must use a Rscript or Rapp shebang",
-            executable.display()
-        )
-        .into())
+        Ok(None)
     }
 }
 
@@ -790,54 +1158,75 @@ fn shebang_mentions(shebang: &str, name: &str) -> bool {
 }
 
 fn read_script_spec(script: &Path, quarto: bool) -> Result<ScriptSpec, Box<dyn Error>> {
-    let frontmatter = if quarto {
-        quarto::read_yaml_block_to_string(script)?
+    if quarto {
+        parse_quarto_frontmatter(&quarto::read_to_string(script)?)
     } else {
-        read_op_frontmatter_to_string(script)?
-    };
-    parse_frontmatter(&frontmatter, quarto)
+        parse_r_script_frontmatter(&read_r_script_frontmatter_to_string(script)?)
+    }
 }
 
-fn parse_frontmatter(frontmatter: &str, nested: bool) -> Result<ScriptSpec, Box<dyn Error>> {
+fn parse_r_script_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn Error>> {
     if frontmatter.trim().is_empty() {
         return Ok(ScriptSpec::default());
     }
 
-    let docs = Yaml::load_from_str(frontmatter)
-        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
-    if docs.len() != 1 {
-        return Err("script frontmatter must contain exactly one YAML document".into());
-    }
-    if docs[0].is_null() {
+    let Some(doc) = load_first_yaml_document(frontmatter)? else {
+        return Ok(ScriptSpec::default());
+    };
+
+    script_spec_from_yaml_mapping(&doc)
+}
+
+fn parse_quarto_frontmatter(document: &str) -> Result<ScriptSpec, Box<dyn Error>> {
+    if document.trim().is_empty() {
         return Ok(ScriptSpec::default());
     }
 
-    let doc = &docs[0];
+    let Some(doc) = load_first_yaml_document(document)? else {
+        return Ok(ScriptSpec::default());
+    };
+    if doc.is_null() {
+        return Ok(ScriptSpec::default());
+    }
     if !doc.is_mapping() {
         return Err("script frontmatter must be a YAML mapping".into());
     }
 
-    // For Quarto documents the dependency spec lives under the `ir:` key,
-    // alongside ordinary quarto metadata; for scripts it is the document itself.
-    let spec_node = if nested {
-        match doc.as_mapping_get("ir") {
-            None => return Ok(ScriptSpec::default()),
-            Some(node) if node.is_null() => return Ok(ScriptSpec::default()),
-            Some(node) => node,
-        }
-    } else {
-        doc
+    let Some(spec_node) = doc.as_mapping_get("ir") else {
+        return Ok(ScriptSpec::default());
     };
-
-    if nested && !spec_node.is_mapping() {
+    if spec_node.is_null() {
+        return Ok(ScriptSpec::default());
+    }
+    if !spec_node.is_mapping() {
         return Err("frontmatter `ir` must be a YAML mapping".into());
     }
 
+    script_spec_from_yaml_mapping(spec_node)
+}
+
+fn script_spec_from_yaml_mapping(doc: &Yaml<'_>) -> Result<ScriptSpec, Box<dyn Error>> {
+    if doc.is_null() {
+        return Ok(ScriptSpec::default());
+    }
+    if !doc.is_mapping() {
+        return Err("script frontmatter must be a YAML mapping".into());
+    }
+
     Ok(ScriptSpec {
-        dependencies: frontmatter_dependencies(spec_node)?,
-        exclude_newer: frontmatter_optional_string(spec_node, "exclude-newer")?,
-        r_requirement: frontmatter_optional_string(spec_node, "r-version")?,
+        dependencies: frontmatter_dependencies(doc)?,
+        exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
+        r_requirement: frontmatter_optional_string(doc, "r-version")?,
     })
+}
+
+fn load_first_yaml_document(source: &str) -> Result<Option<Yaml<'_>>, Box<dyn Error>> {
+    let mut parser = Parser::new_from_str(source);
+    let mut loader = YamlLoader::default();
+    parser
+        .load(&mut loader, false)
+        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
+    Ok(loader.into_documents().into_iter().next())
 }
 
 fn rscript_for_spec(spec: &ScriptSpec) -> Result<OsString, Box<dyn Error>> {
@@ -901,16 +1290,16 @@ fn frontmatter_optional_string(
 }
 
 /// Phase 2 — run the user's program in an ordinary R session pointed at
-/// `library`. The program is either a script file (`script`) or, when that is
-/// `None`, the inline `expressions` evaluated via `Rscript -e` in its place.
+/// `library`. The program is a script file, `-` stdin source, or one or more
+/// inline expressions evaluated via `Rscript -e`.
 ///
-/// It runs as an ordinary `Rscript [Rscript-options...] (script.R | -e expr...)` -
-/// its `.Renviron`, `.Rprofile` and site files are read unless the forwarded
-/// Rscript options disable them. The resolved library is injected via `R_LIBS`,
-/// which is *prepended* to `.libPaths()`: resolved dependencies take precedence,
-/// while the user's other libraries remain available. (`R_LIBS` is used rather
-/// than `R_LIBS_USER`, since a user `.Renviron` setting `R_LIBS_USER` would
-/// override the latter.)
+/// It runs as an ordinary `Rscript [Rscript-options...] (script.R | - | -e
+/// expr...)` - its `.Renviron`, `.Rprofile` and site files are read unless the
+/// forwarded Rscript options disable them. The resolved library is injected via
+/// `R_LIBS`, which is *prepended* to `.libPaths()`: resolved dependencies take
+/// precedence, while the user's other libraries remain available. (`R_LIBS` is
+/// used rather than `R_LIBS_USER`, since a user `.Renviron` setting
+/// `R_LIBS_USER` would override the latter.)
 ///
 /// When `isolated` is set, the user library is dropped too: `R_LIBS_USER=NULL`
 /// is R's documented way to disable it, so `.libPaths()` is the resolved library
@@ -924,22 +1313,24 @@ fn frontmatter_optional_string(
 fn run_script(
     rscript: &OsStr,
     library: Option<&Path>,
-    script: Option<&Path>,
-    expressions: &[String],
+    source: RscriptSource<'_>,
     rscript_args: &[String],
     script_args: &[String],
     isolated: bool,
 ) -> Result<i32, Box<dyn Error>> {
     let mut cmd = Command::new(rscript);
     cmd.args(rscript_args);
-    match script {
-        Some(script) => {
+    match source {
+        RscriptSource::Script(script) => {
             cmd.arg(script);
         }
-        None => {
+        RscriptSource::Expressions(expressions) => {
             for expr in expressions {
                 cmd.arg("-e").arg(expr);
             }
+        }
+        RscriptSource::Stdin => {
+            cmd.arg("-");
         }
     }
     cmd.args(script_args);
@@ -970,7 +1361,7 @@ fn run_script(
     }
 }
 
-fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
+fn read_r_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     let file = File::open(script)?;
     let mut reader = BufReader::new(file);
     let mut frontmatter = String::new();
@@ -1035,6 +1426,241 @@ fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
 
 fn nonempty_env(name: &str) -> Option<OsString> {
     env::var_os(name).filter(|value| !value.is_empty())
+}
+
+fn tool_install_bin_dir() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = nonempty_env("IR_TOOL_BIN_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("RAPP_BIN_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("XDG_BIN_HOME") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("XDG_DATA_HOME") {
+        let data_home = PathBuf::from(path);
+        return Ok(data_home
+            .parent()
+            .ok_or("XDG_DATA_HOME must have a parent directory")?
+            .join("bin"));
+    }
+
+    #[cfg(unix)]
+    {
+        let home = nonempty_env("HOME")
+            .ok_or("cannot determine launcher directory; set --bin-dir or IR_TOOL_BIN_DIR")?;
+        Ok(PathBuf::from(home).join(".local").join("bin"))
+    }
+
+    #[cfg(not(unix))]
+    {
+        if let Some(path) = nonempty_env("LOCALAPPDATA") {
+            return Ok(PathBuf::from(path)
+                .join("Programs")
+                .join("R")
+                .join("ir")
+                .join("bin"));
+        }
+        let home = nonempty_env("USERPROFILE")
+            .ok_or("cannot determine launcher directory; set --bin-dir or IR_TOOL_BIN_DIR")?;
+        Ok(PathBuf::from(home)
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("R")
+            .join("ir")
+            .join("bin"))
+    }
+}
+
+fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        bin_dir.join(name)
+    }
+
+    #[cfg(not(unix))]
+    {
+        bin_dir.join(format!("{name}.cmd"))
+    }
+}
+
+fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
+    let mut words = vec![
+        "ir".to_string(),
+        "tool".to_string(),
+        "install".to_string(),
+        "--force".to_string(),
+    ];
+    for dep in &install.with_deps {
+        words.push("--with".to_string());
+        words.push(command_word(dep));
+    }
+    if let Some(req) = &install.r_requirement {
+        words.push("--r-version".to_string());
+        words.push(command_word(req));
+    }
+    words.push(command_word(&install.package_ref));
+    words.join(" ")
+}
+
+fn command_word(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
+    {
+        value.to_string()
+    } else {
+        sh_quote_str(value)
+    }
+}
+
+#[cfg(unix)]
+fn installed_launcher_contents(
+    rscript: &OsStr,
+    library: &Path,
+    executable: &PackageExecutable,
+    path_prefix: &[PathBuf],
+    recovery_command: &str,
+) -> Result<String, Box<dyn Error>> {
+    let mut lines = vec![
+        "#!/bin/sh".to_string(),
+        "# Generated by `ir tool install`. Do not edit by hand.".to_string(),
+        format!("IR_LIBRARY={}", sh_quote_path(library)),
+        "if [ ! -d \"$IR_LIBRARY\" ]; then".to_string(),
+        "  printf '%s\\n' \"ir: missing ir cache library: $IR_LIBRARY\" >&2".to_string(),
+        format!(
+            "  printf '%s\\n' {} >&2",
+            sh_quote_str(&format!(
+                "ir: run `{recovery_command}` to recreate this launcher after `ir cache clean`."
+            ))
+        ),
+        "  exit 1".to_string(),
+        "fi".to_string(),
+        "export R_LIBS=\"$IR_LIBRARY\"".to_string(),
+        "export R_LIBS_USER=NULL".to_string(),
+        format!(
+            "export RAPP_LAUNCHER_NAME={}",
+            sh_quote_str(&executable.name)
+        ),
+    ];
+
+    if !path_prefix.is_empty() {
+        let prefix = path_prefix
+            .iter()
+            .map(|path| sh_quote_path(path))
+            .collect::<Vec<_>>()
+            .join(":");
+        lines.push(format!("export PATH={prefix}${{PATH:+:$PATH}}"));
+    }
+
+    let mut cmd = vec!["exec".to_string(), sh_quote_os(rscript)];
+    match executable.launcher {
+        PackageLauncher::Rscript => {
+            cmd.push(sh_quote_path(&executable.path));
+        }
+        PackageLauncher::Rapp => {
+            cmd.push("-e".to_string());
+            cmd.push(sh_quote_str("Rapp::run()"));
+            cmd.push(sh_quote_path(&executable.path));
+        }
+    }
+    cmd.push("\"$@\"".to_string());
+    lines.push(cmd.join(" "));
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+#[cfg(not(unix))]
+fn installed_launcher_contents(
+    rscript: &OsStr,
+    library: &Path,
+    executable: &PackageExecutable,
+    _path_prefix: &[PathBuf],
+    recovery_command: &str,
+) -> Result<String, Box<dyn Error>> {
+    let mut cmd = vec![cmd_quote_os(rscript)];
+    match executable.launcher {
+        PackageLauncher::Rscript => {
+            cmd.push(cmd_quote_path(&executable.path));
+        }
+        PackageLauncher::Rapp => {
+            cmd.push("-e".to_string());
+            cmd.push("Rapp::run()".to_string());
+            cmd.push(cmd_quote_path(&executable.path));
+        }
+    }
+    cmd.push("%*".to_string());
+
+    Ok(format!(
+        "@echo off\r\n\
+         :: Generated by `ir tool install`. Do not edit by hand.\r\n\
+         setlocal\r\n\
+         set \"IR_LIBRARY={}\"\r\n\
+         if not exist \"%IR_LIBRARY%\\NUL\" (\r\n\
+         echo ir: missing ir cache library: %IR_LIBRARY% 1>&2\r\n\
+         echo ir: run `{}` to recreate this launcher after `ir cache clean`. 1>&2\r\n\
+         exit /b 1\r\n\
+         )\r\n\
+         set \"R_LIBS=%IR_LIBRARY%\"\r\n\
+         set \"R_LIBS_USER=NULL\"\r\n\
+         set \"RAPP_LAUNCHER_NAME={}\"\r\n\
+         {}\r\n",
+        library.display(),
+        recovery_command,
+        executable.name,
+        cmd.join(" ")
+    ))
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|e| {
+        format!(
+            "failed to mark launcher `{}` executable: {e}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sh_quote_path(path: &Path) -> String {
+    sh_quote_str(&path.to_string_lossy())
+}
+
+#[cfg(unix)]
+fn sh_quote_os(value: &OsStr) -> String {
+    sh_quote_str(&value.to_string_lossy())
+}
+
+fn sh_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(not(unix))]
+fn cmd_quote_path(path: &Path) -> String {
+    cmd_quote_str(&path.to_string_lossy())
+}
+
+#[cfg(not(unix))]
+fn cmd_quote_os(value: &OsStr) -> String {
+    cmd_quote_str(&value.to_string_lossy())
+}
+
+#[cfg(not(unix))]
+fn cmd_quote_str(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn count_files(path: &Path) -> io::Result<u64> {

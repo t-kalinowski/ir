@@ -36,6 +36,13 @@ cat(system2("ir", c("tool", "--help"), stdout = TRUE), sep = "\n")
 cat(system2("ir", c("tool", "run", "--help"), stdout = TRUE), sep = "\n")
 ```
 
+## `ir tool install`
+
+```{r}
+#| comment: ""
+cat(system2("ir", c("tool", "install", "--help"), stdout = TRUE), sep = "\n")
+```
+
 ## `ir cache`
 
 ```{r}
