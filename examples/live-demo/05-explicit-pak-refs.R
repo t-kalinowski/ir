@@ -1,8 +1,7 @@
 #!/usr/bin/env -S ir run
 #| dependencies:
-#|   - dplyr
-#|   - tidyr
-#| exclude-newer: "2024-06-01"
+#|   - dplyr==1.1.4
+#|   - tidyr==1.3.1
 
 library(dplyr)
 library(tidyr)
@@ -24,15 +23,9 @@ summary <- orders |>
     tickets = sum(tickets),
     revenue = sum(revenue),
     .by = c(account, region)
-  ) |>
-  tidyr::pivot_wider(
-    names_from = region,
-    values_from = tickets,
-    values_fill = 0
   )
 
-cat("dialect=modern tidyverse\n")
-cat("exclude_newer=2024-06-01\n")
+cat("dialect=explicit pak refs\n")
 cat("dplyr=", as.character(packageVersion("dplyr")), "\n", sep = "")
 cat("tidyr=", as.character(packageVersion("tidyr")), "\n", sep = "")
 cat("library=", .libPaths()[[1]], "\n", sep = "")

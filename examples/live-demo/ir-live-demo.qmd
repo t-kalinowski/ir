@@ -26,6 +26,7 @@ examples/live-demo/
   02-modern-tidyverse.R
   03-legacy-tidyverse-report.qmd
   04-modern-tidyverse-report.qmd
+  05-explicit-pak-refs.R
 ```
 
 Each file declares its own dependency timeline.
@@ -34,8 +35,8 @@ Each file declares its own dependency timeline.
 
 ```r
 #| dependencies:
-#|   - dplyr==1.0.10
-#|   - tidyr==1.2.1
+#|   - dplyr
+#|   - tidyr
 #| exclude-newer: "2022-12-31"
 ```
 
@@ -68,8 +69,8 @@ library=...
 
 ```r
 #| dependencies:
-#|   - dplyr==1.1.4
-#|   - tidyr==1.3.1
+#|   - dplyr
+#|   - tidyr
 #| exclude-newer: "2024-06-01"
 ```
 
@@ -120,9 +121,28 @@ The `ir:` key in each document controls the render-time package timeline:
 ```yaml
 ir:
   dependencies:
-    - dplyr==1.1.4
-    - tidyr==1.3.1
+    - dplyr
+    - tidyr
   exclude-newer: "2024-06-01"
+```
+
+## After the first pass
+
+Most users only need a dated package universe.
+
+When a file needs an exact direct dependency, use the same pak ref syntax that
+scripts already accept:
+
+```r
+#| dependencies:
+#|   - dplyr==1.1.4
+#|   - tidyr==1.3.1
+```
+
+Run it separately:
+
+```console
+ir run examples/live-demo/05-explicit-pak-refs.R
 ```
 
 ## What changed for the user
@@ -152,3 +172,4 @@ Each file carries the dependency contract it needs.
 3. Render the legacy Quarto report.
 4. Render the modern Quarto report.
 5. Re-run one command to show the cache hit path.
+6. Show explicit pak refs as the advanced form.

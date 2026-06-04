@@ -1,14 +1,11 @@
 #!/usr/bin/env -S ir run
 #| dependencies:
-#|   - dplyr==1.0.10
-#|   - tidyr==1.2.1
+#|   - dplyr
+#|   - tidyr
 #| exclude-newer: "2022-12-31"
 
 library(dplyr)
 library(tidyr)
-
-stopifnot(packageVersion("dplyr") == package_version("1.0.10"))
-stopifnot(packageVersion("tidyr") == package_version("1.2.1"))
 
 orders <- dplyr::tibble(
   account_region = c("atlas|north", "atlas|south", "beacon|north", "beacon|south", "cedar|west"),
