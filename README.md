@@ -4,6 +4,8 @@
 the script itself. It resolves those requirements into cached package libraries
 and runs the script against them.
 
+Full documentation: <https://t-kalinowski.github.io/ir/>.
+
 ```r
 #!/usr/bin/env -S ir run
 #| dependencies:
