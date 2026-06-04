@@ -9,6 +9,10 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  # Manual publish, e.g. to ship docs while CI is red on Windows (#32). The
+  # CI-jobs gate below is skipped for manual runs: dispatching is the decision
+  # to publish.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,6 +23,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Require non-Windows CI jobs to have succeeded
+        if: github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -43,7 +48,9 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # workflow_run: the commit that triggered CI. workflow_dispatch: the
+          # ref the run was dispatched from (github.sha).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: quarto-dev/quarto-actions/setup@v2
 
