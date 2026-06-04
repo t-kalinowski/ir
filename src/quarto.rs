@@ -52,10 +52,9 @@ pub(crate) fn run(
     }
 }
 
-/// Read the leading YAML metadata block from a Quarto document.
-pub(crate) fn read_yaml_block_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
-    let content = fs::read_to_string(script)?;
-    Ok(extract_yaml_block(&content))
+/// Read a Quarto document for YAML frontmatter parsing.
+pub(crate) fn read_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
+    Ok(fs::read_to_string(script)?)
 }
 
 /// True for Quarto documents dispatched to `quarto render`. Every other name,
@@ -83,30 +82,6 @@ pub(crate) fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), B
         .into());
     }
     Ok(())
-}
-
-/// Extract the leading YAML metadata block delimited by `---` fences, returning
-/// the inner text. `str::lines` strips a trailing `\r`, so CRLF input is handled.
-fn extract_yaml_block(content: &str) -> String {
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let mut lines = content.lines();
-
-    match lines.next() {
-        Some(first) if first.trim_end() == "---" => {}
-        _ => return String::new(),
-    }
-
-    let mut block = String::new();
-    for line in lines {
-        let trimmed = line.trim_end();
-        if trimmed == "---" || trimmed == "..." {
-            return block;
-        }
-        block.push_str(line);
-        block.push('\n');
-    }
-
-    String::new()
 }
 
 /// The value to pass as `QUARTO_R`, or `None` to leave quarto's own R lookup in
