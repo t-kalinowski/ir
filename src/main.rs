@@ -146,9 +146,7 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
                 .next()
                 .ok_or("`-e` requires an expression (try `ir run -e '1 + 1'`)")?;
             expressions.push(expr);
-        } else if arg == "--from" {
-            return Err("`--from` is only supported by `ir tool run`".into());
-        } else if arg.starts_with("--from=") {
+        } else if arg == "--from" || arg.starts_with("--from=") {
             return Err("`--from` is only supported by `ir tool run`".into());
         } else if arg == "--with" {
             let value = iter
@@ -201,7 +199,7 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
 
 fn infer_self_named_executable(package_ref: &str) -> Option<String> {
     let end = package_ref
-        .find(|c: char| matches!(c, '@' | '<' | '>' | '=' | '!' | ' '))
+        .find(['@', '<', '>', '=', '!', ' '])
         .unwrap_or(package_ref.len());
     let name = &package_ref[..end];
     if is_r_package_name(name) {
@@ -737,13 +735,7 @@ fn find_package_executable_in_dir(exec_dir: &Path, executable: &str) -> Option<P
         exec_dir.join(format!("{executable}.R")),
     ];
 
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Box<dyn Error>> {
