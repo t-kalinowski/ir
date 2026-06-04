@@ -537,20 +537,19 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 #[test]
 fn run_quarto_fixture_injects_rmarkdown_and_renders() {
     let _guard = e2e_lock();
-    let output_dir = unique_dir("ir-e2e-qmd-output");
-    let doc = fixture("run/report.qmd");
+    let fixture_dir = fixture("run");
 
     let out = ir()
+        .current_dir(&fixture_dir)
         .args(["run", "--isolated"])
-        .arg(&doc)
-        .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg("report.qmd")
+        .args(["--to", "html"])
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("report.html"))
+    let html = fs::read_to_string(fixture_dir.join("report.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
@@ -564,7 +563,8 @@ fn run_quarto_fixture_injects_rmarkdown_and_renders() {
         output_text(&out)
     );
 
-    let _ = fs::remove_dir_all(&output_dir);
+    let _ = fs::remove_file(fixture_dir.join("report.html"));
+    let _ = fs::remove_dir_all(fixture_dir.join("report_files"));
 }
 
 // report-pinned.qmd declares rmarkdown itself, so the injected seed is
@@ -572,22 +572,21 @@ fn run_quarto_fixture_injects_rmarkdown_and_renders() {
 #[test]
 fn run_quarto_fixture_with_declared_rmarkdown_skips_injection() {
     let _guard = e2e_lock();
+    let fixture_dir = fixture("run");
     let cache_dir = unique_dir("ir-e2e-qmd-pinned-cache");
-    let output_dir = unique_dir("ir-e2e-qmd-pinned-output");
-    let doc = fixture("run/report-pinned.qmd");
 
     let out = ir()
+        .current_dir(&fixture_dir)
         .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated"])
-        .arg(&doc)
-        .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg("report-pinned.qmd")
+        .args(["--to", "html"])
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("report-pinned.html"))
+    let html = fs::read_to_string(fixture_dir.join("report-pinned.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd-pinned"), "{html}");
     // The declared rmarkdown must load from the resolved run library, with its
@@ -602,8 +601,9 @@ fn run_quarto_fixture_with_declared_rmarkdown_skips_injection() {
         output_text(&out)
     );
 
+    let _ = fs::remove_file(fixture_dir.join("report-pinned.html"));
+    let _ = fs::remove_dir_all(fixture_dir.join("report-pinned_files"));
     let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&output_dir);
 }
 
 // report-transitive.qmd declares `quarto`, which Imports rmarkdown. The
@@ -612,22 +612,21 @@ fn run_quarto_fixture_with_declared_rmarkdown_skips_injection() {
 #[test]
 fn run_quarto_fixture_with_transitive_rmarkdown_skips_advisory() {
     let _guard = e2e_lock();
+    let fixture_dir = fixture("run");
     let cache_dir = unique_dir("ir-e2e-qmd-transitive-cache");
-    let output_dir = unique_dir("ir-e2e-qmd-transitive-output");
-    let doc = fixture("run/report-transitive.qmd");
 
     let out = ir()
+        .current_dir(&fixture_dir)
         .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated"])
-        .arg(&doc)
-        .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg("report-transitive.qmd")
+        .args(["--to", "html"])
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("report-transitive.html"))
+    let html = fs::read_to_string(fixture_dir.join("report-transitive.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd-transitive"), "{html}");
     // Both the declared `quarto` and the transitively-pulled rmarkdown must be
@@ -647,8 +646,9 @@ fn run_quarto_fixture_with_transitive_rmarkdown_skips_advisory() {
         output_text(&out)
     );
 
+    let _ = fs::remove_file(fixture_dir.join("report-transitive.html"));
+    let _ = fs::remove_dir_all(fixture_dir.join("report-transitive_files"));
     let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&output_dir);
 }
 
 // report-bare.qmd declares no dependencies at all, so the resolver must still
@@ -656,22 +656,21 @@ fn run_quarto_fixture_with_transitive_rmarkdown_skips_advisory() {
 #[test]
 fn run_quarto_bare_fixture_injects_rmarkdown() {
     let _guard = e2e_lock();
+    let fixture_dir = fixture("run");
     let cache_dir = unique_dir("ir-e2e-qmd-bare-cache");
-    let output_dir = unique_dir("ir-e2e-qmd-bare-output");
-    let doc = fixture("run/report-bare.qmd");
 
     let out = ir()
+        .current_dir(&fixture_dir)
         .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated"])
-        .arg(&doc)
-        .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg("report-bare.qmd")
+        .args(["--to", "html"])
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("report-bare.html"))
+    let html = fs::read_to_string(fixture_dir.join("report-bare.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd-bare"), "{html}");
     // The injected rmarkdown must be materialised into the resolved run
@@ -686,8 +685,9 @@ fn run_quarto_bare_fixture_injects_rmarkdown() {
         output_text(&out)
     );
 
+    let _ = fs::remove_file(fixture_dir.join("report-bare.html"));
+    let _ = fs::remove_dir_all(fixture_dir.join("report-bare_files"));
     let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&output_dir);
 }
 
 #[test]
@@ -712,10 +712,10 @@ fn run_quarto_selects_requested_r_version() {
         return;
     }
 
-    let output_dir = unique_dir("ir-e2e-rversion-output");
-    let doc = fixture("run/r-version-select.qmd");
+    let fixture_dir = fixture("run");
 
     let out = ir()
+        .current_dir(&fixture_dir)
         // The resolver inherits the environment, so an ambient R_LIBS_USER (CI's
         // setup-r-dependencies exports one) would point the selected R at a
         // library built for the *default* R, loading an ABI-mismatched
@@ -724,15 +724,14 @@ fn run_quarto_selects_requested_r_version() {
         .env_remove("R_LIBS_USER")
         .args(["run", "--isolated", "--r-version"])
         .arg(&target)
-        .arg(&doc)
-        .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg("r-version-select.qmd")
+        .args(["--to", "html"])
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("r-version-select.html"))
+    let html = fs::read_to_string(fixture_dir.join("r-version-select.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=r-version"), "{html}");
     assert!(
@@ -742,7 +741,8 @@ fn run_quarto_selects_requested_r_version() {
     assert!(html.contains("version.lib_in_cache=true"), "{html}");
     assert!(html.contains("version.jsonlite_in_cache=true"), "{html}");
 
-    let _ = fs::remove_dir_all(&output_dir);
+    let _ = fs::remove_file(fixture_dir.join("r-version-select.html"));
+    let _ = fs::remove_dir_all(fixture_dir.join("r-version-select_files"));
 }
 
 #[test]
