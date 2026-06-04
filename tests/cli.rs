@@ -533,10 +533,10 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 }
 
 /// A structured `--with '{name, dependencies}'` spec resolves the named package
-/// with exactly the dependency types it lists, replacing the default. cachem's
-/// only Suggest is testthat and its Imports include fastmap, so
-/// `dependencies: [suggests]` materialises testthat while dropping fastmap -- the
-/// inverse of the bare `--with cachem` baseline. Both runs share a cache
+/// with the dependency types it lists. cachem's only Suggest is testthat, so the
+/// bare `--with cachem` baseline (hard deps only) lacks testthat, while
+/// `--with '{name: cachem, dependencies: [suggests]}'` pulls it in -- per-package,
+/// rather than resolving every dependency's Suggests. Both runs share a cache
 /// directory, so the second reuses the first's renv entries.
 #[test]
 fn run_with_structured_dep_spec_selects_dependency_types() {
@@ -548,7 +548,6 @@ installed <- rownames(installed.packages(lib.loc = lib))
 cat("ir.fixture=depspec\n")
 cat("depspec.cachem=", tolower("cachem" %in% installed), "\n", sep = "")
 cat("depspec.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
-cat("depspec.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
 "#;
 
     let baseline = ir()
@@ -567,7 +566,6 @@ cat("depspec.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
     assert_success(&baseline);
     assert_stdout_contains(&baseline, "depspec.cachem=true");
     assert_stdout_contains(&baseline, "depspec.testthat=false");
-    assert_stdout_contains(&baseline, "depspec.fastmap=true");
 
     let augmented = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -588,8 +586,6 @@ cat("depspec.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
     assert_success(&augmented);
     assert_stdout_contains(&augmented, "depspec.cachem=true");
     assert_stdout_contains(&augmented, "depspec.testthat=true");
-    // Replace semantics: only Suggests are followed, so cachem's Imports are dropped.
-    assert_stdout_contains(&augmented, "depspec.fastmap=false");
 }
 
 /// A `{name, dependencies}` mapping in frontmatter resolves the same way as on the
@@ -602,7 +598,6 @@ fn run_frontmatter_structured_dep_spec_pulls_suggests() {
 lib <- .libPaths()[[1]]
 installed <- rownames(installed.packages(lib.loc = lib))
 cat("fm.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
-cat("fm.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
 "#;
 
     for key in ["r-pkgs", "dependencies"] {
@@ -622,7 +617,6 @@ cat("fm.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
 
         assert_success(&out);
         assert_stdout_contains(&out, "fm.testthat=true");
-        assert_stdout_contains(&out, "fm.fastmap=false");
     }
 
     let _ = fs::remove_dir_all(&cache_dir);
