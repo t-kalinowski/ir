@@ -6,7 +6,7 @@ title: "Scripts"
 
 ```r
 #!/usr/bin/env -S ir run
-#| dependencies:
+#| r-pkgs:
 #|   - dplyr>=1.0
 #|   - tidyr
 #| r-version: ">= 4.0"
@@ -31,11 +31,24 @@ $ ./script.R
 
 The script frontmatter supports:
 
-- `dependencies`: package refs resolved with pak.
+- `r-pkgs`: package refs resolved with pak (`dependencies` is accepted as an alias).
 - `r-version`: an optional R version requirement selected from installed versions reported by rig.
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date.
 
 Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Other pak refs, including GitHub refs and URL refs, pass through unchanged. `dependencies` is usually a YAML sequence, but a string value is accepted and split on whitespace.
+
+### Per-package dependencies
+
+Each package contributes only its hard dependencies (`Depends`, `Imports`, `LinkingTo`) by default. A package entry can instead be a mapping that names which dependency types to follow for that package, mirroring pak/remotes:
+
+```r
+#| r-pkgs:
+#|   - dplyr                                     # hard deps only (default)
+#|   - {name: tidyr, dependencies: [suggests]}   # tidyr's Suggests too
+#|   - {name: cli, dependencies: true}           # hard + Suggests
+```
+
+`dependencies` replaces the default for that package: omit it (or use `na`) for hard deps, `true` for hard + `Suggests`, `false` for none, or a list naming the exact types (`[suggests]`, `[imports, enhances]`, or the `hard`/`soft`/`all` groups). The listed types apply only to that package; transitive dependencies always follow hard deps, and unavailable `Suggests`/`Enhances` are skipped. Because the list replaces the default, `[suggests]` drops the package's `Imports` — use `[hard, suggests]` or `true` to keep them.
 
 ## Inline runs
 
@@ -45,9 +58,10 @@ Inline expressions use the same resolver and cache:
 $ ir run -e '1 + 1'
 $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --with 'dplyr>=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'
+$ ir run --with '{name: dplyr, dependencies: [suggests]}' -e 'library(dplyr)'
 ```
 
-`--with` may be repeated and accepts comma-separated packages. With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared dependencies. Inline expressions and standard-input programs do not have frontmatter. Without `--with`, they run against an empty resolved library while user libraries remain visible unless `--isolated` is supplied.
+`--with` may be repeated and accepts comma-separated packages. It also takes the structured per-package form as YAML — `--with '{name: cli, dependencies: [suggests, enhances]}'` — to select dependency types from the command line. With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared dependencies. Inline expressions and standard-input programs do not have frontmatter. Without `--with`, they run against an empty resolved library while user libraries remain visible unless `--isolated` is supplied.
 
 ## Isolation
 

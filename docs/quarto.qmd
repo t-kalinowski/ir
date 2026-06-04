@@ -8,7 +8,7 @@ title: "Quarto Documents"
 ---
 title: "My report"
 ir:
-  dependencies:
+  r-pkgs:
     - dplyr>=1.0
     - gt@1.0
   r-version: ">= 4.0"

@@ -532,20 +532,23 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
     assert_stdout_contains(&out, "inline.glue=2");
 }
 
-/// `--with-suggests` resolves a package together with its Suggests, materialising
-/// them into the isolated library. cachem declares a single Suggest (testthat),
-/// so the baseline run lacks testthat while the augmented run includes it. Both
-/// runs share a cache directory, so the second reuses the first's renv entries.
+/// A structured `--with '{name, dependencies}'` spec resolves the named package
+/// with exactly the dependency types it lists, replacing the default. cachem's
+/// only Suggest is testthat and its Imports include fastmap, so
+/// `dependencies: [suggests]` materialises testthat while dropping fastmap -- the
+/// inverse of the bare `--with cachem` baseline. Both runs share a cache
+/// directory, so the second reuses the first's renv entries.
 #[test]
-fn run_with_suggests_pulls_a_packages_suggests() {
+fn run_with_structured_dep_spec_selects_dependency_types() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-suggests-cache");
+    let cache_dir = unique_dir("ir-e2e-depspec-cache");
     let expr = r#"
 lib <- .libPaths()[[1]]
 installed <- rownames(installed.packages(lib.loc = lib))
-cat("ir.fixture=suggests\n")
-cat("suggests.cachem=", tolower("cachem" %in% installed), "\n", sep = "")
-cat("suggests.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
+cat("ir.fixture=depspec\n")
+cat("depspec.cachem=", tolower("cachem" %in% installed), "\n", sep = "")
+cat("depspec.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
+cat("depspec.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
 "#;
 
     let baseline = ir()
@@ -562,8 +565,9 @@ cat("suggests.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
         .output()
         .unwrap();
     assert_success(&baseline);
-    assert_stdout_contains(&baseline, "suggests.cachem=true");
-    assert_stdout_contains(&baseline, "suggests.testthat=false");
+    assert_stdout_contains(&baseline, "depspec.cachem=true");
+    assert_stdout_contains(&baseline, "depspec.testthat=false");
+    assert_stdout_contains(&baseline, "depspec.fastmap=true");
 
     let augmented = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -571,9 +575,7 @@ cat("suggests.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
             "run",
             "--isolated",
             "--with",
-            "cachem",
-            "--with-suggests",
-            "cachem",
+            "{name: cachem, dependencies: [suggests]}",
             "--vanilla",
             "-e",
             expr,
@@ -584,40 +586,75 @@ cat("suggests.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
     let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&augmented);
-    assert_stdout_contains(&augmented, "suggests.cachem=true");
-    assert_stdout_contains(&augmented, "suggests.testthat=true");
+    assert_stdout_contains(&augmented, "depspec.cachem=true");
+    assert_stdout_contains(&augmented, "depspec.testthat=true");
+    // Replace semantics: only Suggests are followed, so cachem's Imports are dropped.
+    assert_stdout_contains(&augmented, "depspec.fastmap=false");
 }
 
-/// `--with-suggests` augments an existing dependency, so it is rejected when the
-/// named package is not among the resolved dependencies. With nothing declared,
-/// the resolver errors before contacting any repository.
+/// A `{name, dependencies}` mapping in frontmatter resolves the same way as on the
+/// command line, under both the `r-pkgs:` key and its `dependencies:` alias.
 #[test]
-fn run_with_suggests_requires_a_declared_package() {
+fn run_frontmatter_structured_dep_spec_pulls_suggests() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-suggests-error-cache");
+    let cache_dir = unique_dir("ir-e2e-fm-depspec-cache");
+    let body = r#"
+lib <- .libPaths()[[1]]
+installed <- rownames(installed.packages(lib.loc = lib))
+cat("fm.testthat=", tolower("testthat" %in% installed), "\n", sep = "")
+cat("fm.fastmap=", tolower("fastmap" %in% installed), "\n", sep = "")
+"#;
 
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .args([
-            "run",
-            "--isolated",
-            "--vanilla",
-            "--with-suggests",
-            "cachem",
-            "-e",
-            "1",
-        ])
-        .output()
+    for key in ["r-pkgs", "dependencies"] {
+        let script = unique_path("ir-fm-depspec", "R");
+        fs::write(
+            &script,
+            format!("#| {key}:\n#|   - {{name: cachem, dependencies: [suggests]}}\n{body}"),
+        )
         .unwrap();
 
-    let _ = fs::remove_dir_all(&cache_dir);
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--isolated", "--vanilla", script.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let _ = fs::remove_file(&script);
 
-    assert!(!out.status.success(), "{}", output_text(&out));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("not among resolved dependencies"),
-        "{}",
-        output_text(&out)
-    );
+        assert_success(&out);
+        assert_stdout_contains(&out, "fm.testthat=true");
+        assert_stdout_contains(&out, "fm.fastmap=false");
+    }
+
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+/// Structured `--with` specs are validated while parsing arguments, so malformed
+/// specs fail fast with an actionable message and never reach the resolver.
+#[test]
+fn run_structured_dep_spec_validation_fails_fast() {
+    let cases = [
+        (
+            "{name: cachem, dependencies: [bogus]}",
+            "unknown dependency type `bogus`",
+        ),
+        ("{dependencies: [suggests]}", "requires a `name`"),
+        ("{name: cachem, deps: [suggests]}", "unknown key `deps`"),
+        ("{name: cachem", "could not parse `--with` value as YAML"),
+    ];
+
+    for (spec, expected) in cases {
+        let out = ir()
+            .env("IR_RSCRIPT", "/nonexistent-ir-rscript")
+            .args(["run", "--with", spec, "-e", "1"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{}", output_text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(expected),
+            "spec {spec:?} missing {expected:?}\n{}",
+            output_text(&out)
+        );
+    }
 }
 
 #[test]

@@ -42,13 +42,21 @@ ir_exclude_newer <- function(value) {
   value
 }
 
-# Optional per-package Suggests resolution. `--with-suggests` packages arrive as
-# a comma-separated env value; this splits them into the bare package names whose
-# Suggests should join the resolution. Order independent and de-duplicated.
-ir_with_suggests <- function(value) {
-  if (is.null(value)) return(character())
-  parts <- trimws(strsplit(value, ",", fixed = TRUE)[[1L]])
-  unique(parts[nzchar(parts)])
+# The hard dependency types, always resolved for a package unless an explicit
+# policy overrides them.
+ir_dep_hard <- function() c("depends", "imports", "linkingto")
+
+# Expand one requirement's dependency-type token into the set of types to follow
+# for that package. Rust sends a canonical, lower-cased, comma-separated set of
+# concrete DESCRIPTION types (or omits it). `NA` is the default (hard
+# dependencies); an empty string follows no dependencies (pak `dependencies =
+# FALSE`); otherwise it is the comma-separated set verbatim.
+ir_dep_policy <- function(token) {
+  if (is.na(token)) return(ir_dep_hard())
+  token <- trimws(token)
+  if (!nzchar(token)) return(character())
+  parts <- trimws(strsplit(token, ",", fixed = TRUE)[[1L]])
+  tolower(parts[nzchar(parts)])
 }
 
 ## --- pak ref normalisation --------------------------------------------------
@@ -71,27 +79,38 @@ ir_to_ref <- function(d) {
   else sprintf("%s@%s", m[[2L]], m[[4L]])
 }
 
-# The bare package name from a dependency spec, used to match `--with-suggests`
-# entries against resolved package names. Strips a trailing version constraint
-# (`dplyr>=1.0`) or pak version suffix (`dplyr@1.0`). Other ref forms such as
-# `r-lib/dplyr` are left for the resolved-set check to reject with a clear
-# message, so `--with-suggests` takes a package name.
-ir_pkg_name <- function(spec) {
-  sub("^[[:space:]]*([A-Za-z][A-Za-z0-9.]*).*$", "\\1", spec)
-}
+# Prune a resolved set to the packages reachable under each package's dependency
+# policy. `direct_policies` is a named list mapping each directly-requested
+# package to the dependency types to follow from it; every other package follows
+# its hard dependencies. Starting from the direct packages, we walk the `deps`
+# edge tables pak attaches to each resolved row, following only edges whose type
+# is allowed by the originating package's policy. This realises per-package
+# dependency selection -- including reductions such as `dependencies = FALSE` --
+# from the single superset solve, with soft dependencies followed only at the
+# direct level (transitive packages always use hard deps).
+ir_prune_to_policy <- function(res, direct_policies) {
+  hard <- ir_dep_hard()
+  policy_of <- function(pkg) {
+    pol <- direct_policies[[pkg]]
+    if (is.null(pol)) hard else pol
+  }
 
-# Suggests package names declared by `pkg`, read from a pak::pkg_deps() result.
-# Returns NULL when `pkg` is absent from the resolved set (the caller treats that
-# as an error) and character() when present but suggesting nothing. Dependency
-# `type`s in pak's `deps` column are lower case; "R" is not an installable
-# package.
-ir_suggested_packages <- function(res, pkg) {
-  row <- res[res$package == pkg, , drop = FALSE]
-  if (!nrow(row)) return(NULL)
-  deps <- row$deps[[1L]]
-  if (is.null(deps) || !nrow(deps)) return(character())
-  suggested <- deps$package[tolower(deps$type) == "suggests"]
-  setdiff(unique(suggested), "R")
+  keep  <- names(direct_policies)
+  queue <- keep
+  while (length(queue)) {
+    pkg   <- queue[[1L]]
+    queue <- queue[-1L]
+    idx <- which(res$package == pkg)
+    if (!length(idx)) next
+    deps <- res$deps[[idx[[1L]]]]
+    if (is.null(deps) || !nrow(deps)) next
+    follow <- deps$package[tolower(deps$type) %in% policy_of(pkg)]
+    follow <- unique(follow[follow %in% res$package])
+    new <- setdiff(follow, keep)
+    keep  <- c(keep, new)
+    queue <- c(queue, new)
+  }
+  unique(keep)
 }
 
 ## --- cache location ---------------------------------------------------------
@@ -123,37 +142,29 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
 
 ## --- resolution cache -------------------------------------------------------
 
-# Key identifying a resolution request: the declared dependency specs (order
-# independent), the resolution source, and the R version / platform. Latest
+# Key identifying a resolution request: the declared package specs (order
+# independent), the resolution source, and the R version / platform. Each spec is
+# the requirement line as received -- a bare ref, or `ref<TAB>types` when a
+# per-package dependency policy is attached -- so a policy change yields a
+# distinct key while a plain-ref request hashes exactly as before. Latest
 # resolution includes the current day so newly published versions are picked up
 # at most once per day. Dated PPM snapshot resolution uses only the snapshot date
 # because that repository state is immutable. Order independent so reordering
-# deps doesn't bust the cache.
-ir_input_key <- function(deps,
+# specs doesn't bust the cache.
+ir_input_key <- function(specs,
                          date          = Sys.Date(),
                          rversion      = getRversion(),
                          platform      = R.version$platform,
-                         exclude_newer = NULL,
-                         with_suggests = character()) {
+                         exclude_newer = NULL) {
   source_key <- if (is.null(exclude_newer))
     as.character(date)
   else
     sprintf("exclude-newer: %s", exclude_newer)
 
-  # Pulling a package's Suggests yields a different closure for the same declared
-  # deps, so it gets its own resolution marker. Omitted when empty, leaving the
-  # key identical to a no-suggests request and reusing existing cache entries.
-  suggests_key <- if (length(with_suggests))
-    sprintf("with-suggests: %s",
-            paste(sort(unique(with_suggests)), collapse = ","))
-  else
-    NULL
-
-  secretbase::sha256(paste(c(sort(deps),
+  secretbase::sha256(paste(c(sort(specs),
                              source_key,
                              as.character(rversion),
-                             platform,
-                             suggests_key),
+                             platform),
                            collapse = "\n"))
 }
 
@@ -161,30 +172,32 @@ ir_input_key <- function(deps,
 
 ir_resolve_main <- function() {
 
-  deps        <- readLines(file("stdin"), warn = FALSE)
+  specs       <- readLines(file("stdin"), warn = FALSE)
   result_file <- ir_env_optional("IR_RESOLVE_RESULT_FILE")
   package_result_file <- ir_env_optional("IR_RESOLVE_PACKAGE_RESULT_FILE")
   stopifnot(!is.null(result_file))
   cache_dir   <- ir_cache_dir()
 
-  ## 1. Consume inputs parsed by Rust from script frontmatter
+  ## 1. Consume inputs parsed by Rust from script frontmatter and the command
+  ## line. Each requirement line is a bare ref, or `ref<TAB>types` when a
+  ## per-package dependency policy is attached. The token holds a canonical
+  ## comma-separated set of dependency types ("" means resolve no dependencies);
+  ## its absence (no tab) is the default of the package's hard dependencies.
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
   repos <- ir_repos(exclude_newer)
   options(repos = repos)
 
-  # Packages whose Suggests should join the closure (from `--with-suggests`),
-  # reduced to bare package names so they match the resolved set.
-  suggest_names <- unique(vapply(ir_with_suggests(ir_env_optional("IR_WITH_SUGGESTS")),
-                                 ir_pkg_name, character(1L), USE.NAMES = FALSE))
+  tab      <- regexpr("\t", specs, fixed = TRUE)
+  refs_raw <- ifelse(tab > 0L, substr(specs, 1L, tab - 1L), specs)
+  tokens   <- ifelse(tab > 0L, substr(specs, tab + 1L, nchar(specs)), NA_character_)
 
   ## 1b. Resolution cache: if this exact request was resolved already and its
   ## library still exists, reuse it and skip pak entirely. The marker is written
   ## only after a successful materialise (below), so its presence implies a
   ## complete library.
-  primary_ref <- if (length(deps)) ir_to_ref(deps[[1L]]) else NULL
+  primary_ref <- if (length(refs_raw)) ir_to_ref(refs_raw[[1L]]) else NULL
   marker <- file.path(cache_dir, "resolutions",
-                      ir_input_key(deps, exclude_newer = exclude_newer,
-                                   with_suggests = suggest_names))
+                      ir_input_key(specs, exclude_newer = exclude_newer))
   package_marker <- if (!is.null(primary_ref)) {
     file.path(cache_dir, "resolutions",
               paste0(basename(marker), "-primary-", secretbase::sha256(primary_ref)))
@@ -214,9 +227,27 @@ ir_resolve_main <- function() {
   # but still isolated library (base R only), so undeclared library() calls
   # fail loudly instead of silently borrowing the user's packages.
   primary_package <- NULL
-  if (length(deps)) {
-    refs_in <- vapply(deps, ir_to_ref, character(1L), USE.NAMES = FALSE)
-    res <- pak::pkg_deps(refs_in, dependencies = NA, upgrade = TRUE)
+  if (length(refs_raw)) {
+    refs_in  <- vapply(refs_raw, ir_to_ref, character(1L), USE.NAMES = FALSE)
+    policies <- lapply(tokens, ir_dep_policy)
+
+    # Per-package dependency selection from a single consistent solve. We solve a
+    # superset whose direct refs follow the union of every requested policy and
+    # whose transitive deps follow only hard deps, then prune (below) to what each
+    # package's own policy reaches. With no custom policy this is exactly
+    # `dependencies = NA`, so the common case resolves identically to before.
+    any_custom <- any(!is.na(tokens))
+    dependencies <- if (any_custom) {
+      caps <- c(depends = "Depends", imports = "Imports", linkingto = "LinkingTo",
+                suggests = "Suggests", enhances = "Enhances")
+      direct_union <- unique(unlist(policies, use.names = FALSE))
+      list(direct   = unname(caps[direct_union]),
+           indirect = c("Depends", "Imports", "LinkingTo"))
+    } else {
+      NA
+    }
+
+    res <- pak::pkg_deps(refs_in, dependencies = dependencies, upgrade = TRUE)
 
     failed <- res[res$status != "OK", , drop = FALSE]
     if (nrow(failed))
@@ -227,39 +258,25 @@ ir_resolve_main <- function() {
       primary <- unique(res$package[res$direct & res$ref == refs_in[[1L]]])
       if (length(primary) != 1L)
         stop("package ref must resolve to exactly one R package: ",
-             deps[[1L]], call. = FALSE)
+             refs_raw[[1L]], call. = FALSE)
       primary_package <- primary[[1L]]
     }
 
-    # Per-package Suggests: promote the Suggests of the requested packages to
-    # direct refs and re-solve, so just those packages' suggested dependencies
-    # (and the hard dependencies they pull) join the closure. Unlike pak's global
-    # `dependencies = TRUE`, this does not add every direct package's Suggests.
-    if (length(suggest_names)) {
-      missing <- setdiff(suggest_names, res$package)
-      if (length(missing))
-        stop("`--with-suggests` package(s) not among resolved dependencies: ",
-             paste(missing, collapse = ", "),
-             " (declare them, or add with `--with`)", call. = FALSE)
-      extra <- unique(unlist(lapply(suggest_names,
-                                    function(p) ir_suggested_packages(res, p)),
-                             use.names = FALSE))
-      # Skip Suggests already resolved, and those absent from the configured
-      # repos -- as a direct ref an unavailable Suggests would fail the whole
-      # solve, whereas a soft dependency is meant to be skipped when unavailable.
-      extra <- setdiff(extra, res$package)
-      if (length(extra)) {
-        available <- tryCatch(rownames(available.packages(repos = repos, type = "source")),
-                              error = function(e) character())
-        extra <- intersect(extra, available)
+    # Prune the superset to each package's policy. Map every directly-requested
+    # package to the dependency types to follow from it (unioning policies if a
+    # package is requested more than once), then walk the closure keeping only
+    # reachable packages.
+    if (any_custom) {
+      direct_policies <- list()
+      for (i in seq_along(refs_in)) {
+        for (p in unique(res$package[res$direct & res$ref == refs_in[[i]]])) {
+          existing <- direct_policies[[p]]
+          if (is.null(existing)) existing <- character()
+          direct_policies[[p]] <- union(existing, policies[[i]])
+        }
       }
-      if (length(extra)) {
-        res <- pak::pkg_deps(c(refs_in, extra), dependencies = NA, upgrade = TRUE)
-        failed <- res[res$status != "OK", , drop = FALSE]
-        if (nrow(failed))
-          stop("pak could not resolve suggested dependencies: ",
-               paste(failed$ref, collapse = ", "), call. = FALSE)
-      }
+      res <- res[res$package %in% ir_prune_to_policy(res, direct_policies), ,
+                 drop = FALSE]
     }
 
     # Drop base / recommended packages: those are supplied by R itself.
@@ -271,13 +288,6 @@ ir_resolve_main <- function() {
   } else {
     pkgs     <- character()
     resolved <- character()
-    # `--with-suggests` augments an existing dependency, so with nothing declared
-    # there is nothing for it to attach to. Reject it for the same reason the
-    # resolution path does, rather than silently ignoring the request.
-    if (length(suggest_names))
-      stop("`--with-suggests` package(s) not among resolved dependencies: ",
-           paste(suggest_names, collapse = ", "),
-           " (declare them, or add with `--with`)", call. = FALSE)
     if (!is.null(package_result_file))
       stop("cannot resolve a primary package without dependencies",
            call. = FALSE)

@@ -5,7 +5,7 @@
 //!
 //! ```r
 //! #!/usr/bin/env -S ir run
-//! #| dependencies:
+//! #| r-pkgs:
 //! #|   - dplyr>=1.0
 //! #|   - tidyr
 //! #| r-version: ">= 4.0"
@@ -47,10 +47,49 @@ mod rig;
 /// self-contained binary while the source stays editable as real R.
 const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
 
+/// A single package requirement: a pak reference plus an optional dependency-type
+/// policy. `dep_types` is `None` for the default (the package's hard dependencies
+/// only); otherwise it is a canonical token the R resolver expands into a concrete
+/// set of dependency types, replacing the default for that package.
+#[derive(Debug, Clone)]
+struct PkgReq {
+    reference: String,
+    dep_types: Option<String>,
+}
+
+impl PkgReq {
+    fn plain(reference: impl Into<String>) -> Self {
+        Self {
+            reference: reference.into(),
+            dep_types: None,
+        }
+    }
+
+    /// The stdin line for this requirement: the bare reference, or
+    /// `reference\t<dep-types>` when an explicit policy is attached. `dep_types` is
+    /// a canonical comma-separated set of concrete dependency types (possibly
+    /// empty, meaning resolve no dependencies); the tab marks its presence so the
+    /// resolver can tell an explicit empty policy from the default.
+    fn resolver_line(&self) -> String {
+        match &self.dep_types {
+            Some(types) => format!("{}\t{}", self.reference, types),
+            None => self.reference.clone(),
+        }
+    }
+
+    /// Re-serialise this requirement as a `--with` command-line value, used when
+    /// rebuilding the recovery command for installed launchers.
+    fn to_with_value(&self) -> String {
+        match &self.dep_types {
+            Some(types) => format!("{{name: '{}', dependencies: [{}]}}", self.reference, types),
+            None => self.reference.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ScriptSpec {
-    dependencies: Vec<String>,
-    with_suggests: Vec<String>,
+    requirements: Vec<PkgReq>,
     exclude_newer: Option<String>,
     r_requirement: Option<String>,
 }
@@ -76,8 +115,7 @@ fn try_main() -> Result<(), Box<dyn Error>> {
             cmd_run(
                 &run.source,
                 &run.rscript_args,
-                &run.with_deps,
-                &run.with_suggests,
+                &run.with_reqs,
                 run.r_requirement.as_deref(),
                 &run.script_args,
                 run.isolated,
@@ -117,15 +155,9 @@ fn run_command() -> ClapCommand {
                 .value_name("PKG")
                 .num_args(1)
                 .action(ArgAction::Append)
-                .help("Add a dependency for this run; may be repeated"),
-        )
-        .arg(
-            Arg::new("with-suggests")
-                .long("with-suggests")
-                .value_name("PKG")
-                .num_args(1)
-                .action(ArgAction::Append)
-                .help("Also resolve PKG's Suggests; may be repeated"),
+                .help(
+                    "Add a dependency, or a {name: PKG, dependencies: [...]} spec; may be repeated",
+                ),
         )
         .arg(
             Arg::new("r-version")
@@ -169,15 +201,9 @@ fn tool_run_command() -> ClapCommand {
                 .value_name("PKG")
                 .num_args(1)
                 .action(ArgAction::Append)
-                .help("Add a dependency for this tool run; may be repeated"),
-        )
-        .arg(
-            Arg::new("with-suggests")
-                .long("with-suggests")
-                .value_name("PKG")
-                .num_args(1)
-                .action(ArgAction::Append)
-                .help("Also resolve PKG's Suggests; may be repeated"),
+                .help(
+                    "Add a dependency, or a {name: PKG, dependencies: [...]} spec; may be repeated",
+                ),
         )
         .arg(
             Arg::new("r-version")
@@ -206,15 +232,9 @@ fn tool_install_command() -> ClapCommand {
                 .value_name("PKG")
                 .num_args(1)
                 .action(ArgAction::Append)
-                .help("Add a dependency for installed launchers; may be repeated"),
-        )
-        .arg(
-            Arg::new("with-suggests")
-                .long("with-suggests")
-                .value_name("PKG")
-                .num_args(1)
-                .action(ArgAction::Append)
-                .help("Also resolve PKG's Suggests; may be repeated"),
+                .help(
+                    "Add a dependency, or a {name: PKG, dependencies: [...]} spec; may be repeated",
+                ),
         )
         .arg(
             Arg::new("r-version")
@@ -370,8 +390,7 @@ struct PackageExecTarget {
 
 struct RunArgs {
     rscript_args: Vec<String>,
-    with_deps: Vec<String>,
-    with_suggests: Vec<String>,
+    with_reqs: Vec<PkgReq>,
     r_requirement: Option<String>,
     source: RunSource,
     script_args: Vec<String>,
@@ -380,8 +399,7 @@ struct RunArgs {
 
 struct ToolRunArgs {
     rscript_args: Vec<String>,
-    with_deps: Vec<String>,
-    with_suggests: Vec<String>,
+    with_reqs: Vec<PkgReq>,
     r_requirement: Option<String>,
     target: PackageExecTarget,
     tool_args: Vec<String>,
@@ -389,8 +407,7 @@ struct ToolRunArgs {
 
 struct ToolInstallArgs {
     package_ref: String,
-    with_deps: Vec<String>,
-    with_suggests: Vec<String>,
+    with_reqs: Vec<PkgReq>,
     r_requirement: Option<String>,
     bin_dir: PathBuf,
     force: bool,
@@ -407,8 +424,7 @@ struct ToolInstallArgs {
 /// case it, and everything after, are program args, as with Rscript).
 fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     let mut rscript_args = Vec::new();
-    let mut with_deps = Vec::new();
-    let mut with_suggests = Vec::new();
+    let mut with_reqs = Vec::new();
     let mut r_requirement = None;
     let mut expressions = Vec::new();
     let mut isolated = false;
@@ -429,16 +445,9 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
             let value = iter
                 .next()
                 .ok_or("`--with` requires a package (try `ir run --with dplyr script.R`)")?;
-            push_with_deps(&mut with_deps, &value);
+            push_with_reqs(&mut with_reqs, &value)?;
         } else if let Some(value) = arg.strip_prefix("--with=") {
-            push_with_deps(&mut with_deps, value);
-        } else if arg == "--with-suggests" {
-            let value = iter.next().ok_or(
-                "`--with-suggests` requires a package (try `ir run --with-suggests dplyr script.R`)",
-            )?;
-            push_with_deps(&mut with_suggests, &value);
-        } else if let Some(value) = arg.strip_prefix("--with-suggests=") {
-            push_with_deps(&mut with_suggests, value);
+            push_with_reqs(&mut with_reqs, value)?;
         } else if arg == "--r-version" {
             let value = iter.next().ok_or(
                 "`--r-version` requires a version spec (try `ir run --r-version 4.5 script.R`)",
@@ -476,8 +485,7 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
 
     Ok(RunArgs {
         rscript_args,
-        with_deps,
-        with_suggests,
+        with_reqs,
         r_requirement,
         source,
         script_args,
@@ -521,8 +529,7 @@ fn is_package_executable_name(name: &str) -> bool {
 /// package-oriented and isolated by default.
 fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>> {
     let mut rscript_args = Vec::new();
-    let mut with_deps = Vec::new();
-    let mut with_suggests = Vec::new();
+    let mut with_reqs = Vec::new();
     let mut r_requirement = None;
     let mut from = None;
     let mut iter = args.into_iter();
@@ -543,16 +550,9 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
             let value = iter
                 .next()
                 .ok_or("`--with` requires a package (try `ir tool run --with dplyr btw`)")?;
-            push_with_deps(&mut with_deps, &value);
+            push_with_reqs(&mut with_reqs, &value)?;
         } else if let Some(value) = arg.strip_prefix("--with=") {
-            push_with_deps(&mut with_deps, value);
-        } else if arg == "--with-suggests" {
-            let value = iter.next().ok_or(
-                "`--with-suggests` requires a package (try `ir tool run --with-suggests btw btw`)",
-            )?;
-            push_with_deps(&mut with_suggests, &value);
-        } else if let Some(value) = arg.strip_prefix("--with-suggests=") {
-            push_with_deps(&mut with_suggests, value);
+            push_with_reqs(&mut with_reqs, value)?;
         } else if arg == "--r-version" {
             let value = iter.next().ok_or(
                 "`--r-version` requires a version spec (try `ir tool run --r-version 4.5 btw`)",
@@ -598,8 +598,7 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
 
     Ok(ToolRunArgs {
         rscript_args,
-        with_deps,
-        with_suggests,
+        with_reqs,
         r_requirement,
         target,
         tool_args,
@@ -607,8 +606,7 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
 }
 
 fn parse_tool_install_args(args: Vec<String>) -> Result<ToolInstallArgs, Box<dyn Error>> {
-    let mut with_deps = Vec::new();
-    let mut with_suggests = Vec::new();
+    let mut with_reqs = Vec::new();
     let mut r_requirement = None;
     let mut bin_dir = None;
     let mut force = false;
@@ -620,16 +618,9 @@ fn parse_tool_install_args(args: Vec<String>) -> Result<ToolInstallArgs, Box<dyn
             let value = iter
                 .next()
                 .ok_or("`--with` requires a package (try `ir tool install --with cli btw`)")?;
-            push_with_deps(&mut with_deps, &value);
+            push_with_reqs(&mut with_reqs, &value)?;
         } else if let Some(value) = arg.strip_prefix("--with=") {
-            push_with_deps(&mut with_deps, value);
-        } else if arg == "--with-suggests" {
-            let value = iter.next().ok_or(
-                "`--with-suggests` requires a package (try `ir tool install --with-suggests btw btw`)",
-            )?;
-            push_with_deps(&mut with_suggests, &value);
-        } else if let Some(value) = arg.strip_prefix("--with-suggests=") {
-            push_with_deps(&mut with_suggests, value);
+            push_with_reqs(&mut with_reqs, value)?;
         } else if arg == "--r-version" {
             let value = iter.next().ok_or(
                 "`--r-version` requires a version spec (try `ir tool install --r-version 4.5 btw`)",
@@ -669,23 +660,42 @@ fn parse_tool_install_args(args: Vec<String>) -> Result<ToolInstallArgs, Box<dyn
 
     Ok(ToolInstallArgs {
         package_ref: package_arg,
-        with_deps,
-        with_suggests,
+        with_reqs,
         r_requirement,
         bin_dir: bin_dir.unwrap_or(tool_install_bin_dir()?),
         force,
     })
 }
 
-/// Append the dependency specs in a `--with` value, which may be a single spec
-/// or a comma-separated list, to `with_deps`. Blank entries are ignored.
-fn push_with_deps(with_deps: &mut Vec<String>, value: &str) {
+/// Append the requirement(s) in a `--with` value to `with_reqs`. A value whose
+/// first non-space character is `{` is a structured YAML mapping carrying a
+/// per-package dependency policy (`{name: PKG, dependencies: [...]}`) and is parsed
+/// as one requirement; any other value is a plain spec or comma-separated list of
+/// plain specs, matching the original behaviour. Blank entries are ignored.
+fn push_with_reqs(with_reqs: &mut Vec<PkgReq>, value: &str) -> Result<(), Box<dyn Error>> {
+    if value.trim_start().starts_with('{') {
+        with_reqs.push(parse_structured_with(value)?);
+        return Ok(());
+    }
     for dep in value.split(',') {
         let dep = dep.trim();
         if !dep.is_empty() {
-            with_deps.push(dep.to_string());
+            with_reqs.push(PkgReq::plain(dep));
         }
     }
+    Ok(())
+}
+
+/// Parse a structured `--with '{name: PKG, dependencies: [...]}'` value as a single
+/// requirement.
+fn parse_structured_with(value: &str) -> Result<PkgReq, Box<dyn Error>> {
+    let Some(doc) = load_first_yaml_document(value, "`--with` value")? else {
+        return Err("`--with` mapping is empty".into());
+    };
+    if !doc.is_mapping() {
+        return Err("`--with` value must be a package name or a `{name: ...}` mapping".into());
+    }
+    pkg_req_from_mapping(&doc)
 }
 
 fn cmd_tool(matches: &ArgMatches, argv: &[String]) -> Result<(), Box<dyn Error>> {
@@ -739,15 +749,13 @@ fn cmd_cache_dir() -> Result<(), Box<dyn Error>> {
 fn cmd_run(
     source: &RunSource,
     rscript_args: &[String],
-    with_deps: &[String],
-    with_suggests: &[String],
+    with_reqs: &[PkgReq],
     r_requirement: Option<&str>,
     script_args: &[String],
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    spec.dependencies.extend(with_deps.iter().cloned());
-    spec.with_suggests = with_suggests.to_vec();
+    spec.requirements.extend(with_reqs.iter().cloned());
     if let Some(req) = r_requirement {
         spec.r_requirement = Some(req.to_string());
     }
@@ -777,11 +785,10 @@ fn cmd_run(
 
 fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     let mut spec = ScriptSpec {
-        dependencies: vec![run.target.package_ref.clone()],
+        requirements: vec![PkgReq::plain(run.target.package_ref.clone())],
         ..ScriptSpec::default()
     };
-    spec.dependencies.extend(run.with_deps.iter().cloned());
-    spec.with_suggests = run.with_suggests.clone();
+    spec.requirements.extend(run.with_reqs.iter().cloned());
     if let Some(req) = &run.r_requirement {
         spec.r_requirement = Some(req.clone());
     }
@@ -807,11 +814,10 @@ fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
 
 fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
     let mut spec = ScriptSpec {
-        dependencies: vec![install.package_ref.clone()],
+        requirements: vec![PkgReq::plain(install.package_ref.clone())],
         ..ScriptSpec::default()
     };
-    spec.dependencies.extend(install.with_deps.iter().cloned());
-    spec.with_suggests = install.with_suggests.clone();
+    spec.requirements.extend(install.with_reqs.iter().cloned());
     if let Some(req) = &install.r_requirement {
         spec.r_requirement = Some(req.clone());
     }
@@ -925,15 +931,12 @@ fn resolve_library_inner(
     if let Some(exclude_newer) = &spec.exclude_newer {
         cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
     }
-    if !spec.with_suggests.is_empty() {
-        cmd.env("IR_WITH_SUGGESTS", spec.with_suggests.join(","));
-    }
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
     {
         let mut stdin = child.stdin.take().ok_or("failed to open resolver stdin")?;
-        for dependency in &spec.dependencies {
-            writeln!(stdin, "{dependency}")?;
+        for requirement in &spec.requirements {
+            writeln!(stdin, "{}", requirement.resolver_line())?;
         }
     }
     let status = child
@@ -1238,7 +1241,7 @@ fn parse_r_script_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn E
         return Ok(ScriptSpec::default());
     }
 
-    let Some(doc) = load_first_yaml_document(frontmatter)? else {
+    let Some(doc) = load_first_yaml_document(frontmatter, "script frontmatter")? else {
         return Ok(ScriptSpec::default());
     };
 
@@ -1250,7 +1253,7 @@ fn parse_quarto_frontmatter(document: &str) -> Result<ScriptSpec, Box<dyn Error>
         return Ok(ScriptSpec::default());
     }
 
-    let Some(doc) = load_first_yaml_document(document)? else {
+    let Some(doc) = load_first_yaml_document(document, "script frontmatter")? else {
         return Ok(ScriptSpec::default());
     };
     if doc.is_null() {
@@ -1282,21 +1285,21 @@ fn script_spec_from_yaml_mapping(doc: &Yaml<'_>) -> Result<ScriptSpec, Box<dyn E
     }
 
     Ok(ScriptSpec {
-        dependencies: frontmatter_dependencies(doc)?,
+        requirements: frontmatter_requirements(doc)?,
         exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
         r_requirement: frontmatter_optional_string(doc, "r-version")?,
-        // `--with-suggests` is a command-line flag, not frontmatter: a script
-        // declares only its hard dependencies; pulling Suggests is a per-run choice.
-        ..ScriptSpec::default()
     })
 }
 
-fn load_first_yaml_document(source: &str) -> Result<Option<Yaml<'_>>, Box<dyn Error>> {
+fn load_first_yaml_document<'a>(
+    source: &'a str,
+    context: &str,
+) -> Result<Option<Yaml<'a>>, Box<dyn Error>> {
     let mut parser = Parser::new_from_str(source);
     let mut loader = YamlLoader::default();
     parser
         .load(&mut loader, false)
-        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
+        .map_err(|e| format!("could not parse {context} as YAML: {e}"))?;
     Ok(loader.into_documents().into_iter().next())
 }
 
@@ -1308,34 +1311,162 @@ fn rscript_for_spec(spec: &ScriptSpec) -> Result<OsString, Box<dyn Error>> {
     rig::resolve_rscript(req, spec.exclude_newer.as_deref())
 }
 
-fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error>> {
-    let Some(value) = doc.as_mapping_get("dependencies") else {
-        return Ok(Vec::new());
+/// The package requirements declared in frontmatter, under `r-pkgs:` (or its alias
+/// `dependencies:`). Each sequence item is either a string of whitespace-separated
+/// plain refs, or a `{name: PKG, dependencies: [...]}` mapping carrying a
+/// per-package dependency policy.
+fn frontmatter_requirements(doc: &Yaml<'_>) -> Result<Vec<PkgReq>, Box<dyn Error>> {
+    let value = match (
+        doc.as_mapping_get("r-pkgs"),
+        doc.as_mapping_get("dependencies"),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err("frontmatter must use either `r-pkgs` or `dependencies`, not both".into());
+        }
+        (Some(value), None) | (None, Some(value)) => value,
+        (None, None) => return Ok(Vec::new()),
     };
     if value.is_null() {
         return Ok(Vec::new());
     }
 
-    let mut dependencies = Vec::new();
+    let mut requirements = Vec::new();
     if let Some(seq) = value.as_vec() {
         for item in seq {
-            push_dependency_words(&mut dependencies, item)?;
+            push_frontmatter_requirement(&mut requirements, item)?;
         }
     } else {
-        push_dependency_words(&mut dependencies, value)?;
+        push_frontmatter_requirement(&mut requirements, value)?;
     }
-    Ok(dependencies)
+    Ok(requirements)
 }
 
-fn push_dependency_words(
-    dependencies: &mut Vec<String>,
+fn push_frontmatter_requirement(
+    requirements: &mut Vec<PkgReq>,
     value: &Yaml<'_>,
 ) -> Result<(), Box<dyn Error>> {
-    let Some(value) = value.as_str() else {
-        return Err("frontmatter `dependencies` entries must be strings".into());
-    };
-    dependencies.extend(value.split_whitespace().map(str::to_owned));
+    if value.is_mapping() {
+        requirements.push(pkg_req_from_mapping(value)?);
+    } else if let Some(text) = value.as_str() {
+        requirements.extend(text.split_whitespace().map(PkgReq::plain));
+    } else {
+        return Err("package entries must be strings or `{name: ...}` mappings".into());
+    }
     Ok(())
+}
+
+/// Parse a `{name: PKG, dependencies: <spec>}` mapping (from frontmatter or `--with`)
+/// into a requirement. `name` is required and is treated as a pak ref; the optional
+/// `dependencies` spec is validated and normalised to a canonical dependency-type
+/// token. Unknown keys are rejected so typos surface immediately.
+fn pkg_req_from_mapping(map: &Yaml<'_>) -> Result<PkgReq, Box<dyn Error>> {
+    if let Some(mapping) = map.as_mapping() {
+        for key in mapping.keys() {
+            match key.as_str() {
+                Some("name") | Some("dependencies") => {}
+                Some(other) => {
+                    return Err(format!(
+                        "unknown key `{other}` in package spec (expected `name` and optional `dependencies`)"
+                    )
+                    .into());
+                }
+                None => return Err("package spec keys must be strings".into()),
+            }
+        }
+    }
+
+    let Some(name) = map.as_mapping_get("name") else {
+        return Err("package spec requires a `name`".into());
+    };
+    let Some(name) = name.as_str() else {
+        return Err("package spec `name` must be a string".into());
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("package spec `name` must not be empty".into());
+    }
+
+    let dep_types = match map.as_mapping_get("dependencies") {
+        Some(value) => parse_dep_types_value(value)?,
+        None => None,
+    };
+
+    Ok(PkgReq {
+        reference: name.to_string(),
+        dep_types,
+    })
+}
+
+/// Normalise a `dependencies` spec to a canonical, comma-separated set of concrete
+/// dependency types (lowercase, fixed order), or `None` for the default (the
+/// package's hard dependencies). Mirrors pak/remotes: `false` resolves no
+/// dependencies (empty set), `true` is hard + Suggests, a list (or scalar) names
+/// the types to follow, and the tokens `hard`/`soft`/`all` expand to type groups.
+fn parse_dep_types_value(value: &Yaml<'_>) -> Result<Option<String>, Box<dyn Error>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(flag) = value.as_bool() {
+        return Ok(Some(if flag {
+            canonical_dep_types(&["depends", "imports", "linkingto", "suggests"])
+        } else {
+            String::new()
+        }));
+    }
+
+    let mut types: Vec<&str> = Vec::new();
+    if let Some(seq) = value.as_vec() {
+        for item in seq {
+            let atom = item
+                .as_str()
+                .ok_or("`dependencies` entries must be dependency-type strings")?;
+            expand_dep_type_atom(atom, &mut types)?;
+        }
+    } else if let Some(atom) = value.as_str() {
+        let atom = atom.trim();
+        if atom.eq_ignore_ascii_case("na") {
+            return Ok(None);
+        }
+        expand_dep_type_atom(atom, &mut types)?;
+    } else {
+        return Err("`dependencies` must be a list of types, a boolean, or null".into());
+    }
+
+    Ok(Some(canonical_dep_types(&types)))
+}
+
+/// Expand one dependency-type token into concrete types, appending to `out`.
+/// Accepts the five DESCRIPTION types plus the `hard`/`soft`/`all` groups.
+fn expand_dep_type_atom<'a>(atom: &'a str, out: &mut Vec<&'a str>) -> Result<(), Box<dyn Error>> {
+    let atom = atom.trim().to_ascii_lowercase();
+    let expanded: &[&str] = match atom.as_str() {
+        "depends" => &["depends"],
+        "imports" => &["imports"],
+        "linkingto" => &["linkingto"],
+        "suggests" => &["suggests"],
+        "enhances" => &["enhances"],
+        "hard" => &["depends", "imports", "linkingto"],
+        "soft" => &["suggests", "enhances"],
+        "all" => &["depends", "imports", "linkingto", "suggests", "enhances"],
+        other => {
+            return Err(format!(
+                "unknown dependency type `{other}` (expected depends, imports, linkingto, suggests, enhances, or hard/soft/all)"
+            )
+            .into());
+        }
+    };
+    out.extend_from_slice(expanded);
+    Ok(())
+}
+
+/// Reduce dependency types to a canonical comma-separated token: lowercase, unique,
+/// in DESCRIPTION order, so the same policy always hashes to the same cache key.
+fn canonical_dep_types(types: &[&str]) -> String {
+    ["depends", "imports", "linkingto", "suggests", "enhances"]
+        .into_iter()
+        .filter(|canonical| types.contains(canonical))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn frontmatter_optional_string(
@@ -1572,9 +1703,9 @@ fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
         "install".to_string(),
         "--force".to_string(),
     ];
-    for dep in &install.with_deps {
+    for req in &install.with_reqs {
         words.push("--with".to_string());
-        words.push(command_word(dep));
+        words.push(command_word(&req.to_with_value()));
     }
     if let Some(req) = &install.r_requirement {
         words.push("--r-version".to_string());

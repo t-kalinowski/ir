@@ -6,7 +6,7 @@ and runs the script against them.
 
 ```r
 #!/usr/bin/env -S ir run
-#| dependencies:
+#| r-pkgs:
 #|   - dplyr>=1.0
 #|   - tidyr
 #| r-version: ">= 4.0"
@@ -121,7 +121,7 @@ under an `ir:` key in the document's YAML frontmatter:
 ---
 title: "My report"
 ir:
-  dependencies:
+  r-pkgs:
     - dplyr>=1.0
     - gt@1.0
   r-version: ">= 4.0"
@@ -129,9 +129,10 @@ ir:
 ---
 ```
 
-The `ir:` key accepts the same fields as a script's frontmatter: `dependencies`,
-`r-version`, and `exclude-newer`. `r-version` selects an installed R through rig
-(see above), and the document is rendered with that same R.
+The `ir:` key accepts the same fields as a script's frontmatter: `r-pkgs` (and its
+`dependencies` alias, including the per-package spec form below), `r-version`, and
+`exclude-newer`. `r-version` selects an installed R through rig (see above), and the
+document is rendered with that same R.
 
 `ir run report.qmd` resolves those dependencies into the same cached, resolved
 library used for scripts, then runs `quarto render report.qmd` with that library
@@ -159,17 +160,17 @@ cache, including materialised libraries and resolution markers. `ir cache clean
 
 The YAML frontmatter is the leading block of lines that start exactly with
 `#| ` (after a single optional `#!` shebang line). Rust strips the `#| ` prefix,
-parses the YAML, and passes the declared dependency specs to the R resolver on
-stdin, one dependency per line. Because the block is parsed as real YAML, two
-YAML rules apply:
+parses the YAML, and passes the declared package specs to the R resolver. Because
+the block is parsed as real YAML, two YAML rules apply:
 
 - The `r-version:` constraint must be **quoted** — `r-version: ">= 4.0"` —
   because a bare value starting with `>` is not valid YAML.
-- The `dependencies:` field is usually a YAML sequence, one package ref per
-  item. A string value is also accepted and split on whitespace.
+- The `r-pkgs:` field is usually a YAML sequence, one package per item; a string
+  value is also accepted and split on whitespace. (`dependencies:` is accepted as
+  an alias for `r-pkgs:`; use one or the other, not both.)
 
 ```r
-#| dependencies:
+#| r-pkgs:
 #|   - dplyr>=1.0      # lower bound
 #|   - tidyr           # latest
 #|   - cli==3.6.6      # exact version
@@ -177,7 +178,7 @@ YAML rules apply:
 #| exclude-newer: "2024-01-15"  # optional; resolve from that PPM snapshot date
 ```
 
-Supported dependency specs in this prototype:
+Supported version specs in this prototype:
 
 | Spec         | Meaning                                          |
 | ------------ | ------------------------------------------------ |
@@ -189,6 +190,37 @@ Supported dependency specs in this prototype:
 pak ref forms, such as GitHub refs and URL refs, are passed through unchanged.
 Version operators that are not representable as pak refs, including `pkg<=1.2`
 and `pkg!=1.2`, are not resolved by `ir`.
+
+### Per-package dependencies
+
+By default each package contributes only its **hard** dependencies (`Depends`,
+`Imports`, `LinkingTo`). A package entry may instead be a mapping that names the
+dependency types to follow for that package, mirroring pak/remotes. This is
+*per-package*: only the named package's resolution changes.
+
+```r
+#| r-pkgs:
+#|   - dplyr                                          # hard deps only (default)
+#|   - {name: tidyr, dependencies: [suggests]}        # tidyr's Suggests too
+#|   - {name: cli, dependencies: [imports, enhances]} # exactly these types
+```
+
+The `dependencies` spec replaces the default for that package:
+
+| `dependencies`                  | Types followed for that package                       |
+| ------------------------------- | ----------------------------------------------------- |
+| omitted / `na`                  | hard (`Depends`, `Imports`, `LinkingTo`)              |
+| `true`                          | hard + `Suggests`                                     |
+| `false`                         | none                                                  |
+| a list, e.g. `[suggests]`       | exactly the listed types (here, only `Suggests`)      |
+| `hard` / `soft` / `all`         | groups: hard, `Suggests`+`Enhances`, or everything    |
+
+The listed types are followed only for that package; transitive dependencies
+always use hard deps (so `[suggests]` pulls a package's direct `Suggests`, not the
+Suggests of those Suggests). `Suggests`/`Enhances` that are unavailable in the
+active repository are skipped, mirroring `install.packages(dependencies = TRUE)`.
+Because the spec *replaces* the default, `[suggests]` drops the package's own
+`Imports`; write `[hard, suggests]` (or `true`) to keep them.
 
 ## Inline expressions and command-line requirements
 
@@ -217,23 +249,14 @@ and `pkg!=1.2`, are not resolved by `ir`.
 
 - **`--with <pkg>`** adds a dependency for this run. It can be repeated and
   accepts a comma-separated list (`--with dplyr,tidyr`), and uses the same spec
-  format as the `dependencies:` frontmatter (e.g. `cli`, `dplyr>=1.0`,
-  `cli==3.6.6`). With a script file, `--with` packages are *merged* with the
-  script's declared dependencies; with `-e`, they are the only dependencies.
-  With `ir tool run` or `ir tool install`, they are resolved alongside the
-  provider package.
-
-- **`--with-suggests <pkg>`** also pulls a package's `Suggests` into the resolved
-  library. It can be repeated and accepts a comma-separated list
-  (`--with-suggests dplyr,tidyr`), and takes a package *name*. Each named package
-  must already be in the resolved set — declared in the frontmatter, added with
-  `--with`, or (for `ir tool run` / `ir tool install`) the provider package — so
-  the flag augments how an existing dependency is resolved rather than adding a
-  new one. Unlike resolving everything with its suggests, this is *per-package*:
-  only the named packages contribute their `Suggests`, and only their direct
-  `Suggests` (not the suggests of those suggests). `Suggests` that are not
-  available in the active repository are skipped, mirroring
-  `install.packages(dependencies = TRUE)`.
+  format as a `r-pkgs:` frontmatter entry (e.g. `cli`, `dplyr>=1.0`, `cli==3.6.6`).
+  It also takes the structured per-package form as YAML, for selecting dependency
+  types from the command line:
+  `--with '{name: cli, dependencies: [suggests, enhances]}'` (see
+  [Per-package dependencies](#per-package-dependencies)). With a script file,
+  `--with` packages are *merged* with the script's declared dependencies; with
+  `-e`, they are the only dependencies. With `ir tool run` or `ir tool install`,
+  they are resolved alongside the provider package.
 
 - **`--r-version <spec>`** selects the R version for this run with rig. With a
   script file, it overrides `r-version:` in the frontmatter; with `-e` or
@@ -243,10 +266,10 @@ and `pkg!=1.2`, are not resolved by `ir`.
 ```console
 $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --with 'dplyr>=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'
-$ ir run --with dplyr --with-suggests dplyr -e 'library(dplyr)'
+$ ir run --with '{name: dplyr, dependencies: [suggests]}' -e 'library(dplyr)'
 $ ir tool run --with cli --from btw btw
 $ ir tool run --from 'btw>=0.1.0' btw
-$ ir tool run --with-suggests btw btw         # btw resolved with its Suggests
+$ ir tool run --with '{name: btw, dependencies: true}' btw  # btw + its Suggests
 $ ir tool install --with cli btw
 $ ir tool install --r-version 4.5 btw
 $ echo 'print(commandArgs(TRUE))' | ir run - stdin-arg
@@ -254,10 +277,10 @@ $ ir run --r-version 4.5 -e 'getRversion()'
 $ ir run --vanilla --with cli script.R       # Rscript options still apply
 ```
 
-`--with` packages, `--with-suggests` packages, `ir tool run` provider packages,
-and `--r-version` join the resolved set that is hashed into the content-addressed
-library, so a given combination of frontmatter and command-line requirements
-resolves once and is reused on later runs.
+`--with` packages, `ir tool run` provider packages, and `--r-version` join the
+resolved set that is hashed into the content-addressed library, so a given
+combination of frontmatter and command-line requirements (including each
+package's dependency-type policy) resolves once and is reused on later runs.
 
 ## Isolated runs
 

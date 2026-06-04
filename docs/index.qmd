@@ -7,7 +7,7 @@ subtitle: "Self-describing R scripts, cached package libraries, and reproducible
 
 ```r
 #!/usr/bin/env -S ir run
-#| dependencies:
+#| r-pkgs:
 #|   - dplyr>=1.0
 #|   - tidyr
 #| r-version: ">= 4.0"
