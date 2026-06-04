@@ -212,6 +212,37 @@ fn help_outputs_match_snapshots() {
 }
 
 #[test]
+fn website_reference_page_runs_live_cli_help_chunks() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let reference = manifest_dir.join("docs").join("reference.qmd");
+    let source = fs::read_to_string(&reference)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", reference.display()));
+
+    assert!(
+        source.contains("echo: false"),
+        "{} should hide chunk source in rendered CLI help",
+        reference.display()
+    );
+
+    for expected in [
+        r#"system2("ir", c("--help")"#,
+        r#"system2("ir", c("run", "--help")"#,
+        r#"system2("ir", c("tool", "--help")"#,
+        r#"system2("ir", c("tool", "run", "--help")"#,
+        r#"system2("ir", c("tool", "install", "--help")"#,
+        r#"system2("ir", c("cache", "--help")"#,
+        r#"system2("ir", c("cache", "dir", "--help")"#,
+        r#"system2("ir", c("cache", "clean", "--help")"#,
+    ] {
+        assert!(
+            source.contains(expected),
+            "{} should contain {expected}",
+            reference.display()
+        );
+    }
+}
+
+#[test]
 fn clap_reports_public_usage_errors() {
     let cases = [
         (vec!["frobnicate"], "unrecognized subcommand 'frobnicate'"),
