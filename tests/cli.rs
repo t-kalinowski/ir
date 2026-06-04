@@ -600,8 +600,7 @@ fn run_reticulate_fixture_imports_python_module() {
     if managed_reticulate {
         cmd.env("IR_TEST_RETICULATE_MANAGED", "1")
             .env("IR_TEST_PYTHON_VERSION", python_minor_version())
-            .env("RETICULATE_PYTHON", "managed")
-            .env("UV_PYTHON_PREFERENCE", "only-system");
+            .env("RETICULATE_PYTHON", "managed");
     }
 
     let out = cmd
