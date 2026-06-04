@@ -13,6 +13,7 @@ Materialised libraries are content-addressed by the resolved package set, R vers
 ```console
 $ ir cache dir
 $ ir cache clean
+$ ir cache clean --force
 ```
 
-`ir cache dir` prints the cache root. `ir cache clean` removes the whole `ir` cache, including materialised libraries and resolution markers.
+`ir cache dir` prints the cache root. `ir cache clean` removes the whole `ir` cache, including materialised libraries and resolution markers. `--force` is accepted and has the same behavior.

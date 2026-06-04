@@ -3,5 +3,5 @@ Clear the cache, removing all entries
 Usage: ir cache clean [OPTIONS]
 
 Options:
-      --force  Force removal of the cache
+      --force  Accepted for compatibility; same as `ir cache clean`
   -h, --help   Print help

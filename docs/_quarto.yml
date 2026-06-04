@@ -6,6 +6,7 @@ project:
     - quarto.qmd
     - tools.qmd
     - cache.qmd
+    - config.qmd
     - reference.qmd
 
 website:
@@ -23,6 +24,8 @@ website:
         text: Tools
       - href: cache.qmd
         text: Cache
+      - href: config.qmd
+        text: Config
       - href: reference.qmd
         text: Reference
 
@@ -33,4 +36,3 @@ format:
       - brand
     css: styles.css
     toc: true
-
