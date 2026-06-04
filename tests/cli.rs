@@ -5,6 +5,7 @@
 //! resolution logic is covered by `tests/test-resolve.R`, which this file also
 //! runs via `cargo test` when an R toolchain is available.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,6 +16,21 @@ static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 fn ir() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ir"))
+}
+
+fn assert_help_snapshot(name: &str, args: &[&str]) {
+    let out = ir().args(args).output().unwrap();
+    assert!(out.status.success(), "{args:?} should exit 0");
+    assert!(out.stderr.is_empty(), "{args:?} should not write stderr");
+
+    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(format!("{name}.stdout"));
+    let expected = fs::read_to_string(&snapshot)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", snapshot.display()));
+    let actual = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(actual, expected, "{args:?} changed {}", snapshot.display());
 }
 
 fn unique_path(prefix: &str, ext: &str) -> PathBuf {
@@ -42,6 +58,81 @@ fn write_executable(path: &Path, contents: &str) {
     }
 }
 
+fn prepend_path(dir: &Path) -> OsString {
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    std::env::join_paths(paths).unwrap()
+}
+
+#[cfg(unix)]
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+#[cfg(unix)]
+fn real_r_tools() -> Option<(PathBuf, PathBuf)> {
+    let r = executable_on_path("R")?;
+    let rscript = executable_on_path("Rscript")?;
+    let probe = Command::new(&rscript)
+        .args([
+            "-e",
+            "stopifnot(requireNamespace('secretbase', quietly = TRUE))",
+        ])
+        .output()
+        .ok()?;
+    if probe.status.success() {
+        Some((r, rscript))
+    } else {
+        eprintln!("skipping real Rscript test: required R package `secretbase` unavailable");
+        None
+    }
+}
+
+#[cfg(unix)]
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn write_r_home_wrappers(r_home: &Path, real_r: &Path, real_rscript: &Path, marker: &str) {
+    write_executable(
+        &r_home.join("R"),
+        &format!("#!/bin/sh\nexec {} \"$@\"\n", sh_quote(real_r)),
+    );
+    write_executable(
+        &r_home.join("Rscript"),
+        &format!(
+            "#!/bin/sh\nIR_TEST_SELECTED_R={} exec {} \"$@\"\n",
+            marker,
+            sh_quote(real_rscript)
+        ),
+    );
+}
+
+#[test]
+fn help_outputs_match_snapshots() {
+    for (name, args) in [
+        ("help", &["--help"][..]),
+        ("help", &["-h"]),
+        ("help", &[]),
+        ("run-help", &["run", "--help"]),
+        ("run-help", &["run", "-h"]),
+        ("cache-help", &["cache", "--help"]),
+        ("cache-help", &["cache", "-h"]),
+        ("cache-clean-help", &["cache", "clean", "--help"]),
+        ("cache-clean-help", &["cache", "clean", "-h"]),
+        ("cache-dir-help", &["cache", "dir", "--help"]),
+        ("cache-dir-help", &["cache", "dir", "-h"]),
+    ] {
+        assert_help_snapshot(name, args);
+    }
+}
+
 #[test]
 fn version_flag_reports_version() {
     let out = ir().arg("--version").output().unwrap();
@@ -63,9 +154,13 @@ fn help_is_shown_for_help_flag_and_no_args() {
         assert!(stdout.contains("USAGE"), "args {args:?}: {stdout}");
         assert!(stdout.contains("ir run"), "args {args:?}: {stdout}");
         assert!(
-            stdout.contains(
-                "\n    ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]\n    ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]\n    ir run [--with <pkg-ref>]... <pkg-ref> [args...]\n    ir cache <command>\n"
-            ),
+            stdout.contains(concat!(
+                "\n    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
+                "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] -e <expr> [args...]\n",
+                "    ir run [--isolated] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]\n",
+                "    ir run [--isolated] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]\n",
+                "    ir cache <command>\n"
+            )),
             "args {args:?}: {stdout}"
         );
     }
@@ -93,11 +188,15 @@ fn run_help_flag_shows_help() {
     assert!(stdout.contains("Run an R script"), "{stdout}");
     assert!(stdout.contains("USAGE"), "{stdout}");
     assert!(
-        stdout.contains("ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]"),
+        stdout.contains(
+            "ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]"
+        ),
         "{stdout}"
     );
     assert!(
-        stdout.contains("ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]"),
+        stdout.contains(
+            "ir run [--isolated] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]"
+        ),
         "{stdout}"
     );
     assert!(out.stderr.is_empty());
@@ -115,7 +214,7 @@ fn run_package_exec_rejects_leading_rscript_args() {
     let out = ir().args(["run", "--vanilla", "btw"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr)
-        .contains("Rscript options are only supported for script targets"));
+        .contains("Rscript options are only supported for script and -e targets"));
 }
 
 #[test]
@@ -221,7 +320,7 @@ printf '%s\n' "{}"
 
 #[cfg(unix)]
 #[test]
-fn run_pipes_frontmatter_and_forwards_pak_progress_in_resolver() {
+fn run_passes_dependencies_on_resolver_stdin_and_forwards_pak_progress() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
 
@@ -236,24 +335,30 @@ for arg in "$@"; do
   fi
 done
 
-if [ "$#" = "2" ]; then
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
   if [ "${R_PKG_SHOW_PROGRESS:-}" != "true" ]; then
     echo "pak progress disabled" >&2
     exit 7
   fi
+  if [ "$#" != "1" ]; then
+    echo "unexpected resolver args: $*" >&2
+    exit 10
+  fi
   actual="$(mktemp)"
   expected="$(mktemp)"
   cat > "$actual"
-  printf 'dependencies:\n  - dplyr>=1.0\nexclude after: "2024-01-15"\n' > "$expected"
+  printf 'dplyr>=1.0\ntidyr\n' > "$expected"
   if ! cmp -s "$actual" "$expected"; then
     echo "unexpected resolver stdin" >&2
-    echo "--- actual ---" >&2
-    cat "$actual" >&2
-    exit 10
+    exit 11
+  fi
+  if [ "${IR_EXCLUDE_NEWER:-}" != "2024-01-15" ]; then
+    echo "missing IR_EXCLUDE_NEWER" >&2
+    exit 13
   fi
   echo "pak progress stdout"
   echo "pak progress stderr" >&2
-  echo "/tmp/ir-test-library" > "$2"
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
   exit 0
 fi
 
@@ -270,7 +375,8 @@ echo "user script stdout"
         r#"#!/usr/bin/env -S ir run
 #| dependencies:
 #|   - dplyr>=1.0
-#| exclude after: "2024-01-15"
+#|   - tidyr
+#| exclude-newer: "2024-01-15"
 
 cat('unused by fake Rscript\n')
 "#,
@@ -297,50 +403,21 @@ cat('unused by fake Rscript\n')
 
 #[cfg(unix)]
 #[test]
-fn run_script_forwards_with_dependencies_to_resolver() {
+fn run_errors_on_malformed_frontmatter_before_resolver() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
 
     write_executable(
         &fake_rscript,
         r#"#!/bin/sh
-set -eu
-
-if [ "$#" = "2" ]; then
-  case "$2" in
-    *ir-libpath*) ;;
-    *) test "$2" = "--script-arg"; echo "script with deps ran"; exit 0 ;;
-  esac
-fi
-
-if [ "$#" = "4" ]; then
-  test "$3" = "--with"
-  test "$4" = "cli"
-  actual="$(mktemp)"
-  expected="$(mktemp)"
-  cat > "$actual"
-  cat > "$expected" <<'EOF'
-dependencies:
-  - dplyr
-EOF
-  if ! cmp -s "$actual" "$expected"; then
-    echo "unexpected resolver stdin" >&2
-    cat "$actual" >&2
-    exit 10
-  fi
-  : > "$2"
-  exit 0
-fi
-
-test "$1" = "--script-arg"
-echo "script with deps ran"
+echo "resolver should not run" >&2
+exit 17
 "#,
     );
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
-#| dependencies:
-#|   - dplyr
+#| dependencies: [dplyr
 
 cat('unused by fake Rscript\n')
 "#,
@@ -349,29 +426,25 @@ cat('unused by fake Rscript\n')
 
     let out = ir()
         .env("IR_RSCRIPT", &fake_rscript)
-        .args([
-            "run",
-            "--with",
-            "cli",
-            script.to_str().unwrap(),
-            "--script-arg",
-        ])
+        .args(["run", script.to_str().unwrap()])
         .output()
         .unwrap();
 
     let _ = fs::remove_file(&fake_rscript);
     let _ = fs::remove_file(&script);
 
-    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("script with deps ran"),
-        "{out:?}"
+        stderr.contains("could not parse script frontmatter as YAML"),
+        "{stderr}"
     );
+    assert!(!stderr.contains("resolver should not run"), "{stderr}");
 }
 
 #[cfg(unix)]
 #[test]
-fn run_package_exec_resolves_target_and_forwards_with_dependencies() {
+fn run_package_exec_resolves_provider_and_forwards_with_dependencies() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let library = unique_path("ir-library", "dir");
     let exec_dir = library.join("btw").join("exec");
@@ -397,19 +470,22 @@ echo "package exec ran"
         &format!(
             r#"#!/bin/sh
 set -eu
-test "$#" = "6"
-test "$3" = "--from"
-test "$4" = "btw"
-test "$5" = "--with"
-test "$6" = "cli>=3.0"
-actual="$(mktemp)"
-cat > "$actual"
-if [ -s "$actual" ]; then
-  echo "unexpected resolver stdin" >&2
-  cat "$actual" >&2
-  exit 10
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
+  test "$#" = "1"
+  actual="$(mktemp)"
+  expected="$(mktemp)"
+  cat > "$actual"
+  printf 'btw\ncli>=3.0\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  printf '%s\n' "{}" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
 fi
-printf '%s\n' "{}" > "$2"
+echo "resolver should have run first" >&2
+exit 9
 "#,
             library.display()
         ),
@@ -460,17 +536,22 @@ echo "package exec dot r ran"
         &format!(
             r#"#!/bin/sh
 set -eu
-test "$#" = "4"
-test "$3" = "--from"
-test "$4" = "btw"
-actual="$(mktemp)"
-cat > "$actual"
-if [ -s "$actual" ]; then
-  echo "unexpected resolver stdin" >&2
-  cat "$actual" >&2
-  exit 10
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
+  test "$#" = "1"
+  actual="$(mktemp)"
+  cat > "$actual"
+  expected="$(mktemp)"
+  printf 'btw\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  printf '%s\n' "{}" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
 fi
-printf '%s\n' "{}" > "$2"
+echo "resolver should have run first" >&2
+exit 9
 "#,
             library.display()
         ),
@@ -529,11 +610,22 @@ echo "Rapp shebang ran"
         &format!(
             r#"#!/bin/sh
 set -eu
-test "$#" = "4"
-test "$3" = "--from"
-test "$4" = "btw"
-cat > /dev/null
-printf '%s\n' "{}" > "$2"
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
+  test "$#" = "1"
+  actual="$(mktemp)"
+  cat > "$actual"
+  expected="$(mktemp)"
+  printf 'btw\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  printf '%s\n' "{}" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "resolver should have run first" >&2
+exit 9
 "#,
             library.display()
         ),
@@ -581,17 +673,22 @@ echo "remote package exec ran"
         &format!(
             r#"#!/bin/sh
 set -eu
-test "$#" = "4"
-test "$3" = "--from"
-test "$4" = "github::r-lib/Rapp"
-actual="$(mktemp)"
-cat > "$actual"
-if [ -s "$actual" ]; then
-  echo "unexpected resolver stdin" >&2
-  cat "$actual" >&2
-  exit 10
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
+  test "$#" = "1"
+  actual="$(mktemp)"
+  cat > "$actual"
+  expected="$(mktemp)"
+  printf 'github::r-lib/Rapp\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  printf '%s\n' "{}" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
 fi
-printf '%s\n' "{}" > "$2"
+echo "resolver should have run first" >&2
+exit 9
 "#,
             library.display()
         ),
@@ -615,6 +712,76 @@ printf '%s\n' "{}" > "$2"
 
 #[cfg(unix)]
 #[test]
+fn run_package_exec_honors_isolated_env() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let library = unique_path("ir-library", "dir");
+    let exec_dir = library.join("btw").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    let app = exec_dir.join("btw");
+
+    write_executable(
+        &app,
+        r#"#!/bin/sh
+set -eu
+test "${R_LIBS_USER:-}" = "NULL"
+echo "package exec isolated"
+"#,
+    );
+
+    write_executable(
+        &fake_rscript,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
+  cat > /dev/null
+  printf '%s\n' "{}" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "resolver should have run first" >&2
+exit 9
+"#,
+            library.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--isolated", "btw"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_dir_all(&library);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("package exec isolated"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_rejects_from_with_e() {
+    let out = ir()
+        .args(["run", "--from", "btw", "-e", "1 + 1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be used with `-e`"));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_requires_from_command() {
+    let out = ir().args(["run", "--from", "btw"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("requires a command"));
+}
+
+#[cfg(unix)]
+#[test]
 fn run_forwards_leading_rscript_args_to_user_script() {
     let fake_rscript = unique_path("ir-fake-rscript", "sh");
     let script = unique_path("ir-script", "R");
@@ -627,16 +794,16 @@ fn run_forwards_leading_rscript_args_to_user_script() {
             r#"#!/bin/sh
 set -eu
 
-if [ "$1" != "--vanilla" ]; then
+if [ "${{IR_RESOLVE_RESULT_FILE:-}}" != "" ]; then
   for arg in "$@"; do
     if [ "$arg" = "--vanilla" ]; then
       echo "Rscript args leaked to resolver" >&2
       exit 9
     fi
   done
-  test "$#" = "2"
+  test "$#" = "1"
   cat > /dev/null
-  : > "$2"
+  : > "$IR_RESOLVE_RESULT_FILE"
   exit 0
 fi
 
@@ -676,6 +843,666 @@ echo "user Rscript args received"
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn run_uses_r_version_key_to_select_installed_rscript_with_rig() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
+    let bin_dir = unique_path("ir-bin", "dir");
+    let r_home = unique_path("ir-r-45", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
+    let script = unique_path("ir-script", "R");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&r_home).unwrap();
+
+    let rig = bin_dir.join("rig");
+    let default_rscript = bin_dir.join("Rscript");
+    let r_binary = r_home.join("R");
+
+    write_executable(
+        &rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  "list --json")
+    cat <<'JSON'
+[
+  {{
+    "name": "4.5-arm64",
+    "default": false,
+    "version": "4.5.3",
+    "aliases": [],
+    "path": "{}",
+    "binary": "{}"
+  }}
+]
+JSON
+    ;;
+  "available --json")
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 64
+    ;;
+esac
+"#,
+            r_home.display(),
+            r_binary.display()
+        ),
+    );
+    write_executable(
+        &default_rscript,
+        "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
+    );
+    write_r_home_wrappers(&r_home, &real_r, &real_rscript, "4.5");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| r-version: "4.5" # selected via rig
+
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r_home);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("selected R 4.5"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_r_version_arg_overrides_frontmatter_r_version() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
+    let bin_dir = unique_path("ir-bin", "dir");
+    let r_home = unique_path("ir-r-45", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
+    let script = unique_path("ir-script", "R");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&r_home).unwrap();
+
+    let rig = bin_dir.join("rig");
+    let default_rscript = bin_dir.join("Rscript");
+    let r_binary = r_home.join("R");
+
+    write_executable(
+        &rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  "list --json")
+    cat <<'JSON'
+[
+  {{
+    "name": "4.5-arm64",
+    "default": false,
+    "version": "4.5.3",
+    "aliases": [],
+    "path": "{}",
+    "binary": "{}"
+  }}
+]
+JSON
+    ;;
+  "available --json")
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 64
+    ;;
+esac
+"#,
+            r_home.display(),
+            r_binary.display()
+        ),
+    );
+    write_executable(
+        &default_rscript,
+        "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
+    );
+    write_r_home_wrappers(&r_home, &real_r, &real_rscript, "4.5");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| r-version: "4.6"
+
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--r-version", "4.5", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r_home);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("selected R 4.5"),
+        "{out:?}"
+    );
+}
+
+/// `-e <expr>` runs an inline expression instead of a script file: the
+/// user-code phase is invoked as `Rscript -e <expr>` with the resolved library
+/// injected via `R_LIBS`. As elsewhere, the resolver phase is the one with
+/// `IR_RESOLVE_RESULT_FILE` set; an inline expression declares no deps, so the
+/// resolver receives empty stdin.
+#[cfg(unix)]
+#[test]
+fn run_e_evaluates_inline_expression() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  actual="$(cat)"
+  if [ -n "$actual" ]; then
+    echo "unexpected resolver stdin: $actual" >&2
+    exit 10
+  fi
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+# Phase 2 (user code): an inline expression, not a script file.
+test "$1" = "-e"
+test "$2" = "1 + 1"
+test "${R_LIBS:-}" = "/tmp/ir-test-library"
+echo "ran inline expr"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "-e", "1 + 1"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran inline expr"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_uses_latest_installed_r_without_rig_available() {
+    let Some((real_r, real_rscript)) = real_r_tools() else {
+        return;
+    };
+    let bin_dir = unique_path("ir-bin", "dir");
+    let r45_home = unique_path("ir-r-45", "dir");
+    let r46_home = unique_path("ir-r-46", "dir");
+    let cache_dir = unique_path("ir-cache", "dir");
+    let script = unique_path("ir-script", "R");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&r45_home).unwrap();
+    fs::create_dir_all(&r46_home).unwrap();
+
+    let rig = bin_dir.join("rig");
+    let default_rscript = bin_dir.join("Rscript");
+    let r45_binary = r45_home.join("R");
+    let r46_binary = r46_home.join("R");
+
+    write_executable(
+        &rig,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  "list --json")
+    cat <<'JSON'
+[
+  {{
+    "name": "4.5-arm64",
+    "default": false,
+    "version": "4.5.3",
+    "aliases": [],
+    "path": "{}",
+    "binary": "{}"
+  }},
+  {{
+    "name": "4.6-arm64",
+    "default": false,
+    "version": "4.6.0",
+    "aliases": [],
+    "path": "{}",
+    "binary": "{}"
+  }}
+]
+JSON
+    ;;
+  "available --json")
+    echo "rig available should not run when an installed R satisfies the request" >&2
+    exit 65
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 64
+    ;;
+esac
+"#,
+            r45_home.display(),
+            r45_binary.display(),
+            r46_home.display(),
+            r46_binary.display()
+        ),
+    );
+    write_executable(
+        &default_rscript,
+        "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
+    );
+    write_r_home_wrappers(&r45_home, &real_r, &real_rscript, "4.5");
+    write_r_home_wrappers(&r46_home, &real_r, &real_rscript, "4.6");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| r-version: ">= 4.5"
+#| exclude-newer: "2025-12-31"
+
+cat('selected R ', Sys.getenv('IR_TEST_SELECTED_R'), '\n', sep = '')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r45_home);
+    let _ = fs::remove_dir_all(&r46_home);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("selected R 4.6"), "{stdout}");
+    assert!(!stdout.contains("selected R 4.5"), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_errors_with_rig_install_command_when_required_r_is_not_installed() {
+    let bin_dir = unique_path("ir-bin", "dir");
+    let script = unique_path("ir-script", "R");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let rig = bin_dir.join("rig");
+    let default_rscript = bin_dir.join("Rscript");
+    write_executable(
+        &rig,
+        r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  "list --json")
+    printf '[]\n'
+    ;;
+  "available --json")
+    cat <<'JSON'
+[
+  {
+    "name": "4.5",
+    "date": "2025-04-11",
+    "version": "4.5.3",
+    "type": "release",
+    "url": "https://example.invalid/R-4.5.3.pkg"
+  },
+  {
+    "name": "4.6",
+    "date": "2026-04-10",
+    "version": "4.6.0",
+    "type": "release",
+    "url": "https://example.invalid/R-4.6.0.pkg"
+  }
+]
+JSON
+    ;;
+  *)
+    echo "unexpected rig args: $*" >&2
+    exit 64
+    ;;
+esac
+"#,
+    );
+    write_executable(
+        &default_rscript,
+        "#!/bin/sh\necho default Rscript should not run >&2\nexit 88\n",
+    );
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| r-version: ">= 4.5"
+#| exclude-newer: "2025-12-31"
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_file(&script);
+
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("R 4.5.3 is required but is not installed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rig install 4.5"), "{stderr}");
+    assert!(!stderr.contains("rig install 4.6"), "{stderr}");
+}
+
+/// Multiple `-e` flags are forwarded in order as repeated `-e <expr>` pairs,
+/// mirroring Rscript.
+#[cfg(unix)]
+#[test]
+fn run_e_accepts_multiple_expressions() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  cat > /dev/null
+  : > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+test "$#" = "4"
+test "$1" = "-e"
+test "$2" = "a <- 1"
+test "$3" = "-e"
+test "$4" = "print(a)"
+echo "ran two exprs"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "-e", "a <- 1", "-e", "print(a)"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran two exprs"),
+        "{out:?}"
+    );
+}
+
+/// `-e` with no following expression is a usage error, reported before any R
+/// session is launched.
+#[test]
+fn run_e_requires_an_expression() {
+    let out = ir().args(["run", "-e"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("requires an expression"),
+        "{out:?}"
+    );
+}
+
+/// `--with` specs reach the resolver on stdin (comma-separated lists split into
+/// individual specs, one per line) and are not forwarded to the user-code phase.
+#[cfg(unix)]
+#[test]
+fn run_with_passes_dependencies_to_resolver() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  actual="$(mktemp)"
+  cat > "$actual"
+  expected="$(mktemp)"
+  printf 'dplyr\ntidyr\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin:" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+# Phase 2 (user code): --with must not leak here.
+for arg in "$@"; do
+  case "$arg" in
+    --with*) echo "--with leaked to user code" >&2; exit 9 ;;
+  esac
+done
+test "$1" = "-e"
+echo "resolver saw deps"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--with", "dplyr,tidyr", "-e", "library(dplyr)"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("resolver saw deps"),
+        "{out:?}"
+    );
+}
+
+/// `--with` dependencies must reach the embedded R resolver through Rscript's
+/// stdin connection, not only through shell fakes used by argument tests.
+#[cfg(unix)]
+#[test]
+fn run_with_reaches_real_r_resolver_stdin() {
+    let Some(rscript) = executable_on_path("Rscript") else {
+        return eprintln!("skipping real Rscript stdin test: Rscript unavailable");
+    };
+
+    let probe = Command::new(&rscript)
+        .args([
+            "-e",
+            "stopifnot(requireNamespace('pak', quietly = TRUE), \
+                       requireNamespace('renv', quietly = TRUE), \
+                       requireNamespace('secretbase', quietly = TRUE))",
+        ])
+        .output()
+        .expect("failed to launch Rscript");
+    if !probe.status.success() {
+        return eprintln!("skipping real Rscript stdin test: resolver packages unavailable");
+    }
+
+    let cache_dir = unique_path("ir-real-r-resolver-cache", "dir");
+    let out = ir()
+        .env("IR_RSCRIPT", &rscript)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args([
+            "run",
+            "--with",
+            "abd",
+            "-e",
+            r#"
+lib <- .libPaths()[1]
+stopifnot("abd" %in% rownames(installed.packages(lib.loc = lib)))
+library(abd, lib.loc = lib)
+cat("abd resolved from ", lib, "\n", sep = "")
+"#,
+        ])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&cache_dir);
+
+    assert!(
+        out.status.success(),
+        "real resolver did not materialise --with package:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("abd resolved from "),
+        "{out:?}"
+    );
+}
+
+/// `--with` works alongside a script file: its specs are appended to the
+/// frontmatter dependencies on the resolver's stdin (frontmatter first), while
+/// the user-code phase still runs the script (not `-e`).
+#[cfg(unix)]
+#[test]
+fn run_with_applies_to_script_files() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let script = unique_path("ir-script", "R");
+    fs::write(
+        &script,
+        "#!/usr/bin/env -S ir run\n#| dependencies:\n#|   - dplyr\n\ncat('unused by fake Rscript\\n')\n",
+    )
+    .unwrap();
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  actual="$(mktemp)"
+  cat > "$actual"
+  expected="$(mktemp)"
+  printf 'dplyr\ncli\n' > "$expected"
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin:" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+# Phase 2 (user code): runs the script file, not -e.
+test "$1" != "-e"
+case "$1" in
+  *.R) ;;
+  *) echo "expected a script path, got $1" >&2; exit 9 ;;
+esac
+echo "ran script with --with"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--with", "cli", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran script with --with"),
+        "{out:?}"
+    );
+}
+
+/// `--isolated` is an `ir`-level flag: it reaches neither the resolver nor the
+/// user-code phase as an argument. For the user-code phase it sets
+/// `R_LIBS_USER=NULL` — R's value for disabling the user library — while the
+/// resolved library still arrives via `R_LIBS`.
+#[cfg(unix)]
+#[test]
+fn run_isolated_disables_the_user_library() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  # Resolver phase: --isolated must not leak here, and only the driver runs.
+  test "$#" = "1"
+  cat > /dev/null
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+# Phase 2 (user code): --isolated must not be forwarded to Rscript.
+for arg in "$@"; do
+  case "$arg" in
+    --isolated) echo "--isolated leaked to user code" >&2; exit 9 ;;
+  esac
+done
+# The resolved library arrives via R_LIBS; the user library is disabled.
+test "${R_LIBS:-}" = "/tmp/ir-test-library"
+test "${R_LIBS_USER:-}" = "NULL"
+echo "ran isolated"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--isolated", "-e", "1 + 1"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran isolated"),
+        "{out:?}"
+    );
+}
+
 /// The user script's exit code surfaces unchanged as `ir`'s exit code. On Unix
 /// this rides on the `exec` into R; the Windows spawn+wait fallback is covered
 /// by the variant below.
@@ -689,10 +1516,9 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-# Phase 1 (resolve) gets the driver path and output path.
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  : > "$2"
+# Phase 1 (resolve) gets the driver path and IR_RESOLVE_RESULT_FILE.
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  : > "$IR_RESOLVE_RESULT_FILE"
   exit 0
 fi
 # Phase 2 (user script): exit with a distinctive code.
@@ -714,8 +1540,8 @@ exit 42
 }
 
 /// Windows has no `exec`, so `ir` runs R as a child and forwards its exit code
-/// via `status.code()`. The fake distinguishes phases by the presence of the
-/// resolver's output-file argument.
+/// via `status.code()`. The fake distinguishes phases by the presence of
+/// `IR_RESOLVE_RESULT_FILE`.
 #[cfg(windows)]
 #[test]
 fn run_propagates_user_script_exit_code() {
@@ -726,10 +1552,10 @@ fn run_propagates_user_script_exit_code() {
         &fake_rscript,
         concat!(
             "@echo off\r\n",
-            // Phase 1 (resolve): an output-file arg is present — report an
-            // empty library to its path and succeed.
-            "if not \"%~2\"==\"\" (\r\n",
-            "  type nul > \"%~2\"\r\n",
+            // Phase 1 (resolve): report an empty library to its output path
+            // and succeed.
+            "if not \"%IR_RESOLVE_RESULT_FILE%\"==\"\" (\r\n",
+            "  type nul > \"%IR_RESOLVE_RESULT_FILE%\"\r\n",
             "  exit /b 0\r\n",
             ")\r\n",
             // Phase 2 (user script): exit with a distinctive code.
@@ -766,9 +1592,8 @@ fn run_propagates_user_script_signal_death() {
         &fake_rscript,
         r#"#!/bin/sh
 set -eu
-if [ "$#" = "2" ]; then
-  cat > /dev/null
-  : > "$2"
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  : > "$IR_RESOLVE_RESULT_FILE"
   exit 0
 fi
 # Phase 2: after exec this shell *is* ir's process, so SIGKILL kills ir itself.
@@ -802,7 +1627,6 @@ fn r_resolve_suite_passes() {
         .args([
             "-e",
             "stopifnot(requireNamespace('testthat', quietly = TRUE), \
-                       requireNamespace('yaml12', quietly = TRUE), \
                        requireNamespace('withr', quietly = TRUE), \
                        requireNamespace('secretbase', quietly = TRUE))",
         ])

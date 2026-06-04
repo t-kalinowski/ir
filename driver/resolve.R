@@ -2,85 +2,44 @@
 #
 # Run by the `ir` Rust binary in a private, throw-away R session.
 #
-#   Rscript resolve.R <out_file> [--from <pkg-ref>] [--with <pkg-ref>]...
+#   IR_RESOLVE_RESULT_FILE=<result_file> Rscript resolve.R
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
-#   1. Parse the YAML frontmatter from stdin with yaml12.
+#   1. Consume package dependency specs from stdin, one dependency per line.
 #   2. Resolve the declared dependencies into concrete versions with pak.
 #   3. Hash the resolved set to derive a content-addressed library path
 #      under <cache_dir>.
 #   4. Materialise that path as a light-weight library of symlinks into
 #      renv's package cache via renv::use().
 #
-# The resulting library path is written to <out_file> for the Rust process
-# to pick up. This session then exits; the Rust process launches the user's
-# script in a fresh, isolated R session pointed at the library.
+# The resulting library path is written to the temp result file named by
+# IR_RESOLVE_RESULT_FILE. stdout/stderr stay available for pak progress.
+# This session then exits; the Rust process launches the user's script in a
+# fresh, isolated R session pointed at the library.
 #
 # The helpers below are pure and side-effect free so they can be unit tested
 # (see tests/test-resolve.R). The pipeline runs only when this file is executed
 # as a script -- `sys.nframe() == 0L` is false when the file is sourced.
 
-`%||%` <- function(x, y) if (is.null(x)) y else x
+## --- resolver input ---------------------------------------------------------
 
-## --- YAML frontmatter parsing ----------------------------------------------
-
-# Parse YAML frontmatter into a spec object. Invalid YAML is an error.
-ir_read_spec <- function(yaml_text) {
-  tryCatch(
-    yaml12::parse_yaml(yaml_text),
-    error = function(e)
-      stop(sprintf("could not parse script frontmatter as YAML: %s",
-                   conditionMessage(e)), call. = FALSE)
-  )
+ir_env_optional <- function(name) {
+  value <- Sys.getenv(name, unset = NA_character_)
+  if (is.na(value) || !nzchar(value)) NULL else value
 }
 
-# The declared dependency specs from the YAML `dependencies:` sequence, plus
-# command-line dependency specs supplied by ir itself. Package refs are expected
-# to be whitespace-free.
-ir_deps <- function(spec, extra_deps = character(), from_dep = NULL) {
-  deps <- c(
-    as.character(spec$dependencies %||% character()),
-    as.character(from_dep %||% character()),
-    as.character(extra_deps)
-  )
-  deps <- as.character(unlist(strsplit(trimws(deps), "[[:space:]]+")))
-  deps[nzchar(deps)]
-}
-
-# Optional date-bounded resolution. `exclude after` is a YAML mapping key whose
+# Optional date-bounded resolution. `exclude-newer` is a YAML mapping key whose
 # value is an ISO date; resolution then uses that day's Posit Package Manager
 # CRAN snapshot instead of the latest CRAN repository.
-ir_exclude_after <- function(spec) {
-  value <- spec[["exclude after"]]
+ir_exclude_newer <- function(value) {
   if (is.null(value)) return(NULL)
 
   value <- trimws(as.character(value)[[1L]])
   if (!grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", value))
-    stop("`exclude after` must be a date string in YYYY-MM-DD format",
-         call. = FALSE)
-
-  date <- as.Date(value, format = "%Y-%m-%d")
-  if (is.na(date) || !identical(format(date, "%Y-%m-%d"), value))
-    stop("`exclude after` must be a date string in YYYY-MM-DD format",
+    stop("`exclude-newer` must be a date string in YYYY-MM-DD format",
          call. = FALSE)
 
   value
-}
-
-# Soft-check the optional `R:` version constraint against the running R; warn
-# on a mismatch but never stop (this prototype does not select R versions).
-ir_check_r_version <- function(spec, current = getRversion()) {
-  if (is.null(spec$R)) return(invisible())
-  req <- trimws(as.character(spec$R)[[1L]])
-  m <- regmatches(req, regexec("^(>=|>|<=|<|==)?[[:space:]]*([0-9][0-9.-]*)$", req))[[1L]]
-  if (length(m) == 3L) {
-    op <- if (nzchar(m[[2L]])) m[[2L]] else ">="
-    ok <- do.call(op, list(current, numeric_version(m[[3L]])))
-    if (!isTRUE(ok))
-      warning(sprintf("script requests R %s but running R %s", req, current),
-              call. = FALSE, immediate. = TRUE)
-  }
-  invisible()
 }
 
 ## --- pak ref normalisation --------------------------------------------------
@@ -115,14 +74,13 @@ ir_cache_dir <- function() {
 
 ## --- repositories -----------------------------------------------------------
 
-ir_ppm_snapshot_url <- function(exclude_after) {
-  sprintf("https://packagemanager.posit.co/cran/%s", exclude_after)
+ir_ppm_snapshot_url <- function(exclude_newer) {
+  sprintf("https://packagemanager.posit.co/cran/%s", exclude_newer)
 }
 
-ir_repos <- function(spec, repos = getOption("repos")) {
-  exclude_after <- ir_exclude_after(spec)
-  if (!is.null(exclude_after))
-    return(c(CRAN = ir_ppm_snapshot_url(exclude_after)))
+ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
+  if (!is.null(exclude_newer))
+    return(c(CRAN = ir_ppm_snapshot_url(exclude_newer)))
 
   cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
   if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
@@ -143,11 +101,11 @@ ir_input_key <- function(deps,
                          date          = Sys.Date(),
                          rversion      = getRversion(),
                          platform      = R.version$platform,
-                         exclude_after = NULL) {
-  source_key <- if (is.null(exclude_after))
+                         exclude_newer = NULL) {
+  source_key <- if (is.null(exclude_newer))
     as.character(date)
   else
-    sprintf("exclude after: %s", exclude_after)
+    sprintf("exclude-newer: %s", exclude_newer)
 
   secretbase::sha256(paste(c(sort(deps),
                              source_key,
@@ -158,45 +116,16 @@ ir_input_key <- function(deps,
 
 ## --- pipeline ---------------------------------------------------------------
 
-ir_resolve_args <- function(args) {
-  stopifnot(length(args) >= 1L)
-
-  parsed <- list(out_file = args[[1L]],
-                 from_dep = NULL,
-                 extra_deps = character())
-  i <- 2L
-  while (i <= length(args)) {
-    arg <- args[[i]]
-    if (identical(arg, "--from")) {
-      stopifnot(i < length(args))
-      parsed$from_dep <- args[[i + 1L]]
-      i <- i + 2L
-    } else if (identical(arg, "--with")) {
-      stopifnot(i < length(args))
-      parsed$extra_deps <- c(parsed$extra_deps, args[[i + 1L]])
-      i <- i + 2L
-    } else {
-      stop(sprintf("unexpected resolver argument `%s`", arg), call. = FALSE)
-    }
-  }
-
-  parsed
-}
-
 ir_resolve_main <- function() {
 
-  args <- ir_resolve_args(commandArgs(trailingOnly = TRUE))
-  out_file    <- args$out_file
+  deps        <- readLines(file("stdin"), warn = FALSE)
+  result_file <- ir_env_optional("IR_RESOLVE_RESULT_FILE")
+  stopifnot(!is.null(result_file))
   cache_dir   <- ir_cache_dir()
 
-  ## 1. Parse YAML frontmatter
-  spec <- ir_read_spec(readLines(stdin()))
-  deps <- ir_deps(spec,
-                  extra_deps = args$extra_deps,
-                  from_dep = args$from_dep)
-  exclude_after <- ir_exclude_after(spec)
-  ir_check_r_version(spec)
-  repos <- ir_repos(spec)
+  ## 1. Consume inputs parsed by Rust from script frontmatter
+  exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
+  repos <- ir_repos(exclude_newer)
   options(repos = repos)
 
   ## 1b. Resolution cache: if this exact request was resolved already and its
@@ -204,11 +133,11 @@ ir_resolve_main <- function() {
   ## only after a successful materialise (below), so its presence implies a
   ## complete library.
   marker <- file.path(cache_dir, "resolutions",
-                      ir_input_key(deps, exclude_after = exclude_after))
+                      ir_input_key(deps, exclude_newer = exclude_newer))
   if (file.exists(marker)) {
     cached <- readLines(marker, n = 1L, warn = FALSE)
     if (length(cached) && nzchar(cached) && dir.exists(cached)) {
-      writeLines(cached, out_file)
+      writeLines(cached, result_file)
       return(invisible())
     }
   }
@@ -272,7 +201,7 @@ ir_resolve_main <- function() {
   dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
   writeLines(library_path, marker)
 
-  writeLines(library_path, out_file)
+  writeLines(library_path, result_file)
   invisible()
 }
 
