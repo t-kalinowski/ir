@@ -31,15 +31,16 @@ jobs:
           use-public-rspm: true
       # No DESCRIPTION in this repo, so list the end-to-end fixture deps
       # explicitly (overriding the action's default `deps::.`).
+      #
+      # sessioninfo comes from GitHub: the released 1.2.3 crashes the R session
+      # (0xC0000005) on Windows via system2("quarto", env = ...), fixed on the
+      # dev version (r-lib/sessioninfo#122, merged in #123) but not yet released.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: |
             any::pak
             any::renv
             any::secretbase
-            # Dev sessioninfo until the Windows `system2(env=)` fix
-            # (r-lib/sessioninfo#122, merged in #123) reaches a release; the
-            # released 1.2.3 crashes the R session (0xC0000005) on Windows.
             github::r-lib/sessioninfo
             any::cli
             any::glue
