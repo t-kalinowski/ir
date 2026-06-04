@@ -184,6 +184,8 @@ fn help_outputs_match_snapshots() {
         ("tool-help", &["tool", "-h"]),
         ("tool-run-help", &["tool", "run", "--help"]),
         ("tool-run-help", &["tool", "run", "-h"]),
+        ("tool-install-help", &["tool", "install", "--help"]),
+        ("tool-install-help", &["tool", "install", "-h"]),
         ("cache-help", &["cache", "--help"]),
         ("cache-help", &["cache", "-h"]),
         ("cache-clean-help", &["cache", "clean", "--help"]),
@@ -213,6 +215,18 @@ fn clap_reports_public_usage_errors() {
         (
             vec!["tool", "run", "--from", "btw", "path/to/tool"],
             "`--from` requires a command name",
+        ),
+        (
+            vec!["tool", "install"],
+            "the following required arguments were not provided",
+        ),
+        (
+            vec!["tool", "install", "-e", "1"],
+            "unexpected argument '-e'",
+        ),
+        (
+            vec!["tool", "install", "--bogus", "cli"],
+            "unexpected argument '--bogus'",
         ),
     ];
 
@@ -338,6 +352,28 @@ fn run_script_fixture_resolves_packages_and_isolates_user_library() {
     );
     assert_stdout_contains(&out, "script.result=a:4,b:2");
     assert_stdout_contains(&out, "script.json={\"ok\":true,\"rows\":1}");
+}
+
+#[test]
+fn run_script_uses_only_the_first_yaml_document() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-e2e-multi-doc-cache");
+    let script = fixture("run/multiple-documents.R");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&cache_dir);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=multi-doc");
+    assert_stdout_contains(&out, "multi.packages=glue:true");
+    assert_stdout_contains(&out, "multi.ignored_package=false");
+    assert_stdout_contains(&out, "multi.result=5");
 }
 
 #[test]
@@ -467,4 +503,51 @@ fn tool_run_executes_real_package_entrypoint() {
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
+}
+
+#[test]
+fn tool_install_installs_real_package_entrypoint() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-e2e-tool-install-cache");
+    let bin_dir = unique_dir("ir-e2e-tool-install-bin");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args([
+            "tool",
+            "install",
+            "--with",
+            "docopt,pkgsearch,prettyunits",
+            "--bin-dir",
+        ])
+        .arg(&bin_dir)
+        .arg("cli")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed");
+    assert_stdout_contains(&out, "search");
+
+    let launcher = launcher_path(&bin_dir, "search");
+    let out = Command::new(&launcher).arg("--help").output().unwrap();
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
+    assert_stdout_contains(&out, "cransearch.R [-h | --help]");
+}
+
+fn launcher_path(bin_dir: &Path, name: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        bin_dir.join(name)
+    }
+
+    #[cfg(not(unix))]
+    {
+        bin_dir.join(format!("{name}.cmd"))
+    }
 }
