@@ -12,11 +12,9 @@ ir:
 
 ```{r}
 pkgs <- c("dplyr", "tidyr", "glue")
-available <- vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)
-stopifnot(all(available))
-
-lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+suppressPackageStartupMessages(invisible(lapply(pkgs, library, character.only = TRUE)))
+expected <- normalizePath(file.path(Sys.getenv("R_LIBS"), pkgs), mustWork = TRUE)
+pkg_in_cache <- path.package(pkgs) == expected
 
 data <- dplyr::tibble(group = c("a", "b", "a"), value = c(1L, 2L, 3L)) |>
   dplyr::group_by(group) |>
@@ -24,6 +22,6 @@ data <- dplyr::tibble(group = c("a", "b", "a"), value = c(1L, 2L, 3L)) |>
   tidyr::pivot_wider(names_from = group, values_from = total)
 
 cat("ir.fixture=qmd\n")
-cat("qmd.lib_in_cache=", tolower(startsWith(lib, file.path(expected, "libraries"))), "\n", sep = "")
+cat("qmd.lib_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
 cat(glue::glue("qmd.result=a:{data$a},b:{data$b}"), "\n", sep = "")
 ```
