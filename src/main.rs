@@ -37,7 +37,8 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
-use saphyr::{LoadableYamlNode, Yaml};
+use saphyr::{Yaml, YamlLoader};
+use saphyr_parser::Parser;
 
 mod quarto;
 mod rig;
@@ -790,54 +791,75 @@ fn shebang_mentions(shebang: &str, name: &str) -> bool {
 }
 
 fn read_script_spec(script: &Path, quarto: bool) -> Result<ScriptSpec, Box<dyn Error>> {
-    let frontmatter = if quarto {
-        quarto::read_yaml_block_to_string(script)?
+    if quarto {
+        parse_quarto_frontmatter(&quarto::read_to_string(script)?)
     } else {
-        read_op_frontmatter_to_string(script)?
-    };
-    parse_frontmatter(&frontmatter, quarto)
+        parse_r_script_frontmatter(&read_r_script_frontmatter_to_string(script)?)
+    }
 }
 
-fn parse_frontmatter(frontmatter: &str, nested: bool) -> Result<ScriptSpec, Box<dyn Error>> {
+fn parse_r_script_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn Error>> {
     if frontmatter.trim().is_empty() {
         return Ok(ScriptSpec::default());
     }
 
-    let docs = Yaml::load_from_str(frontmatter)
-        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
-    if docs.len() != 1 {
-        return Err("script frontmatter must contain exactly one YAML document".into());
-    }
-    if docs[0].is_null() {
+    let Some(doc) = load_first_yaml_document(frontmatter)? else {
+        return Ok(ScriptSpec::default());
+    };
+
+    script_spec_from_yaml_mapping(&doc)
+}
+
+fn parse_quarto_frontmatter(document: &str) -> Result<ScriptSpec, Box<dyn Error>> {
+    if document.trim().is_empty() {
         return Ok(ScriptSpec::default());
     }
 
-    let doc = &docs[0];
+    let Some(doc) = load_first_yaml_document(document)? else {
+        return Ok(ScriptSpec::default());
+    };
+    if doc.is_null() {
+        return Ok(ScriptSpec::default());
+    }
     if !doc.is_mapping() {
         return Err("script frontmatter must be a YAML mapping".into());
     }
 
-    // For Quarto documents the dependency spec lives under the `ir:` key,
-    // alongside ordinary quarto metadata; for scripts it is the document itself.
-    let spec_node = if nested {
-        match doc.as_mapping_get("ir") {
-            None => return Ok(ScriptSpec::default()),
-            Some(node) if node.is_null() => return Ok(ScriptSpec::default()),
-            Some(node) => node,
-        }
-    } else {
-        doc
+    let Some(spec_node) = doc.as_mapping_get("ir") else {
+        return Ok(ScriptSpec::default());
     };
-
-    if nested && !spec_node.is_mapping() {
+    if spec_node.is_null() {
+        return Ok(ScriptSpec::default());
+    }
+    if !spec_node.is_mapping() {
         return Err("frontmatter `ir` must be a YAML mapping".into());
     }
 
+    script_spec_from_yaml_mapping(spec_node)
+}
+
+fn script_spec_from_yaml_mapping(doc: &Yaml<'_>) -> Result<ScriptSpec, Box<dyn Error>> {
+    if doc.is_null() {
+        return Ok(ScriptSpec::default());
+    }
+    if !doc.is_mapping() {
+        return Err("script frontmatter must be a YAML mapping".into());
+    }
+
     Ok(ScriptSpec {
-        dependencies: frontmatter_dependencies(spec_node)?,
-        exclude_newer: frontmatter_optional_string(spec_node, "exclude-newer")?,
-        r_requirement: frontmatter_optional_string(spec_node, "r-version")?,
+        dependencies: frontmatter_dependencies(doc)?,
+        exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
+        r_requirement: frontmatter_optional_string(doc, "r-version")?,
     })
+}
+
+fn load_first_yaml_document(source: &str) -> Result<Option<Yaml<'_>>, Box<dyn Error>> {
+    let mut parser = Parser::new_from_str(source);
+    let mut loader = YamlLoader::default();
+    parser
+        .load(&mut loader, false)
+        .map_err(|e| format!("could not parse script frontmatter as YAML: {e}"))?;
+    Ok(loader.into_documents().into_iter().next())
 }
 
 fn rscript_for_spec(spec: &ScriptSpec) -> Result<OsString, Box<dyn Error>> {
@@ -970,7 +992,7 @@ fn run_script(
     }
 }
 
-fn read_op_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
+fn read_r_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     let file = File::open(script)?;
     let mut reader = BufReader::new(file);
     let mut frontmatter = String::new();
