@@ -77,68 +77,6 @@ fn e2e_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn cold_cache() -> bool {
-    std::env::var_os("IR_TEST_COLD_CACHE").is_some()
-}
-
-struct TestDir {
-    path: PathBuf,
-    cleanup: bool,
-}
-
-impl TestDir {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        if self.cleanup {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
-fn persistent_test_dir(name: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(name);
-    fs::create_dir_all(&path).unwrap();
-    path
-}
-
-fn shared_e2e_dir(name: &str) -> PathBuf {
-    let path = if std::env::var_os("CI").is_some() {
-        std::env::temp_dir().join(format!("{name}-{}", std::process::id()))
-    } else {
-        persistent_test_dir(name)
-    };
-    fs::create_dir_all(&path).unwrap();
-    path
-}
-
-fn e2e_cache_dir(prefix: &str) -> TestDir {
-    if cold_cache() {
-        TestDir {
-            path: unique_dir(prefix),
-            cleanup: true,
-        }
-    } else {
-        TestDir {
-            path: shared_e2e_dir("ir-e2e-cache"),
-            cleanup: false,
-        }
-    }
-}
-
-fn scratch_dir(prefix: &str) -> TestDir {
-    TestDir {
-        path: unique_dir(prefix),
-        cleanup: true,
-    }
-}
-
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -434,12 +372,9 @@ fn cache_clean_removes_cache_dir() {
 #[test]
 fn run_script_fixture_resolves_packages_and_isolates_user_library() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-script-cache");
     let script = fixture("run/packages.R");
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
-        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .args(["--script-arg", "value"])
@@ -462,11 +397,9 @@ fn run_script_fixture_resolves_packages_and_isolates_user_library() {
 #[test]
 fn run_script_uses_only_the_first_yaml_document() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-multi-doc-cache");
     let script = fixture("run/multiple-documents.R");
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
@@ -482,12 +415,11 @@ fn run_script_uses_only_the_first_yaml_document() {
 #[test]
 fn run_inline_expression_resolves_with_dependencies() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-inline-cache");
     let expr = r#"
 library(cli)
 library(glue)
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
 libraries <- file.path(expected, "libraries")
 pkgs_in_cache <- startsWith(lib, libraries) &&
   all(file.exists(file.path(lib, c("cli", "glue"), "DESCRIPTION")))
@@ -499,8 +431,6 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 "#;
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
-        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args([
             "run",
             "--isolated",
@@ -525,28 +455,27 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 #[test]
 fn run_quarto_fixture_renders_html_with_resolved_packages() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-qmd-cache");
-    let output_dir = scratch_dir("ir-e2e-qmd-output");
+    let output_dir = unique_dir("ir-e2e-qmd-output");
     let doc = fixture("run/report.qmd");
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
-        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated"])
         .arg(&doc)
         .args(["--to", "html", "--output-dir"])
-        .arg(output_dir.path())
+        .arg(&output_dir)
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.path().join("report.html"))
+    let html = fs::read_to_string(output_dir.join("report.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
     assert!(html.contains("qmd.pkgs_in_cache=true"), "{html}");
     assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
+
+    let _ = fs::remove_dir_all(&output_dir);
 }
 
 #[test]
@@ -571,13 +500,10 @@ fn run_quarto_selects_requested_r_version() {
         return;
     }
 
-    let cache_dir = unique_dir("ir-e2e-rversion-cache");
     let output_dir = unique_dir("ir-e2e-rversion-output");
     let doc = fixture("run/r-version-select.qmd");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
         // The resolver inherits the environment, so an ambient R_LIBS_USER (CI's
         // setup-r-dependencies exports one) would point the selected R at a
         // library built for the *default* R, loading an ABI-mismatched
@@ -604,7 +530,6 @@ fn run_quarto_selects_requested_r_version() {
     assert!(html.contains("version.lib_in_cache=true"), "{html}");
     assert!(html.contains("version.jsonlite_in_cache=true"), "{html}");
 
-    let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&output_dir);
 }
 
@@ -632,12 +557,9 @@ fn run_script_frontmatter_selects_r_version() {
         return;
     }
 
-    let cache_dir = unique_dir("ir-e2e-rversion-fm-cache");
     let script = fixture("run/r-version-frontmatter.R");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
         // See run_quarto_selects_requested_r_version: drop the ambient
         // R_LIBS_USER so the frontmatter-selected R resolves against its own
         // toolchain rather than the default R's (ABI-mismatched) library.
@@ -646,8 +568,6 @@ fn run_script_frontmatter_selects_r_version() {
         .arg(&script)
         .output()
         .unwrap();
-
-    let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=r-version-frontmatter");
@@ -659,13 +579,10 @@ fn run_script_frontmatter_selects_r_version() {
 #[test]
 fn run_reticulate_fixture_imports_python_module() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-reticulate-cache");
     let script = fixture("run/reticulate.R");
     let managed_reticulate = std::env::var_os("IR_TEST_RETICULATE_MANAGED").is_some();
 
     let mut cmd = ir();
-    cmd.env("IR_CACHE_DIR", cache_dir.path())
-        .env("IR_EXPECT_CACHE_DIR", cache_dir.path());
 
     if managed_reticulate {
         cmd.env("IR_TEST_RETICULATE_MANAGED", "1")
@@ -690,10 +607,8 @@ fn run_reticulate_fixture_imports_python_module() {
 #[test]
 fn tool_run_executes_real_package_entrypoint() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-tool-cache");
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
         .args([
             "tool",
             "run",
@@ -715,11 +630,9 @@ fn tool_run_executes_real_package_entrypoint() {
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
     let _guard = e2e_lock();
-    let cache_dir = e2e_cache_dir("ir-e2e-tool-install-cache");
-    let bin_dir = scratch_dir("ir-e2e-tool-install-bin");
+    let bin_dir = unique_dir("ir-e2e-tool-install-bin");
 
     let out = ir()
-        .env("IR_CACHE_DIR", cache_dir.path())
         .args([
             "tool",
             "install",
@@ -727,7 +640,7 @@ fn tool_install_installs_real_package_entrypoint() {
             "docopt,pkgsearch,prettyunits",
             "--bin-dir",
         ])
-        .arg(bin_dir.path())
+        .arg(&bin_dir)
         .arg("cli")
         .output()
         .unwrap();
@@ -736,12 +649,14 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "Installed");
     assert_stdout_contains(&out, "search");
 
-    let launcher = launcher_path(bin_dir.path(), "search");
+    let launcher = launcher_path(&bin_dir, "search");
     let out = Command::new(&launcher).arg("--help").output().unwrap();
 
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
+
+    let _ = fs::remove_dir_all(&bin_dir);
 }
 
 fn launcher_path(bin_dir: &Path, name: &str) -> PathBuf {

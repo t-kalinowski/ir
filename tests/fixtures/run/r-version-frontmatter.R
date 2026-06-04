@@ -7,7 +7,7 @@
 stopifnot(requireNamespace("jsonlite", quietly = TRUE))
 
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
 libraries <- file.path(expected, "libraries")
 # jsonlite must be physically in the run library, not merely loadable from a
 # system or site copy. Check the DESCRIPTION at the library path rather than

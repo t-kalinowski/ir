@@ -303,16 +303,9 @@ run on its own:
 $ Rscript -e 'testthat::test_file("tests/test-resolve.R", stop_on_failure = TRUE)'
 ```
 
-The end-to-end CLI tests use real R package resolution. Local runs reuse a
-shared cache in `target/ir-e2e-cache`, so repeat runs with a warm cache skip the
-download and materialisation path. CI uses a per-job shared cache outside
-`target`, so a fresh job still downloads and materialises packages when pak is
-called. Set `IR_TEST_COLD_CACHE=1` locally when you want each end-to-end test to
-use a fresh `ir` cache:
-
-```console
-$ IR_TEST_COLD_CACHE=1 cargo test --test cli
-```
+The end-to-end CLI tests use real R package resolution and the normal `ir`
+cache. Repeat runs with a warm cache skip the download and materialisation path;
+fresh CI jobs download and materialise packages when pak is called.
 
 ## Configuration
 

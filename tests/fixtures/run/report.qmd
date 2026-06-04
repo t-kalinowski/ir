@@ -16,7 +16,7 @@ available <- vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)
 stopifnot(all(available))
 
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
 libraries <- file.path(expected, "libraries")
 # The declared packages must be physically in the run library, not merely
 # loadable from a system or site copy that --isolated leaves on the path. Check

@@ -10,7 +10,7 @@ available <- vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)
 stopifnot(all(available))
 
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
 stopifnot(all(file.exists(file.path(lib, pkgs, "DESCRIPTION"))))
 
 data <- dplyr::tibble(group = c("a", "b", "a"), value = c(1L, 2L, 3L)) |>

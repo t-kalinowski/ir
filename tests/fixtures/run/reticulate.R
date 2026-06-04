@@ -15,7 +15,7 @@ json <- import("json")
 config <- py_config()
 
 lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_EXPECT_CACHE_DIR"), winslash = "/", mustWork = FALSE)
+expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
 
 cat("ir.fixture=reticulate\n")
 cat("reticulate.lib_in_cache=", tolower(startsWith(lib, file.path(expected, "libraries"))), "\n", sep = "")
