@@ -2245,6 +2245,64 @@ echo "fake quarto rendered $2"
 
 #[cfg(unix)]
 #[test]
+fn run_qmd_reads_frontmatter_as_first_yaml_document() {
+    let dir = unique_path("ir-quarto-first-doc", "d");
+    fs::create_dir_all(&dir).unwrap();
+    let fake_rscript = dir.join("fake-rscript.sh");
+    let fake_quarto = dir.join("quarto");
+    let doc = unique_path("ir-doc", "qmd");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  actual="$(cat)"
+  test "$actual" = "dplyr"
+  echo "/tmp/ir-test-library" > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+echo "fake Rscript should not run the document" >&2
+exit 5
+"#,
+    );
+
+    write_executable(
+        &fake_quarto,
+        r#"#!/bin/sh
+set -eu
+test "$1" = "render"
+test "${R_LIBS:-}" = "/tmp/ir-test-library"
+echo "fake quarto rendered first yaml document"
+"#,
+    );
+
+    fs::write(
+        &doc,
+        "--- # frontmatter\ntitle: Report\nir:\n  dependencies:\n    - dplyr\n--- # body\n\n```{r}\n1 + 1\n```\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .env("IR_QUARTO", &fake_quarto)
+        .args(["run", doc.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&doc);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(out.status.success(), "{:?}", out);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("fake quarto rendered first yaml document"),
+        "{:?}",
+        out
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_qmd_isolated_disables_the_user_library_for_quarto() {
     let dir = unique_path("ir-quarto-isolated", "d");
     fs::create_dir_all(&dir).unwrap();
