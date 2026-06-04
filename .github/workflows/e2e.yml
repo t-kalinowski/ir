@@ -1,0 +1,73 @@
+name: e2e
+
+# Real end-to-end tests for `ir run`: a fresh R toolchain resolves and installs
+# real packages, materialises a library, and runs a script and a Quarto doc.
+# Opt-in via IR_E2E; the offline `ci.yml` suite stays the default `cargo test`.
+#
+# PR1 runs Linux + macOS only. The two Windows-specific bugs (default-R `.bat`
+# resolution and `canonicalize` `\\?\` paths) are fixed in a follow-up, which
+# also adds a rig-provisioned windows-latest job here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  IR_E2E: "1"
+  # The version-selection test renders under a non-default R; it must differ
+  # from the default below or the test fails loudly as vacuous.
+  IR_E2E_R_VERSION: "4.4.3"
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # rig manages the R installs. The default R drives the script test; the
+      # --r-version path (and the rig `default`/`binary` lookup) drive the qmd
+      # test. No dedicated setup-rig action exists, so install per-OS.
+      - name: Install rig (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo curl -L https://rig.r-pkg.org/deb/rig.gpg -o /etc/apt/trusted.gpg.d/rig.gpg
+          sudo sh -c 'echo "deb http://rig.r-pkg.org/deb rig main" > /etc/apt/sources.list.d/rig.list'
+          sudo apt-get update
+          sudo apt-get install -y r-rig
+
+      - name: Install rig (macOS)
+        if: runner.os == 'macOS'
+        run: brew install --cask rig
+
+      - name: Install R versions
+        run: |
+          rig add 4.5.3
+          rig add ${{ env.IR_E2E_R_VERSION }}
+          rig default 4.5.3
+          rig list
+
+      # The resolver runs under the selected R, so both R versions need pak,
+      # renv (>= 1.2 — older renv mishandles PPM dated snapshots), and
+      # secretbase. The qmd render additionally needs knitr + rmarkdown, and the
+      # fixtures install jsonlite. Installed fresh from PPM "latest", so the
+      # versions are current. (A future change tracked upstream lets `ir`
+      # bootstrap these itself, retiring this step.)
+      - name: Install resolver + render packages
+        run: |
+          for v in 4.5.3 ${{ env.IR_E2E_R_VERSION }}; do
+            rig run -r "$v" -e 'install.packages(c("pak","renv","secretbase","jsonlite","knitr","rmarkdown"), repos = "https://packagemanager.posit.co/cran/latest")'
+          done
+
+      - uses: quarto-dev/quarto-actions/setup@v2
+
+      - run: cargo build --verbose
+      - run: cargo test --test e2e -- --nocapture
