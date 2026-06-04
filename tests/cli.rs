@@ -223,16 +223,31 @@ fn website_reference_page_runs_live_cli_help_chunks() {
         "{} should hide chunk source in rendered CLI help",
         reference.display()
     );
+    assert!(
+        source.contains(r#"output <- system2("ir", args, stdout = TRUE, stderr = TRUE)"#),
+        "{} should run live CLI help from ir on PATH",
+        reference.display()
+    );
+    assert!(
+        source.contains(r#"status <- attr(output, "status")"#),
+        "{} should inspect CLI help command status",
+        reference.display()
+    );
+    assert!(
+        source.contains(r#"` failed with status "#),
+        "{} should fail the render when a CLI help command fails",
+        reference.display()
+    );
 
     for expected in [
-        r#"system2("ir", c("--help")"#,
-        r#"system2("ir", c("run", "--help")"#,
-        r#"system2("ir", c("tool", "--help")"#,
-        r#"system2("ir", c("tool", "run", "--help")"#,
-        r#"system2("ir", c("tool", "install", "--help")"#,
-        r#"system2("ir", c("cache", "--help")"#,
-        r#"system2("ir", c("cache", "dir", "--help")"#,
-        r#"system2("ir", c("cache", "clean", "--help")"#,
+        "cli_help()",
+        r#"cli_help("run")"#,
+        r#"cli_help("tool")"#,
+        r#"cli_help("tool", "run")"#,
+        r#"cli_help("tool", "install")"#,
+        r#"cli_help("cache")"#,
+        r#"cli_help("cache", "dir")"#,
+        r#"cli_help("cache", "clean")"#,
     ] {
         assert!(
             source.contains(expected),
@@ -418,15 +433,13 @@ fn run_inline_expression_resolves_with_dependencies() {
     let expr = r#"
 library(cli)
 library(glue)
-lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
-libraries <- file.path(expected, "libraries")
-pkgs_in_cache <- startsWith(lib, libraries) &&
-  all(file.exists(file.path(lib, c("cli", "glue"), "DESCRIPTION")))
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, c("cli", "glue")), mustWork = TRUE)
+pkg_in_cache <- path.package(c("cli", "glue")) == expected
 cat("ir.fixture=inline\n")
 cat("inline.args=", paste(commandArgs(TRUE), collapse = "|"), "\n", sep = "")
-cat("inline.lib_in_cache=", tolower(startsWith(lib, libraries)), "\n", sep = "")
-cat("inline.pkgs_in_cache=", tolower(pkgs_in_cache), "\n", sep = "")
+cat("inline.lib_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
+cat("inline.pkgs_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
 cat(glue::glue("inline.glue={1 + 1}\n"))
 "#;
 

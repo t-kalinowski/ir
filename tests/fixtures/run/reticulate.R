@@ -14,10 +14,11 @@ if (managed) {
 json <- import("json")
 config <- py_config()
 
-lib <- normalizePath(.libPaths()[[1]], winslash = "/", mustWork = TRUE)
-expected <- normalizePath(Sys.getenv("IR_CACHE_DIR", unset = tools::R_user_dir("ir", "cache")), winslash = "/", mustWork = FALSE)
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, "reticulate"), mustWork = TRUE)
+pkg_in_cache <- path.package("reticulate") == expected
 
 cat("ir.fixture=reticulate\n")
-cat("reticulate.lib_in_cache=", tolower(startsWith(lib, file.path(expected, "libraries"))), "\n", sep = "")
+cat("reticulate.lib_in_cache=", tolower(pkg_in_cache), "\n", sep = "")
 cat("reticulate.ephemeral=", tolower(isTRUE(config$ephemeral)), "\n", sep = "")
 cat("reticulate.json=", json$dumps(dict(ok = TRUE)), "\n", sep = "")
