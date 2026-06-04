@@ -37,6 +37,10 @@ jobs:
             any::pak
             any::renv
             any::secretbase
+            # Dev sessioninfo until the Windows `system2(env=)` fix
+            # (r-lib/sessioninfo#122, merged in #123) reaches a release; the
+            # released 1.2.3 crashes the R session (0xC0000005) on Windows.
+            github::r-lib/sessioninfo
             any::cli
             any::glue
             any::jsonlite
