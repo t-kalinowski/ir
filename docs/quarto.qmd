@@ -27,3 +27,5 @@ $ ir run --vanilla report.qmd
 `ir` resolves the document dependencies into the same cached library model used for scripts, then launches `quarto render`. Leading Rscript options are forwarded to Quarto's knitr engine. Trailing arguments are passed to `quarto render`.
 
 When an R version is selected by frontmatter or `--r-version`, `ir` pins Quarto's knitr R to that selection.
+
+Set `IR_QUARTO` to use a specific Quarto executable. Rscript options containing commas cannot be forwarded, because Quarto reads `QUARTO_KNITR_RSCRIPT_ARGS` as a comma-separated value with no escaping.

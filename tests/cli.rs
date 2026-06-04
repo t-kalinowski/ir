@@ -258,6 +258,72 @@ fn website_reference_page_runs_live_cli_help_chunks() {
 }
 
 #[test]
+fn readme_and_website_document_public_surface() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme_path = manifest_dir.join("README.md");
+    let readme = fs::read_to_string(&readme_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", readme_path.display()));
+
+    for stale in [
+        "inline expression, isolated library",
+        "empty isolated library",
+    ] {
+        assert!(
+            !readme.contains(stale),
+            "{} should not contain stale inline isolation wording: {stale}",
+            readme_path.display()
+        );
+    }
+
+    for expected in [
+        "empty resolved library",
+        "IR_QUARTO",
+        "IR_TOOL_BIN_DIR",
+        "RAPP_BIN_DIR",
+        "XDG_BIN_HOME",
+        "XDG_DATA_HOME",
+        "LOCALAPPDATA",
+        "rig's default R install",
+    ] {
+        assert!(
+            readme.contains(expected),
+            "{} should document {expected}",
+            readme_path.display()
+        );
+    }
+
+    let config_path = manifest_dir.join("docs").join("config.qmd");
+    let config = fs::read_to_string(&config_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", config_path.display()));
+    for expected in [
+        "IR_CACHE_DIR",
+        "IR_RSCRIPT",
+        "IR_QUARTO",
+        "IR_TOOL_BIN_DIR",
+        "RAPP_BIN_DIR",
+        "XDG_BIN_HOME",
+        "XDG_DATA_HOME",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+    ] {
+        assert!(
+            config.contains(expected),
+            "{} should document {expected}",
+            config_path.display()
+        );
+    }
+
+    let quarto_config = manifest_dir.join("docs").join("_quarto.yml");
+    let quarto_config_source = fs::read_to_string(&quarto_config)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", quarto_config.display()));
+    assert!(
+        quarto_config_source.contains("config.qmd"),
+        "{} should include the configuration page",
+        quarto_config.display()
+    );
+}
+
+#[test]
 fn clap_reports_public_usage_errors() {
     let cases = [
         (vec!["frobnicate"], "unrecognized subcommand 'frobnicate'"),

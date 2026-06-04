@@ -1,8 +1,8 @@
 # ir
 
 `ir` runs standalone R scripts that declare their own runtime requirements in
-the script itself. It resolves those requirements into cached, isolated package
-libraries and runs the script against them.
+the script itself. It resolves those requirements into cached package libraries
+and runs the script against them.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -29,7 +29,7 @@ It can also evaluate inline expressions, pull in extra dependencies from the
 command line, and run package-shipped executables from `exec/`:
 
 ```console
-$ ir run -e '1 + 1'                          # inline expression, isolated library
+$ ir run -e '1 + 1'                          # inline expression, empty resolved library
 $ ir run --with cli -e 'cli::cli_alert_success("hi")'
 $ ir run --with dplyr,tidyr script.R         # add to the script's own deps
 $ ir run --r-version 4.5 script.R            # select R with rig
@@ -49,10 +49,13 @@ For `ir tool install pkg-ref`, `ir` resolves `pkg-ref`, scans that package's
 `exec/` directory for files whose shebang names `Rscript` or `Rapp`, and writes
 launchers into `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`,
 `XDG_DATA_HOME/../bin`, or `~/.local/bin` on Unix. Use `--bin-dir <dir>` for an
-explicit destination and `--force` to overwrite existing launcher paths. The
-launchers pin `R_LIBS` to the resolved `ir` cache library and set
-`R_LIBS_USER=NULL`; if `ir cache clean` removes that library, rerun
-`ir tool install --force pkg-ref`.
+explicit destination and `--force` to overwrite existing launcher paths. On
+Windows, the default launcher directory is
+`%LOCALAPPDATA%\Programs\R\ir\bin`, falling back to
+`%USERPROFILE%\AppData\Local\Programs\R\ir\bin`. `--with` and `--r-version`
+are recorded in the launcher recovery command. The launchers pin `R_LIBS` to
+the resolved `ir` cache library and set `R_LIBS_USER=NULL`; if
+`ir cache clean` removes that library, rerun `ir tool install --force pkg-ref`.
 
 ## How it works
 
@@ -100,7 +103,7 @@ launchers pin `R_LIBS` to the resolved `ir` cache library and set
    - Package executables use their shebang to choose Rscript or Rapp execution.
      `R_LIBS` points to the resolved library, `R_LIBS_USER` is set to `NULL`,
      and `PATH` is prepended with the resolved package `exec/` directories plus
-     the directory that contains `IR_RSCRIPT` when it is an explicit path.
+     the directory that contains the selected Rscript when it is path-like.
    - Installed tool launchers use the same Rscript/Rapp dispatch, but keep the
      resolved library path in the launcher so the tool can be run directly from
      `PATH`.
@@ -130,11 +133,14 @@ The `ir:` key accepts the same fields as a script's frontmatter: `dependencies`,
 `r-version`, and `exclude-newer`. `r-version` selects an installed R through rig
 (see above), and the document is rendered with that same R.
 
-`ir run report.qmd` resolves those dependencies into the same cached, isolated
+`ir run report.qmd` resolves those dependencies into the same cached, resolved
 library used for scripts, then runs `quarto render report.qmd` with that library
 and the selected R. Trailing arguments are passed to `quarto render`
 (`ir run report.qmd --to pdf`); leading Rscript options are forwarded to the
-knitr engine (`ir run --vanilla report.qmd`).
+knitr engine (`ir run --vanilla report.qmd`). Rscript options containing commas
+cannot be forwarded to Quarto because `QUARTO_KNITR_RSCRIPT_ARGS` is
+comma-separated with no escaping. Set `IR_QUARTO` to use a specific Quarto
+executable.
 
 ## Cache management
 
@@ -146,7 +152,8 @@ $ ir cache clean
 ```
 
 `ir cache dir` prints the cache root. `ir cache clean` removes the whole `ir`
-cache, including materialised libraries and resolution markers.
+cache, including materialised libraries and resolution markers. `ir cache clean
+--force` is accepted and has the same behavior.
 
 ## Frontmatter format
 
@@ -158,7 +165,8 @@ YAML rules apply:
 
 - The `r-version:` constraint must be **quoted** — `r-version: ">= 4.0"` —
   because a bare value starting with `>` is not valid YAML.
-- The `dependencies:` field is a YAML sequence, one package ref per item.
+- The `dependencies:` field is usually a YAML sequence, one package ref per
+  item. A string value is also accepted and split on whitespace.
 
 ```r
 #| dependencies:
@@ -189,8 +197,13 @@ and `pkg!=1.2`, are not resolved by `ir`.
 - **`-e <expr>`** evaluates an inline R expression *instead of* running a script
   file, just like `Rscript -e`. It can be repeated (`-e ... -e ...`), and any
   trailing arguments are passed to the program as `commandArgs(TRUE)`. An inline
-  expression has no frontmatter, so it runs against an empty isolated library
-  unless dependencies are supplied with `--with`.
+  expression has no frontmatter, so it runs against an empty resolved library
+  unless dependencies are supplied with `--with`. The user's libraries remain on
+  `.libPaths()` unless `--isolated` is supplied.
+
+- **`ir run -`** reads the R program from standard input and runs it as
+  `Rscript -`. Standard-input programs do not have frontmatter; use `--with`,
+  `--r-version`, and `--isolated` for runtime requirements.
 
 - **`ir tool run --from <pkg-ref> <command>`** resolves a package ref and runs
   the command from that package's `exec/` directory. A bare self-named package
@@ -199,18 +212,21 @@ and `pkg!=1.2`, are not resolved by `ir`.
 - **`ir tool install <pkg-ref>`** resolves a package ref and installs launchers
   for every supported `Rscript` or `Rapp` executable in that package's `exec/`
   directory. Remote refs work directly, for example `ir tool install
-  github::r-lib/Rapp`.
+  github::r-lib/Rapp`. `--with` and `--r-version` are resolved at install time
+  and recorded in the launchers' recovery command.
 
 - **`--with <pkg>`** adds a dependency for this run. It can be repeated and
   accepts a comma-separated list (`--with dplyr,tidyr`), and uses the same spec
   format as the `dependencies:` frontmatter (e.g. `cli`, `dplyr>=1.0`,
   `cli==3.6.6`). With a script file, `--with` packages are *merged* with the
   script's declared dependencies; with `-e`, they are the only dependencies.
-  With `ir tool run`, they are resolved alongside the provider package.
+  With `ir tool run` or `ir tool install`, they are resolved alongside the
+  provider package.
 
 - **`--r-version <spec>`** selects the R version for this run with rig. With a
   script file, it overrides `r-version:` in the frontmatter; with `-e` or
-  `ir tool run`, it is the only R version requirement.
+  `ir tool run`, it is the only R version requirement. With `ir tool install`,
+  it selects the Rscript written into installed launchers.
 
 ```console
 $ ir run --with cli -e 'cli::cli_alert_success("works")'
@@ -218,6 +234,8 @@ $ ir run --with 'dplyr>=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'
 $ ir tool run --with cli --from btw btw
 $ ir tool run --from 'btw>=0.1.0' btw
 $ ir tool install --with cli btw
+$ ir tool install --r-version 4.5 btw
+$ echo 'print(commandArgs(TRUE))' | ir run - stdin-arg
 $ ir run --r-version 4.5 -e 'getRversion()'
 $ ir run --vanilla --with cli script.R       # Rscript options still apply
 ```
@@ -248,8 +266,10 @@ anything else installed there is still visible).
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH` when `r-version` is not set.
+- `R` / `Rscript` on `PATH`, a rig default R install, or `IR_RSCRIPT` when
+  `r-version` is not set.
 - `rig` on `PATH` when `r-version` is set.
+- `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd` or `.Rmd` files.
 - The R packages `pak`, `renv`, and `secretbase` installed in that R.
 - A Rust toolchain only if you build `ir` from source (not needed for the
   pre-built binaries below).
@@ -309,14 +329,26 @@ fresh CI jobs download and materialise packages when pak is called.
 
 ## Configuration
 
-| Variable       | Default                                          |
-| -------------- | ------------------------------------------------ |
-| `IR_CACHE_DIR` | `tools::R_user_dir("ir", "cache")`               |
-| `IR_RSCRIPT`   | path to the Rscript executable when `r-version` is not set (default: Rscript on PATH) |
+| Variable          | Used by           | Default                                          |
+| ----------------- | ----------------- | ------------------------------------------------ |
+| `IR_CACHE_DIR`    | all commands      | `tools::R_user_dir("ir", "cache")`               |
+| `IR_RSCRIPT`      | runs without `r-version` | rig's default R install, then `Rscript` on `PATH` |
+| `IR_QUARTO`       | Quarto rendering  | `quarto` on `PATH`                               |
+| `IR_TOOL_BIN_DIR` | `ir tool install` | first launcher-directory override                |
+| `RAPP_BIN_DIR`    | `ir tool install` | second launcher-directory override               |
+| `XDG_BIN_HOME`    | `ir tool install` on Unix | third launcher-directory override          |
+| `XDG_DATA_HOME`   | `ir tool install` on Unix | `<parent of XDG_DATA_HOME>/bin`             |
+| `LOCALAPPDATA`    | `ir tool install` on Windows | `%LOCALAPPDATA%\Programs\R\ir\bin`     |
+| `USERPROFILE`     | `ir tool install` on Windows | fallback under `%USERPROFILE%\AppData` |
 
 The default cache directory follows R's per-package convention (e.g.
 `~/Library/Caches/org.R-project.R/R/ir` on macOS), and also honours R's own
 `R_USER_CACHE_DIR`.
+
+`IR_RSCRIPT` is ignored when `r-version` is set, because version selection is
+resolved through `rig`. `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`,
+`XDG_DATA_HOME`, `LOCALAPPDATA`, and `USERPROFILE` are only used to choose the
+default destination for `ir tool install`; `--bin-dir <dir>` overrides them.
 
 ## Limitations (prototype)
 

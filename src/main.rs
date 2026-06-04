@@ -229,7 +229,7 @@ fn cache_command() -> ClapCommand {
                     Arg::new("force")
                         .long("force")
                         .action(ArgAction::SetTrue)
-                        .help("Force removal of the cache"),
+                        .help("Accepted for compatibility; same as `ir cache clean`"),
                 ),
         )
         .subcommand(ClapCommand::new("dir").about("Show the cache directory"))

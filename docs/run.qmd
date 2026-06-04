@@ -23,6 +23,7 @@ Run the file through `ir`:
 ```console
 $ ir run script.R
 $ ir run --vanilla script.R
+$ echo 'print(commandArgs(TRUE))' | ir run - stdin-arg
 $ ./script.R
 ```
 
@@ -34,7 +35,7 @@ The script frontmatter supports:
 - `r-version`: an optional R version requirement selected from installed versions reported by rig.
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date.
 
-Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Other pak refs, including GitHub refs and URL refs, pass through unchanged.
+Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Other pak refs, including GitHub refs and URL refs, pass through unchanged. `dependencies` is usually a YAML sequence, but a string value is accepted and split on whitespace.
 
 ## Inline runs
 
@@ -46,7 +47,7 @@ $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --with 'dplyr>=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'
 ```
 
-`--with` may be repeated and accepts comma-separated packages. With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared dependencies.
+`--with` may be repeated and accepts comma-separated packages. With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared dependencies. Inline expressions and standard-input programs do not have frontmatter. Without `--with`, they run against an empty resolved library while user libraries remain visible unless `--isolated` is supplied.
 
 ## Isolation
 
@@ -56,3 +57,5 @@ By default, `ir` prepends the resolved library to `.libPaths()` and leaves user 
 $ ir run --isolated script.R
 $ ir run --isolated --with cli -e 'cli::cli_alert_success("hi")'
 ```
+
+`--isolated` sets `R_LIBS_USER=NULL`. Site and base/system libraries remain on the path.
