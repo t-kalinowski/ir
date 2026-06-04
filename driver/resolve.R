@@ -2,7 +2,7 @@
 #
 # Run by the `ir` Rust binary in a private, throw-away R session.
 #
-#   Rscript resolve.R <out_file>
+#   Rscript resolve.R <out_file> [--from <pkg-ref>] [--with <pkg-ref>]...
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
 #   1. Parse the YAML frontmatter from stdin with yaml12.
@@ -34,10 +34,15 @@ ir_read_spec <- function(yaml_text) {
   )
 }
 
-# The declared dependency specs from the YAML `dependencies:` sequence.
-# Package refs are expected to be whitespace-free.
-ir_deps <- function(spec) {
-  deps <- as.character(spec$dependencies %||% character())
+# The declared dependency specs from the YAML `dependencies:` sequence, plus
+# command-line dependency specs supplied by ir itself. Package refs are expected
+# to be whitespace-free.
+ir_deps <- function(spec, extra_deps = character(), from_dep = NULL) {
+  deps <- c(
+    as.character(spec$dependencies %||% character()),
+    as.character(from_dep %||% character()),
+    as.character(extra_deps)
+  )
   deps <- as.character(unlist(strsplit(trimws(deps), "[[:space:]]+")))
   deps[nzchar(deps)]
 }
@@ -153,17 +158,42 @@ ir_input_key <- function(deps,
 
 ## --- pipeline ---------------------------------------------------------------
 
+ir_resolve_args <- function(args) {
+  stopifnot(length(args) >= 1L)
+
+  parsed <- list(out_file = args[[1L]],
+                 from_dep = NULL,
+                 extra_deps = character())
+  i <- 2L
+  while (i <= length(args)) {
+    arg <- args[[i]]
+    if (identical(arg, "--from")) {
+      stopifnot(i < length(args))
+      parsed$from_dep <- args[[i + 1L]]
+      i <- i + 2L
+    } else if (identical(arg, "--with")) {
+      stopifnot(i < length(args))
+      parsed$extra_deps <- c(parsed$extra_deps, args[[i + 1L]])
+      i <- i + 2L
+    } else {
+      stop(sprintf("unexpected resolver argument `%s`", arg), call. = FALSE)
+    }
+  }
+
+  parsed
+}
+
 ir_resolve_main <- function() {
 
-  args <- commandArgs(trailingOnly = TRUE)
-  if (length(args) != 1L)
-    stop("usage: resolve.R <out_file>", call. = FALSE)
-  out_file    <- args[[1L]]
+  args <- ir_resolve_args(commandArgs(trailingOnly = TRUE))
+  out_file    <- args$out_file
   cache_dir   <- ir_cache_dir()
 
   ## 1. Parse YAML frontmatter
   spec <- ir_read_spec(readLines(stdin()))
-  deps <- ir_deps(spec)
+  deps <- ir_deps(spec,
+                  extra_deps = args$extra_deps,
+                  from_dep = args$from_dep)
   exclude_after <- ir_exclude_after(spec)
   ir_check_r_version(spec)
   repos <- ir_repos(spec)

@@ -25,9 +25,25 @@ $ ir run --vanilla script.R
 $ ./script.R
 ```
 
+`ir run` can also resolve an installed package and run command-line tools that
+the package ships in its `exec/` directory:
+
+```console
+$ ir run --from btw btw --help
+$ ir run btw --help                 # shorthand for --from btw btw
+$ ir run --with cli --from btw btw
+$ ir run --from 'btw>=0.1.0' btw
+$ ir run --from github::r-lib/Rapp Rapp
+```
+
+For `--from pkg tool`, `ir` resolves `pkg`, finds `exec/tool` or `exec/tool.R`
+in the installed package, and launches that file through its shebang. The
+package ref can be a pak package ref or supported version spec. Use quotes when
+the shell would otherwise interpret characters such as `>`.
+
 ## How it works
 
-`ir run script.R` runs in two phases:
+`ir run` runs in two phases:
 
 1. **Resolve + materialise** (a private, throw-away R session).
    - The YAML frontmatter is parsed with the **yaml12** package.
@@ -49,13 +65,18 @@ $ ./script.R
    - **renv** (`renv::use`) installs the packages into renv's package cache and
      materialises that path as a light-weight library of **symlinks** into the
      cache. The library lives in our cache, not R's temp dir, so it persists.
-2. **Run** (an ordinary R session).
+2. **Run**.
    - The script runs as `Rscript [Rscript-options...] script.R`, so it sees the
      user's normal R environment unless forwarded Rscript options such as
      `--vanilla` disable startup files.
    - The materialised library is injected via `R_LIBS`, which **prepends** it to
      `.libPaths()`: the resolved dependencies take precedence, while the user's
      other libraries remain available as a fallback.
+   - Package executables run directly through their shebang. `R_LIBS` points to
+     the resolved library, and `PATH` is prepended with the resolved package
+     `exec/` directories plus the directory that contains `IR_RSCRIPT` when it
+     is an explicit path. This lets `#!/usr/bin/env Rapp` find a resolved Rapp
+     executable and `#!/usr/bin/env Rscript` find the selected Rscript.
 
 Libraries are content-addressed: two scripts that resolve to the same set of
 package versions share one materialised library, and the individual packages
@@ -106,6 +127,14 @@ pak ref forms, such as GitHub refs and URL refs, are passed through unchanged.
 Version operators that are not representable as pak refs, including `pkg<=1.2`
 and `pkg!=1.2`, are not resolved by `ir`.
 
+`--with <pkg-ref>` adds explicit dependencies to the resolved library. It can
+be used with either scripts or package executables:
+
+```console
+$ ir run --with cli script.R
+$ ir run --with cli --with jsonlite --from btw btw
+```
+
 ## Requirements
 
 - A Rust toolchain (to build `ir`).
@@ -153,3 +182,6 @@ The default cache directory follows R's per-package convention (e.g.
 - Dependency specs support bare names, `>=`, `==`, and pak package refs.
   Upper-bound syntax such as `pkg<=1.2` is not resolved by `ir`.
 - Repositories default to CRAN (`https://cran.r-project.org`).
+- The self-named package executable shortcut is for package refs whose package
+  name can be inferred locally, such as `btw` or `btw>=0.1.0`. Use
+  `--from <pkg-ref> <command>` for remotes and other refs.

@@ -29,7 +29,7 @@
 
 use std::env;
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ fn try_main() -> Result<(), Box<dyn Error>> {
             }
 
             let run = parse_run_args(args)?;
-            cmd_run(&run.script, &run.rscript_args, &run.script_args)
+            cmd_run(run)
         }
         Some("cache") => cmd_cache(args.collect()),
         Some("--version" | "-V") => {
@@ -75,24 +75,128 @@ fn try_main() -> Result<(), Box<dyn Error>> {
 
 struct RunArgs {
     rscript_args: Vec<String>,
-    script: String,
-    script_args: Vec<String>,
+    target: RunTarget,
+    with: Vec<String>,
+    target_args: Vec<String>,
+}
+
+enum RunTarget {
+    Script(String),
+    PackageExec(PackageExecTarget),
+}
+
+struct PackageExecTarget {
+    package_ref: String,
+    package_name: Option<String>,
+    executable: String,
 }
 
 fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
-    let script_index = args
-        .iter()
-        .position(|arg| !arg.starts_with('-'))
-        .ok_or("`ir run` requires a script path (try `ir run script.R`)")?;
-    let mut args = args;
-    let script_args = args.split_off(script_index + 1);
-    let script = args.pop().expect("script index already checked");
+    let mut rscript_args = Vec::new();
+    let mut with = Vec::new();
+    let mut from = None;
+    let mut i = 0;
 
-    Ok(RunArgs {
-        rscript_args: args,
-        script,
-        script_args,
-    })
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--with" {
+            i += 1;
+            let dep = args
+                .get(i)
+                .ok_or("`--with` requires a package dependency spec")?;
+            with.push(dep.clone());
+            i += 1;
+        } else if let Some(dep) = arg.strip_prefix("--with=") {
+            if dep.is_empty() {
+                return Err("`--with` requires a package dependency spec".into());
+            }
+            with.push(dep.to_string());
+            i += 1;
+        } else if arg == "--from" {
+            i += 1;
+            let package_ref = args.get(i).ok_or("`--from` requires a package ref")?;
+            from = Some(package_ref.clone());
+            i += 1;
+        } else if let Some(package_ref) = arg.strip_prefix("--from=") {
+            if package_ref.is_empty() {
+                return Err("`--from` requires a package ref".into());
+            }
+            from = Some(package_ref.to_string());
+            i += 1;
+        } else if arg.starts_with('-') {
+            rscript_args.push(arg.clone());
+            i += 1;
+        } else {
+            let target = parse_run_target(arg, from.as_deref())?;
+            let target_args = args[i + 1..].to_vec();
+            return Ok(RunArgs {
+                rscript_args,
+                target,
+                with,
+                target_args,
+            });
+        }
+    }
+
+    if from.is_some() {
+        return Err("`--from` requires a command to run".into());
+    }
+
+    Err("`ir run` requires a script path or package executable (try `ir run script.R`)".into())
+}
+
+fn parse_run_target(target: &str, from: Option<&str>) -> Result<RunTarget, Box<dyn Error>> {
+    if let Some(package_ref) = from {
+        if !is_package_executable_name(target) {
+            return Err("`--from` requires a command name, not a path".into());
+        }
+        return Ok(RunTarget::PackageExec(PackageExecTarget {
+            package_ref: package_ref.to_string(),
+            package_name: infer_self_named_executable(package_ref),
+            executable: target.to_string(),
+        }));
+    }
+
+    let path = Path::new(target);
+    if path.exists() || target.ends_with(".R") || target.contains('/') || target.contains('\\') {
+        return Ok(RunTarget::Script(target.to_string()));
+    }
+
+    if let Some(executable) = infer_self_named_executable(target) {
+        return Ok(RunTarget::PackageExec(PackageExecTarget {
+            package_ref: target.to_string(),
+            package_name: Some(executable.clone()),
+            executable,
+        }));
+    }
+
+    Ok(RunTarget::Script(target.to_string()))
+}
+
+fn infer_self_named_executable(package_ref: &str) -> Option<String> {
+    let end = package_ref
+        .find(|c: char| matches!(c, '@' | '<' | '>' | '=' | '!' | ' '))
+        .unwrap_or(package_ref.len());
+    let name = &package_ref[..end];
+    if is_r_package_name(name) {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_r_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && !name.ends_with('.')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '.')
+}
+
+fn is_package_executable_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains(':')
 }
 
 fn cmd_cache(args: Vec<String>) -> Result<(), Box<dyn Error>> {
@@ -160,13 +264,17 @@ fn print_help() {
             "ir {} — self-describing R scripts\n",
             "\n",
             "USAGE:\n",
-            "    ir run [Rscript-options...] <script.R> [args...]\n",
+            "    ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]\n",
+            "    ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]\n",
+            "    ir run [--with <pkg-ref>]... <pkg-ref> [args...]\n",
             "    ir cache <command>\n",
             "\n",
             "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
             "dependencies, builds a dedicated package library, and runs the script\n",
-            "against it. Leading Rscript options are passed to Rscript for the\n",
-            "user-code phase; trailing args are passed through to the script.\n",
+            "against it. It can also resolve a package ref and run an executable\n",
+            "from that package's exec directory. Leading Rscript options are passed\n",
+            "to Rscript for script targets; trailing args are passed through to the\n",
+            "script or package executable.\n",
             "`ir cache` manages the dependency resolution and materialised library\n",
             "cache.\n",
             "\n",
@@ -183,12 +291,17 @@ fn print_run_help() {
         "Run an R script\n",
         "\n",
         "USAGE:\n",
-        "    ir run [Rscript-options...] <script.R> [args...]\n",
+        "    ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]\n",
+        "    ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]\n",
+        "    ir run [--with <pkg-ref>]... <pkg-ref> [args...]\n",
         "\n",
         "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
         "dependencies, builds a dedicated package library, and runs the script\n",
-        "against it. Leading Rscript options are passed to Rscript for the\n",
-        "user-code phase; trailing args are passed through to the script.\n",
+        "against it. It can also resolve <pkg-ref>, find\n",
+        "<library>/<package>/exec/<command> or <command>.R, and launch it\n",
+        "through its shebang. A bare package ref such as `btw` is treated as\n",
+        "`--from btw btw` when it is not an existing path. `--with` adds explicit\n",
+        "dependencies to the resolved library.\n",
         "\n",
         "ENVIRONMENT:\n",
         "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
@@ -233,11 +346,26 @@ fn print_cache_dir_help() {
     ));
 }
 
-/// Resolve dependencies for `script`, then run it against the resulting library.
-/// Exits the process with the script's own exit code.
-fn cmd_run(
+/// Resolve dependencies for the run target, then run it against the resulting
+/// library. Exits the process with the target's own exit code.
+fn cmd_run(run: RunArgs) -> Result<(), Box<dyn Error>> {
+    match run.target {
+        RunTarget::Script(script) => {
+            cmd_run_script(&script, &run.rscript_args, &run.with, &run.target_args)
+        }
+        RunTarget::PackageExec(target) => {
+            if !run.rscript_args.is_empty() {
+                return Err("Rscript options are only supported for script targets".into());
+            }
+            cmd_run_package_exec(&target, &run.with, &run.target_args)
+        }
+    }
+}
+
+fn cmd_run_script(
     script: &str,
     rscript_args: &[String],
+    with: &[String],
     script_args: &[String],
 ) -> Result<(), Box<dyn Error>> {
     let script_path =
@@ -247,12 +375,12 @@ fn cmd_run(
 
     // Phase 1: private R session resolves deps and materialises the library.
     // Rust sends the extracted YAML frontmatter on stdin and receives the library path.
-    let library = resolve_library(&rscript, &script_path)?;
+    let resolution = resolve_script_library(&rscript, &script_path, with)?;
 
     // Phase 2: run the user's script in an isolated R session.
     let code = run_script(
         &rscript,
-        library.as_deref(),
+        resolution.library.as_deref(),
         &script_path,
         rscript_args,
         script_args,
@@ -260,18 +388,70 @@ fn cmd_run(
     std::process::exit(code);
 }
 
+fn cmd_run_package_exec(
+    target: &PackageExecTarget,
+    with: &[String],
+    target_args: &[String],
+) -> Result<(), Box<dyn Error>> {
+    if target.package_ref.is_empty() || target.executable.is_empty() {
+        return Err("package executable targets must have a package ref and command".into());
+    }
+
+    let rscript = rscript_command();
+    let resolution = resolve_package_exec_library(&rscript, &target.package_ref, with)?;
+    let library = resolution
+        .library
+        .ok_or("dependency resolver did not return a library path")?;
+    let executable =
+        find_package_executable(&library, target.package_name.as_deref(), &target.executable)?;
+    let code = run_package_executable(&rscript, &library, &executable, target_args)?;
+    std::process::exit(code);
+}
+
+struct Resolution {
+    library: Option<PathBuf>,
+}
+
+fn resolve_script_library(
+    rscript: &OsStr,
+    script: &Path,
+    extra_deps: &[String],
+) -> Result<Resolution, Box<dyn Error>> {
+    let frontmatter = read_op_frontmatter_to_string(script)?;
+    resolve_library(rscript, &frontmatter, None, extra_deps)
+}
+
+fn resolve_package_exec_library(
+    rscript: &OsStr,
+    package_ref: &str,
+    extra_deps: &[String],
+) -> Result<Resolution, Box<dyn Error>> {
+    resolve_library(rscript, "", Some(package_ref), extra_deps)
+}
+
 /// Phase 1 — run the embedded driver in a private R session and return the
 /// path to the materialised library.
-fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> {
+fn resolve_library(
+    rscript: &OsStr,
+    frontmatter: &str,
+    from_dep: Option<&str>,
+    extra_deps: &[String],
+) -> Result<Resolution, Box<dyn Error>> {
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let out = unique_path(&tmp, "ir-libpath", "txt");
-    let frontmatter = read_op_frontmatter_to_string(script)?;
     fs::write(&driver, RESOLVE_DRIVER)?;
 
-    let mut child = Command::new(rscript)
-        .arg(&driver)
-        .arg(&out)
+    let mut cmd = Command::new(rscript);
+    cmd.arg(&driver).arg(&out);
+    if let Some(from_dep) = from_dep {
+        cmd.arg("--from").arg(from_dep);
+    }
+    for dep in extra_deps {
+        cmd.arg("--with").arg(dep);
+    }
+
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -299,12 +479,139 @@ fn resolve_library(rscript: &OsStr, script: &Path) -> Result<Option<PathBuf>, Bo
         return Err("dependency resolution failed".into());
     }
 
-    let path = result.trim();
-    Ok(if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
+    let library = result.trim();
+
+    Ok(Resolution {
+        library: if library.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(library))
+        },
     })
+}
+
+fn find_package_executable(
+    library: &Path,
+    package: Option<&str>,
+    executable: &str,
+) -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(package) = package {
+        let exec_dir = library.join(package).join("exec");
+        return find_package_executable_in_dir(&exec_dir, executable).ok_or_else(|| {
+            if !exec_dir.is_dir() {
+                format!(
+                    "package `{package}` does not have an exec directory in `{}`",
+                    library.display()
+                )
+                .into()
+            } else {
+                format!(
+                    "could not find executable `{executable}` or `{executable}.R` in `{}`",
+                    exec_dir.display()
+                )
+                .into()
+            }
+        });
+    }
+
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(library)
+        .map_err(|e| format!("cannot read resolved library `{}`: {e}", library.display()))?
+    {
+        let exec_dir = entry?.path().join("exec");
+        if let Some(path) = find_package_executable_in_dir(&exec_dir, executable) {
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(format!(
+            "could not find executable `{executable}` or `{executable}.R` in any package under `{}`",
+            library.display()
+        )
+        .into()),
+        _ => Err(format!(
+            "found multiple executables named `{executable}` in `{}`; use a package ref whose installed package name can be inferred",
+            library.display()
+        )
+        .into()),
+    }
+}
+
+fn find_package_executable_in_dir(exec_dir: &Path, executable: &str) -> Option<PathBuf> {
+    let candidates = [
+        exec_dir.join(executable),
+        exec_dir.join(format!("{executable}.R")),
+    ];
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Box<dyn Error>> {
+    let mut entries = Vec::new();
+
+    let rscript_path = Path::new(rscript);
+    if let Some(parent) = rscript_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        entries.push(parent.to_path_buf());
+    }
+
+    for entry in fs::read_dir(library)
+        .map_err(|e| format!("cannot read resolved library `{}`: {e}", library.display()))?
+    {
+        let exec = entry?.path().join("exec");
+        if exec.is_dir() {
+            entries.push(exec);
+        }
+    }
+
+    let current_path = env::var_os("PATH").unwrap_or_default();
+    entries.extend(env::split_paths(&current_path));
+    Ok(env::join_paths(entries)?)
+}
+
+fn run_package_executable(
+    rscript: &OsStr,
+    library: &Path,
+    executable: &Path,
+    args: &[String],
+) -> Result<i32, Box<dyn Error>> {
+    let mut cmd = Command::new(executable);
+    cmd.args(args)
+        .env("R_LIBS", library)
+        .env("PATH", resolved_runtime_path(library, rscript)?);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(program_spawn_error(executable.as_os_str(), cmd.exec()).into())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = cmd
+            .status()
+            .map_err(|e| program_spawn_error(executable.as_os_str(), e))?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
+fn program_spawn_error(program: &OsStr, err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        format!("could not find `{}`", program.to_string_lossy())
+    } else {
+        format!("failed to launch `{}`: {err}", program.to_string_lossy())
+    }
 }
 
 /// Phase 2 — run `script` in an ordinary R session pointed at `library`.

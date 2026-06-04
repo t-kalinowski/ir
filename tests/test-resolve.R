@@ -95,11 +95,27 @@ test_that("ir_deps handles YAML sequence dependencies", {
                c("dplyr>=1.0", "tidyr"))
 })
 
+test_that("ir_deps includes explicit command dependencies", {
+  expect_equal(
+    ir_deps(list(dependencies = "dplyr"),
+            extra_deps = c("cli>=3.0", "jsonlite"),
+            from_dep = "btw"),
+    c("dplyr", "btw", "cli>=3.0", "jsonlite")
+  )
+})
+
 test_that("ir_deps returns character(0) when there are no dependencies", {
   expect_equal(ir_deps(list()), character())
   expect_equal(ir_deps(list(dependencies = NULL)), character())
   expect_equal(ir_deps(list(dependencies = c("dplyr", "", "  ", "tidyr"))),
                c("dplyr", "tidyr"))
+})
+
+test_that("ir_resolve_args parses resolver-only options", {
+  expect_equal(
+    ir_resolve_args(c("out.txt", "--from", "btw", "--with", "cli")),
+    list(out_file = "out.txt", from_dep = "btw", extra_deps = "cli")
+  )
 })
 
 # --- exclude-after snapshots -----------------------------------------------

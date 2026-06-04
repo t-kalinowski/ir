@@ -64,7 +64,7 @@ fn help_is_shown_for_help_flag_and_no_args() {
         assert!(stdout.contains("ir run"), "args {args:?}: {stdout}");
         assert!(
             stdout.contains(
-                "\n    ir run [Rscript-options...] <script.R> [args...]\n    ir cache <command>\n"
+                "\n    ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]\n    ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]\n    ir run [--with <pkg-ref>]... <pkg-ref> [args...]\n    ir cache <command>\n"
             ),
             "args {args:?}: {stdout}"
         );
@@ -93,7 +93,11 @@ fn run_help_flag_shows_help() {
     assert!(stdout.contains("Run an R script"), "{stdout}");
     assert!(stdout.contains("USAGE"), "{stdout}");
     assert!(
-        stdout.contains("ir run [Rscript-options...] <script.R> [args...]"),
+        stdout.contains("ir run [--with <pkg-ref>]... [Rscript-options...] <script.R> [args...]"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ir run [--with <pkg-ref>]... --from <pkg-ref> <command> [args...]"),
         "{stdout}"
     );
     assert!(out.stderr.is_empty());
@@ -104,6 +108,14 @@ fn run_with_missing_script_errors() {
     let out = ir().args(["run", "/no/such/ir-script.R"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read script"));
+}
+
+#[test]
+fn run_package_exec_rejects_leading_rscript_args() {
+    let out = ir().args(["run", "--vanilla", "btw"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("Rscript options are only supported for script targets"));
 }
 
 #[test]
@@ -281,6 +293,324 @@ cat('unused by fake Rscript\n')
     assert!(stdout.contains("pak progress stdout"), "{stdout}");
     assert!(stdout.contains("user script stdout"), "{stdout}");
     assert!(stderr.contains("pak progress stderr"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_forwards_with_dependencies_to_resolver() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let script = unique_path("ir-script", "R");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+
+if [ "$#" = "2" ]; then
+  case "$2" in
+    *ir-libpath*) ;;
+    *) test "$2" = "--script-arg"; echo "script with deps ran"; exit 0 ;;
+  esac
+fi
+
+if [ "$#" = "4" ]; then
+  test "$3" = "--with"
+  test "$4" = "cli"
+  actual="$(mktemp)"
+  expected="$(mktemp)"
+  cat > "$actual"
+  cat > "$expected" <<'EOF'
+dependencies:
+  - dplyr
+EOF
+  if ! cmp -s "$actual" "$expected"; then
+    echo "unexpected resolver stdin" >&2
+    cat "$actual" >&2
+    exit 10
+  fi
+  : > "$2"
+  exit 0
+fi
+
+test "$1" = "--script-arg"
+echo "script with deps ran"
+"#,
+    );
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| dependencies:
+#|   - dplyr
+
+cat('unused by fake Rscript\n')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args([
+            "run",
+            "--with",
+            "cli",
+            script.to_str().unwrap(),
+            "--script-arg",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_file(&script);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("script with deps ran"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_resolves_target_and_forwards_with_dependencies() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let library = unique_path("ir-library", "dir");
+    let exec_dir = library.join("btw").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    let app = exec_dir.join("btw");
+
+    write_executable(
+        &app,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "${{R_LIBS:-}}" = "{}"
+test "$1" = "--flag"
+test "$2" = "value"
+echo "package exec ran"
+"#,
+            library.display()
+        ),
+    );
+
+    write_executable(
+        &fake_rscript,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "$#" = "6"
+test "$3" = "--from"
+test "$4" = "btw"
+test "$5" = "--with"
+test "$6" = "cli>=3.0"
+actual="$(mktemp)"
+cat > "$actual"
+if [ -s "$actual" ]; then
+  echo "unexpected resolver stdin" >&2
+  cat "$actual" >&2
+  exit 10
+fi
+printf '%s\n' "{}" > "$2"
+"#,
+            library.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args([
+            "run", "--with", "cli>=3.0", "--from", "btw", "btw", "--flag", "value",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_dir_all(&library);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("package exec ran"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_accepts_self_named_shortcut_and_dot_r_entrypoint() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let library = unique_path("ir-library", "dir");
+    let exec_dir = library.join("btw").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    let app = exec_dir.join("btw.R");
+
+    write_executable(
+        &app,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "${{R_LIBS:-}}" = "{}"
+test "$1" = "arg"
+echo "package exec dot r ran"
+"#,
+            library.display()
+        ),
+    );
+
+    write_executable(
+        &fake_rscript,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "$#" = "4"
+test "$3" = "--from"
+test "$4" = "btw"
+actual="$(mktemp)"
+cat > "$actual"
+if [ -s "$actual" ]; then
+  echo "unexpected resolver stdin" >&2
+  cat "$actual" >&2
+  exit 10
+fi
+printf '%s\n' "{}" > "$2"
+"#,
+            library.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "btw", "arg"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_dir_all(&library);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("package exec dot r ran"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_uses_resolved_package_exec_dirs_for_env_shebangs() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let library = unique_path("ir-library", "dir");
+    let app_dir = library.join("btw").join("exec");
+    let rapp_dir = library.join("Rapp").join("exec");
+    fs::create_dir_all(&app_dir).unwrap();
+    fs::create_dir_all(&rapp_dir).unwrap();
+    let app = app_dir.join("btw");
+    let rapp = rapp_dir.join("Rapp");
+
+    write_executable(
+        &app,
+        r#"#!/usr/bin/env Rapp
+"#,
+    );
+    write_executable(
+        &rapp,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "${{R_LIBS:-}}" = "{}"
+test "$1" = "{}"
+test "$2" = "arg"
+echo "Rapp shebang ran"
+"#,
+            library.display(),
+            app.display()
+        ),
+    );
+
+    write_executable(
+        &fake_rscript,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "$#" = "4"
+test "$3" = "--from"
+test "$4" = "btw"
+cat > /dev/null
+printf '%s\n' "{}" > "$2"
+"#,
+            library.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--from", "btw", "btw", "arg"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_dir_all(&library);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Rapp shebang ran"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_package_exec_accepts_remote_from_package() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+    let library = unique_path("ir-library", "dir");
+    let exec_dir = library.join("Rapp").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    let app = exec_dir.join("Rapp");
+
+    write_executable(
+        &app,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "${{R_LIBS:-}}" = "{}"
+echo "remote package exec ran"
+"#,
+            library.display()
+        ),
+    );
+
+    write_executable(
+        &fake_rscript,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+test "$#" = "4"
+test "$3" = "--from"
+test "$4" = "github::r-lib/Rapp"
+actual="$(mktemp)"
+cat > "$actual"
+if [ -s "$actual" ]; then
+  echo "unexpected resolver stdin" >&2
+  cat "$actual" >&2
+  exit 10
+fi
+printf '%s\n' "{}" > "$2"
+"#,
+            library.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--from", "github::r-lib/Rapp", "Rapp"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+    let _ = fs::remove_dir_all(&library);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("remote package exec ran"),
+        "{out:?}"
+    );
 }
 
 #[cfg(unix)]
