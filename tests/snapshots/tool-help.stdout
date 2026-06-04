@@ -1,14 +1,11 @@
 Run package executables
 
-USAGE:
-    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]
-    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]
-    ir tool install [--with <pkg>]... [--r-version <spec>] [--bin-dir <dir>] [--force] <pkg-ref>
+Usage: ir tool [COMMAND]
 
-COMMANDS:
-    run      Resolve a package and run an executable from its exec directory
-    install  Resolve a package and install launchers for its exec directory
+Commands:
+  run      Resolve a package and run an executable from its exec directory
+  install  Install package executable launchers
+  help     Print this message or the help of the given subcommand(s)
 
-ENVIRONMENT:
-    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir("ir", "cache"))
-    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)
+Options:
+  -h, --help  Print help

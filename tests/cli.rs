@@ -19,6 +19,20 @@ fn ir() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ir"))
 }
 
+fn ir_bin_name() -> String {
+    Path::new(env!("CARGO_BIN_EXE_ir"))
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn normalize_cli_output(output: &[u8]) -> String {
+    String::from_utf8_lossy(output)
+        .replace("\r\n", "\n")
+        .replace(&ir_bin_name(), "ir")
+}
+
 fn assert_help_snapshot(name: &str, args: &[&str]) {
     let out = ir().args(args).output().unwrap();
     assert!(out.status.success(), "{args:?} should exit 0");
@@ -30,7 +44,7 @@ fn assert_help_snapshot(name: &str, args: &[&str]) {
         .join(format!("{name}.stdout"));
     let expected = fs::read_to_string(&snapshot)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", snapshot.display()));
-    let actual = String::from_utf8(out.stdout).unwrap();
+    let actual = normalize_cli_output(&out.stdout);
     assert_eq!(actual, expected, "{args:?} changed {}", snapshot.display());
 }
 
@@ -117,11 +131,17 @@ fn write_r_home_wrappers(r_home: &Path, real_r: &Path, real_rscript: &Path, mark
 }
 
 #[test]
+fn version_flag_reports_version() {
+    let out = ir().arg("--version").output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("ir 0."));
+}
+
+#[test]
 fn help_outputs_match_snapshots() {
     for (name, args) in [
         ("help", &["--help"][..]),
         ("help", &["-h"]),
-        ("help", &[]),
         ("run-help", &["run", "--help"]),
         ("run-help", &["run", "-h"]),
         ("tool-help", &["tool", "--help"]),
@@ -142,44 +162,126 @@ fn help_outputs_match_snapshots() {
 }
 
 #[test]
-fn version_flag_reports_version() {
-    let out = ir().arg("--version").output().unwrap();
-    assert!(out.status.success());
-    assert!(String::from_utf8_lossy(&out.stdout).starts_with("ir 0."));
-}
+fn help_is_generated_by_clap() {
+    let bin = ir_bin_name();
+    let cases = [
+        (
+            vec!["--help"],
+            true,
+            vec![
+                format!("Usage: {bin} [COMMAND]"),
+                "Commands:".to_string(),
+                "run".to_string(),
+            ],
+        ),
+        (
+            vec![],
+            false,
+            vec![
+                format!("Usage: {bin} [COMMAND]"),
+                "Commands:".to_string(),
+                "cache".to_string(),
+            ],
+        ),
+        (
+            vec!["run", "--help"],
+            true,
+            vec![
+                format!("Usage: {bin} run [OPTIONS] [ARGS]..."),
+                "-e, --expr <EXPR>".to_string(),
+                "--with <PKG>".to_string(),
+            ],
+        ),
+        (
+            vec!["tool", "run", "--help"],
+            true,
+            vec![
+                format!("Usage: {bin} tool run [OPTIONS] [ARGS]..."),
+                "--from <PKG_REF>".to_string(),
+                "--with <PKG>".to_string(),
+            ],
+        ),
+        (
+            vec!["tool", "install", "--help"],
+            true,
+            vec![
+                format!("Usage: {bin} tool install [OPTIONS] <PKG_REF>"),
+                "--bin-dir <DIR>".to_string(),
+                "--force".to_string(),
+            ],
+        ),
+        (
+            vec!["cache", "--help"],
+            true,
+            vec![
+                format!("Usage: {bin} cache [COMMAND]"),
+                "clean".to_string(),
+                "dir".to_string(),
+            ],
+        ),
+        (
+            vec!["cache", "clean", "--help"],
+            true,
+            vec![
+                format!("Usage: {bin} cache clean [OPTIONS]"),
+                "--force".to_string(),
+                "--help".to_string(),
+            ],
+        ),
+    ];
 
-#[test]
-fn help_is_shown_for_help_flag_and_no_args() {
-    for args in [vec!["--help"], vec![]] {
+    for (args, should_succeed, expected) in cases {
         let out = ir().args(&args).output().unwrap();
-        assert!(out.status.success(), "args {args:?} should exit 0");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            stdout.contains("self-describing R scripts"),
-            "args {args:?}: {stdout}"
+        assert_eq!(
+            out.status.success(),
+            should_succeed,
+            "args {args:?} had unexpected status"
         );
-        assert!(!stdout.contains("uv-style"), "args {args:?}: {stdout}");
-        assert!(stdout.contains("USAGE"), "args {args:?}: {stdout}");
-        assert!(stdout.contains("ir run"), "args {args:?}: {stdout}");
-        assert!(
-            stdout.contains(concat!(
-                "\n    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
-                "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] -e <expr> [args...]\n",
-                "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]\n",
-                "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]\n",
-                "    ir tool install [--with <pkg>]... [--r-version <spec>] [--bin-dir <dir>] [--force] <pkg-ref>\n",
-                "    ir cache <command>\n"
-            )),
-            "args {args:?}: {stdout}"
-        );
+        let help = if should_succeed {
+            assert!(
+                out.stderr.is_empty(),
+                "args {args:?} should not write stderr"
+            );
+            String::from_utf8_lossy(&out.stdout)
+        } else {
+            assert!(
+                out.stdout.is_empty(),
+                "args {args:?} should not write stdout"
+            );
+            String::from_utf8_lossy(&out.stderr)
+        };
+        assert!(!help.contains("Rscript-options"), "args {args:?}: {help}");
+        for needle in expected {
+            assert!(help.contains(&needle), "args {args:?}: {help}");
+        }
     }
 }
 
 #[test]
 fn unknown_command_errors() {
     let out = ir().arg("frobnicate").output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown command"));
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unrecognized subcommand 'frobnicate'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("Usage: {} [COMMAND]", ir_bin_name())),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn cache_clean_unknown_flag_reports_usage() {
+    let out = ir().args(["cache", "clean", "--bogus"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument '--bogus'"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Usage: {} cache clean [OPTIONS]", ir_bin_name())),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -194,12 +296,13 @@ fn run_help_flag_shows_help() {
     let out = ir().args(["run", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Run an R script"), "{stdout}");
-    assert!(stdout.contains("USAGE"), "{stdout}");
     assert!(
-        stdout.contains(
-            "ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]"
-        ),
+        stdout.contains("Run a script or inline R expression"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Usage:"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("Usage: {} run [OPTIONS] [ARGS]...", ir_bin_name())),
         "{stdout}"
     );
     assert!(out.stderr.is_empty());
@@ -224,12 +327,16 @@ fn tool_run_help_flag_shows_help() {
     let out = ir().args(["tool", "run", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Run a package executable"), "{stdout}");
-    assert!(stdout.contains("USAGE"), "{stdout}");
     assert!(
-        stdout.contains(
-            "ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]"
-        ),
+        stdout.contains("Resolve a package and run an executable"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Usage:"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "Usage: {} tool run [OPTIONS] [ARGS]...",
+            ir_bin_name()
+        )),
         "{stdout}"
     );
     assert!(out.stderr.is_empty());
@@ -1130,8 +1237,9 @@ fn tool_install_rejects_from_option() {
         .args(["tool", "install", "--from", "btw", "btw"])
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected option `--from`"));
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument '--from'"), "{stderr}");
 }
 
 #[cfg(unix)]
@@ -1439,6 +1547,45 @@ echo "ran inline expr"
 
 #[cfg(unix)]
 #[test]
+fn run_expr_long_alias_evaluates_inline_expression() {
+    let fake_rscript = unique_path("ir-fake-rscript", "sh");
+
+    write_executable(
+        &fake_rscript,
+        r#"#!/bin/sh
+set -eu
+if [ "${IR_RESOLVE_RESULT_FILE:-}" != "" ]; then
+  actual="$(cat)"
+  if [ -n "$actual" ]; then
+    echo "unexpected resolver stdin: $actual" >&2
+    exit 10
+  fi
+  : > "$IR_RESOLVE_RESULT_FILE"
+  exit 0
+fi
+test "$1" = "-e"
+test "$2" = "1 + 1"
+echo "ran long expr alias"
+"#,
+    );
+
+    let out = ir()
+        .env("IR_RSCRIPT", &fake_rscript)
+        .args(["run", "--expr", "1 + 1"])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&fake_rscript);
+
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ran long expr alias"),
+        "{out:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_uses_latest_installed_r_without_rig_available() {
     let Some((real_r, real_rscript)) = real_r_tools() else {
         return;
@@ -1662,9 +1809,9 @@ echo "ran two exprs"
 #[test]
 fn run_e_requires_an_expression() {
     let out = ir().args(["run", "-e"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("requires an expression"),
+        String::from_utf8_lossy(&out.stderr).contains("a value is required for '--expr <EXPR>'"),
         "{out:?}"
     );
 }

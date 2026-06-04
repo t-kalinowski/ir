@@ -1,35 +1,13 @@
-Run an R script
+Run a script or inline R expression
 
-USAGE:
-    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]
-    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] -e <expr> [-e <expr>]... [args...]
+Usage: ir run [OPTIONS] [ARGS]...
 
-`ir run` reads the YAML frontmatter from <script.R>, resolves its
-dependencies, builds a dedicated package library, and runs the script
-against it. With -e it instead evaluates inline R expressions (mirroring
-Rscript) against the same isolated library. --r-version selects the R
-version with rig and overrides script frontmatter. Leading Rscript options
-are passed to Rscript for the user-code phase; trailing args are passed
-through to the program.
+Arguments:
+  [ARGS]...  Rscript options, script path, and script arguments
 
-OPTIONS:
-    -e <expr>     Evaluate an inline R expression instead of a script file.
-                  May be repeated; runs in place of <script.R>.
-    --with <pkg>  Add a dependency for this run, merged with any declared
-                  in the script frontmatter. May be repeated and accepts a
-                  comma-separated list (e.g. --with dplyr,tidyr). Uses the
-                  same spec format as `dependencies:` (e.g. cli==3.6.6).
-    --r-version <spec>
-                  Select the R version for this run with rig. Overrides
-                  `r-version:` in script frontmatter.
-    --isolated    Disable the user library (R_LIBS_USER) so the run cannot
-                  borrow undeclared packages from it.
-
-Quarto documents (.qmd, .Rmd) are also supported: declare
-dependencies under an `ir:` key in the document's YAML frontmatter
-and ir renders them with `quarto render`.
-
-ENVIRONMENT:
-    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir("ir", "cache"))
-    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)
-    IR_QUARTO      path to the quarto executable (default: quarto on PATH)
+Options:
+  -e, --expr <EXPR>       Evaluate an inline R expression instead of a script file
+      --with <PKG>        Add a dependency for this run; may be repeated
+      --r-version <SPEC>  Select the R version for this run with rig
+      --isolated          Disable the user library for this run
+  -h, --help              Print help

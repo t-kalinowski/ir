@@ -1,26 +1,13 @@
 Install package executable launchers
 
-USAGE:
-    ir tool install [--with <pkg>]... [--r-version <spec>] [--bin-dir <dir>] [--force] <pkg-ref>
+Usage: ir tool install [OPTIONS] <PKG_REF>
 
-`ir tool install` resolves <pkg-ref>, scans that package's exec directory
-for files whose shebang names Rscript or Rapp, and writes lightweight
-launchers into <dir>. Installed launchers are isolated: R_LIBS points at
-the resolved ir cache library and R_LIBS_USER is set to NULL.
+Arguments:
+  <PKG_REF>  Package ref that resolves to the package exposing exec/ launchers
 
-OPTIONS:
-    --with <pkg>  Add a dependency for installed launchers, resolved
-                  alongside the provider package. May be repeated and
-                  accepts a comma-separated list.
-    --r-version <spec>
-                  Select the R version for installed launchers with rig.
-    --bin-dir <dir>
-                  Directory where launchers are written. Defaults to
-                  IR_TOOL_BIN_DIR, RAPP_BIN_DIR, XDG_BIN_HOME,
-                  XDG_DATA_HOME/../bin, or ~/.local/bin on Unix.
-    --force       Overwrite an existing launcher path.
-
-ENVIRONMENT:
-    IR_CACHE_DIR      override the cache dir (default: tools::R_user_dir("ir", "cache"))
-    IR_RSCRIPT        path to the Rscript executable (default: Rscript on PATH)
-    IR_TOOL_BIN_DIR   default launcher install directory
+Options:
+      --with <PKG>        Add a dependency for installed launchers; may be repeated
+      --r-version <SPEC>  Select the R version for installed launchers with rig
+      --bin-dir <DIR>     Directory where launchers are written
+      --force             Overwrite an existing launcher path
+  -h, --help              Print help
