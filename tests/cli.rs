@@ -77,6 +77,72 @@ fn e2e_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn cold_cache() -> bool {
+    std::env::var_os("IR_TEST_COLD_CACHE").is_some()
+}
+
+struct TestDir {
+    path: PathBuf,
+    cleanup: bool,
+}
+
+impl TestDir {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn persistent_test_dir(name: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(name);
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn e2e_cache_dir(prefix: &str) -> TestDir {
+    if cold_cache() {
+        TestDir {
+            path: unique_dir(prefix),
+            cleanup: true,
+        }
+    } else {
+        TestDir {
+            path: persistent_test_dir("ir-e2e-cache"),
+            cleanup: false,
+        }
+    }
+}
+
+fn e2e_reticulate_dir(prefix: &str, warm_name: &str) -> TestDir {
+    if cold_cache() {
+        TestDir {
+            path: unique_dir(prefix),
+            cleanup: true,
+        }
+    } else {
+        TestDir {
+            path: persistent_test_dir(warm_name),
+            cleanup: false,
+        }
+    }
+}
+
+fn scratch_dir(prefix: &str) -> TestDir {
+    TestDir {
+        path: unique_dir(prefix),
+        cleanup: true,
+    }
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -122,16 +188,28 @@ fn assert_command_success(mut command: Command, label: &str) {
 }
 
 fn python_minor_version() -> String {
+    python_probe().0
+}
+
+fn python_executable() -> String {
+    python_probe().1
+}
+
+fn python_probe() -> (String, String) {
     for command in ["python3", "python"] {
         let output = Command::new(command)
             .args([
                 "-c",
-                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(sys.executable)",
             ])
             .output();
         if let Ok(output) = output {
             if output.status.success() {
-                return String::from_utf8(output.stdout).unwrap().trim().to_string();
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let mut lines = stdout.lines();
+                let version = lines.next().unwrap().to_string();
+                let executable = lines.next().unwrap().to_string();
+                return (version, executable);
             }
         }
     }
@@ -327,19 +405,17 @@ fn cache_clean_removes_cache_dir() {
 #[test]
 fn run_script_fixture_resolves_packages_and_isolates_user_library() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-script-cache");
+    let cache_dir = e2e_cache_dir("ir-e2e-script-cache");
     let script = fixture("run/packages.R");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
+        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .args(["--script-arg", "value"])
         .output()
         .unwrap();
-
-    let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=run-script");
@@ -357,17 +433,15 @@ fn run_script_fixture_resolves_packages_and_isolates_user_library() {
 #[test]
 fn run_script_uses_only_the_first_yaml_document() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-multi-doc-cache");
+    let cache_dir = e2e_cache_dir("ir-e2e-multi-doc-cache");
     let script = fixture("run/multiple-documents.R");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
-
-    let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=multi-doc");
@@ -379,7 +453,7 @@ fn run_script_uses_only_the_first_yaml_document() {
 #[test]
 fn run_inline_expression_resolves_with_dependencies() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-inline-cache");
+    let cache_dir = e2e_cache_dir("ir-e2e-inline-cache");
     let expr = r#"
 library(cli)
 library(glue)
@@ -392,8 +466,8 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 "#;
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
+        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args([
             "run",
             "--isolated",
@@ -407,8 +481,6 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
         .output()
         .unwrap();
 
-    let _ = fs::remove_dir_all(&cache_dir);
-
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=inline");
     assert_stdout_contains(&out, "inline.args=inline-arg");
@@ -419,72 +491,83 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
 #[test]
 fn run_quarto_fixture_renders_html_with_resolved_packages() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-qmd-cache");
-    let output_dir = unique_dir("ir-e2e-qmd-output");
+    let cache_dir = e2e_cache_dir("ir-e2e-qmd-cache");
+    let output_dir = scratch_dir("ir-e2e-qmd-output");
     let doc = fixture("run/report.qmd");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
+        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
         .args(["run", "--isolated"])
         .arg(&doc)
         .args(["--to", "html", "--output-dir"])
-        .arg(&output_dir)
+        .arg(output_dir.path())
         .output()
         .unwrap();
 
     assert_success(&out);
 
-    let html = fs::read_to_string(output_dir.join("report.html"))
+    let html = fs::read_to_string(output_dir.path().join("report.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
     assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&output_dir);
 }
 
 #[test]
-fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
+fn run_reticulate_fixture_imports_python_module() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-reticulate-cache");
-    let reticulate_cache = unique_dir("ir-e2e-reticulate-r-cache");
-    let reticulate_data = unique_dir("ir-e2e-reticulate-r-data");
+    let cache_dir = e2e_cache_dir("ir-e2e-reticulate-cache");
+    let reticulate_cache =
+        e2e_reticulate_dir("ir-e2e-reticulate-r-cache", "ir-e2e-reticulate-r-cache");
+    let reticulate_data =
+        e2e_reticulate_dir("ir-e2e-reticulate-r-data", "ir-e2e-reticulate-r-data");
     let script = fixture("run/reticulate.R");
-    let python_version = python_minor_version();
+    let managed_reticulate = cold_cache();
 
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
-        .env("IR_TEST_PYTHON_VERSION", &python_version)
-        .env("R_USER_CACHE_DIR", &reticulate_cache)
-        .env("R_USER_DATA_DIR", &reticulate_data)
-        .env("RETICULATE_PYTHON", "managed")
-        .env("UV_PYTHON_PREFERENCE", "only-system")
+    let mut cmd = ir();
+    cmd.env("IR_CACHE_DIR", cache_dir.path())
+        .env("IR_EXPECT_CACHE_DIR", cache_dir.path())
+        .env("R_USER_CACHE_DIR", reticulate_cache.path())
+        .env("R_USER_DATA_DIR", reticulate_data.path());
+
+    if managed_reticulate {
+        cmd.env("IR_TEST_RETICULATE_MANAGED", "1")
+            .env("IR_TEST_PYTHON_VERSION", python_minor_version())
+            .env("RETICULATE_PYTHON", "managed")
+            .env("UV_PYTHON_PREFERENCE", "only-system");
+    } else {
+        cmd.env("RETICULATE_PYTHON", python_executable())
+            .env("RETICULATE_USE_MANAGED_VENV", "no");
+    }
+
+    let out = cmd
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
 
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&reticulate_cache);
-    let _ = fs::remove_dir_all(&reticulate_data);
-
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=reticulate");
     assert_stdout_contains(&out, "reticulate.lib_in_cache=true");
-    assert_stdout_contains(&out, "reticulate.ephemeral=true");
+    assert_stdout_contains(
+        &out,
+        if managed_reticulate {
+            "reticulate.ephemeral=true"
+        } else {
+            "reticulate.ephemeral=false"
+        },
+    );
     assert_stdout_contains(&out, "reticulate.json={\"ok\": true}");
 }
 
 #[test]
 fn tool_run_executes_real_package_entrypoint() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-tool-cache");
+    let cache_dir = e2e_cache_dir("ir-e2e-tool-cache");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
         .args([
             "tool",
             "run",
@@ -498,8 +581,6 @@ fn tool_run_executes_real_package_entrypoint() {
         .output()
         .unwrap();
 
-    let _ = fs::remove_dir_all(&cache_dir);
-
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
@@ -508,11 +589,11 @@ fn tool_run_executes_real_package_entrypoint() {
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-tool-install-cache");
-    let bin_dir = unique_dir("ir-e2e-tool-install-bin");
+    let cache_dir = e2e_cache_dir("ir-e2e-tool-install-cache");
+    let bin_dir = scratch_dir("ir-e2e-tool-install-bin");
 
     let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir.path())
         .args([
             "tool",
             "install",
@@ -520,7 +601,7 @@ fn tool_install_installs_real_package_entrypoint() {
             "docopt,pkgsearch,prettyunits",
             "--bin-dir",
         ])
-        .arg(&bin_dir)
+        .arg(bin_dir.path())
         .arg("cli")
         .output()
         .unwrap();
@@ -529,11 +610,8 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "Installed");
     assert_stdout_contains(&out, "search");
 
-    let launcher = launcher_path(&bin_dir, "search");
+    let launcher = launcher_path(bin_dir.path(), "search");
     let out = Command::new(&launcher).arg("--help").output().unwrap();
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
