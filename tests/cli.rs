@@ -139,6 +139,20 @@ fn python_minor_version() -> String {
     panic!("python3 or python is required for the reticulate fixture");
 }
 
+/// Version of the default R on `PATH` — the one `ir` uses without `--r-version`.
+/// `None` when that Rscript can't be run or reports nothing.
+fn default_r_version() -> Option<String> {
+    let out = Command::new(rscript())
+        .args(["-e", "cat(as.character(getRversion()))"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
+}
+
 #[test]
 fn ci_dependencies_are_available() {
     let r_expr = r#"
@@ -440,6 +454,58 @@ fn run_quarto_fixture_renders_html_with_resolved_packages() {
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
     assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn run_quarto_selects_requested_r_version() {
+    let _guard = e2e_lock();
+
+    // Opt-in: needs rig plus a non-default R installed (CI provisions both).
+    // `ir`'s `--r-version` path resolves through rig unconditionally, so with a
+    // single R there is nothing to select.
+    let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
+        eprintln!(
+            "SKIP run_quarto_selects_requested_r_version: set IR_TEST_R_VERSION to a rig-installed, non-default R version"
+        );
+        return;
+    };
+
+    // Selecting the version the default path already uses would prove nothing.
+    if default_r_version().as_deref() == Some(target.as_str()) {
+        eprintln!(
+            "SKIP run_quarto_selects_requested_r_version: IR_TEST_R_VERSION ({target}) matches the default R; pick a different installed version"
+        );
+        return;
+    }
+
+    let cache_dir = unique_dir("ir-e2e-rversion-cache");
+    let output_dir = unique_dir("ir-e2e-rversion-output");
+    let doc = fixture("run/r-version-select.qmd");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--r-version"])
+        .arg(&target)
+        .arg(&doc)
+        .args(["--to", "html", "--output-dir"])
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+
+    let html = fs::read_to_string(output_dir.join("r-version-select.html"))
+        .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
+    assert!(html.contains("ir.fixture=r-version"), "{html}");
+    assert!(
+        html.contains(&format!("version.r_version={target}")),
+        "rendered under a different R than the requested {target}\n{html}"
+    );
+    assert!(html.contains("version.lib_in_cache=true"), "{html}");
 
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&output_dir);
