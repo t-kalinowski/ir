@@ -1,0 +1,149 @@
+[
+  {
+    "objectID": "reference.html",
+    "href": "reference.html",
+    "title": "Reference",
+    "section": "",
+    "text": "This page renders the current CLI help by running the ir executable on PATH during the Quarto render."
+  },
+  {
+    "objectID": "reference.html#ir",
+    "href": "reference.html#ir",
+    "title": "Reference",
+    "section": "ir",
+    "text": "ir\n\n\nRun self-describing R scripts\n\nUsage: ir [COMMAND]\n\nCommands:\n  run    Run a script or inline R expression\n  tool   Run package executables\n  cache  Manage ir's cache\n  help   Print this message or the help of the given subcommand(s)\n\nOptions:\n  -h, --help     Print help\n  -V, --version  Print version"
+  },
+  {
+    "objectID": "reference.html#ir-run",
+    "href": "reference.html#ir-run",
+    "title": "Reference",
+    "section": "ir run",
+    "text": "ir run\n\n\nRun a script or inline R expression\n\nUsage: ir run [OPTIONS] [ARGS]...\n\nArguments:\n  [ARGS]...  Rscript options, script path, and script arguments\n\nOptions:\n  -e, --expr &lt;EXPR&gt;       Evaluate an inline R expression instead of a script file\n      --with &lt;PKG&gt;        Add a dependency for this run; may be repeated\n      --r-version &lt;SPEC&gt;  Select the R version for this run with rig\n      --isolated          Disable the user library for this run\n  -h, --help              Print help"
+  },
+  {
+    "objectID": "reference.html#ir-tool",
+    "href": "reference.html#ir-tool",
+    "title": "Reference",
+    "section": "ir tool",
+    "text": "ir tool\n\n\nRun package executables\n\nUsage: ir tool [COMMAND]\n\nCommands:\n  run      Resolve a package and run an executable from its exec directory\n  install  Install package executable launchers\n  help     Print this message or the help of the given subcommand(s)\n\nOptions:\n  -h, --help  Print help"
+  },
+  {
+    "objectID": "reference.html#ir-tool-run",
+    "href": "reference.html#ir-tool-run",
+    "title": "Reference",
+    "section": "ir tool run",
+    "text": "ir tool run\n\n\nResolve a package and run an executable from its exec directory\n\nUsage: ir tool run [OPTIONS] [ARGS]...\n\nArguments:\n  [ARGS]...  Rscript options, package ref or command, and tool arguments\n\nOptions:\n      --from &lt;PKG_REF&gt;    Resolve a package ref and run &lt;command&gt; from its exec/ directory\n      --with &lt;PKG&gt;        Add a dependency for this tool run; may be repeated\n      --r-version &lt;SPEC&gt;  Select the R version for this tool run with rig\n  -h, --help              Print help"
+  },
+  {
+    "objectID": "reference.html#ir-tool-install",
+    "href": "reference.html#ir-tool-install",
+    "title": "Reference",
+    "section": "ir tool install",
+    "text": "ir tool install\n\n\nInstall package executable launchers\n\nUsage: ir tool install [OPTIONS] &lt;PKG_REF&gt;\n\nArguments:\n  &lt;PKG_REF&gt;  Package ref that resolves to the package exposing exec/ launchers\n\nOptions:\n      --with &lt;PKG&gt;        Add a dependency for installed launchers; may be repeated\n      --r-version &lt;SPEC&gt;  Select the R version for installed launchers with rig\n      --bin-dir &lt;DIR&gt;     Directory where launchers are written\n      --force             Overwrite an existing launcher path\n  -h, --help              Print help"
+  },
+  {
+    "objectID": "reference.html#ir-cache",
+    "href": "reference.html#ir-cache",
+    "title": "Reference",
+    "section": "ir cache",
+    "text": "ir cache\n\n\nManage ir's cache\n\nUsage: ir cache [COMMAND]\n\nCommands:\n  clean  Clear the cache, removing all entries\n  dir    Show the cache directory\n  help   Print this message or the help of the given subcommand(s)\n\nOptions:\n  -h, --help  Print help"
+  },
+  {
+    "objectID": "reference.html#ir-cache-dir",
+    "href": "reference.html#ir-cache-dir",
+    "title": "Reference",
+    "section": "ir cache dir",
+    "text": "ir cache dir\n\n\nShow the cache directory\n\nUsage: ir cache dir\n\nOptions:\n  -h, --help  Print help"
+  },
+  {
+    "objectID": "reference.html#ir-cache-clean",
+    "href": "reference.html#ir-cache-clean",
+    "title": "Reference",
+    "section": "ir cache clean",
+    "text": "ir cache clean\n\n\nClear the cache, removing all entries\n\nUsage: ir cache clean [OPTIONS]\n\nOptions:\n      --force  Force removal of the cache\n  -h, --help   Print help"
+  },
+  {
+    "objectID": "tools.html",
+    "href": "tools.html",
+    "title": "Package Tools",
+    "section": "",
+    "text": "ir tool run resolves a package and runs an executable from that package’s exec/ directory.\nFor ir tool run --from pkg tool, ir installs pkg, finds exec/tool or exec/tool.R, and launches it with the selected Rscript. A bare self-named package ref such as ir tool run btw is shorthand for ir tool run --from btw btw.\nTool runs support the same dependency and R selection flags as script runs:\nPackage refs use pak syntax. Quote refs when the shell would otherwise interpret characters such as &gt;."
+  },
+  {
+    "objectID": "tools.html#install-launchers",
+    "href": "tools.html#install-launchers",
+    "title": "Package Tools",
+    "section": "Install launchers",
+    "text": "Install launchers\nir tool install resolves a package, scans that package’s exec/ directory, and writes launchers for the executables it finds.\n$ ir tool install btw\n$ ir tool install github::r-lib/Rapp\n$ ir tool install --bin-dir ~/.local/bin btw\n$ ir tool install --force btw\nInstalled launchers keep the same resolved package ref, dependency additions, and R version selection that were used at install time."
+  },
+  {
+    "objectID": "run.html",
+    "href": "run.html",
+    "title": "Scripts",
+    "section": "",
+    "text": "ir run executes R scripts whose dependency metadata is embedded at the top of the file. The metadata block is YAML, with each line prefixed by #| after an optional shebang.\nRun the file through ir:"
+  },
+  {
+    "objectID": "run.html#dependency-metadata",
+    "href": "run.html#dependency-metadata",
+    "title": "Scripts",
+    "section": "Dependency metadata",
+    "text": "Dependency metadata\nThe script frontmatter supports:\n\ndependencies: package refs resolved with pak.\nr-version: an optional R version requirement selected from installed versions reported by rig.\nexclude-newer: an optional YYYY-MM-DD date that resolves CRAN from the Posit Package Manager snapshot for that date.\n\nSupported version specs include pkg, pkg&gt;=1.0, and pkg==1.2. Other pak refs, including GitHub refs and URL refs, pass through unchanged."
+  },
+  {
+    "objectID": "run.html#inline-runs",
+    "href": "run.html#inline-runs",
+    "title": "Scripts",
+    "section": "Inline runs",
+    "text": "Inline runs\nInline expressions use the same resolver and cache:\n$ ir run -e '1 + 1'\n$ ir run --with cli -e 'cli::cli_alert_success(\"works\")'\n$ ir run --with 'dplyr&gt;=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'\n--with may be repeated and accepts comma-separated packages. With a script, command-line packages are merged with the script metadata; with -e, they are the only declared dependencies."
+  },
+  {
+    "objectID": "run.html#isolation",
+    "href": "run.html#isolation",
+    "title": "Scripts",
+    "section": "Isolation",
+    "text": "Isolation\nBy default, ir prepends the resolved library to .libPaths() and leaves user libraries available as a fallback. Use --isolated to remove the user library for the run:\n$ ir run --isolated script.R\n$ ir run --isolated --with cli -e 'cli::cli_alert_success(\"hi\")'"
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "ir",
+    "section": "",
+    "text": "ir runs standalone R scripts and Quarto documents that declare their runtime requirements in the file itself. It resolves those requirements into cached package libraries and runs the program with the selected R."
+  },
+  {
+    "objectID": "index.html#features",
+    "href": "index.html#features",
+    "title": "ir",
+    "section": "Features",
+    "text": "Features\n\nDeclare dependencies in script frontmatter and run the file directly with ir run.\nResolve packages once, then reuse content-addressed cached libraries on later runs.\nPin CRAN resolution to a Posit Package Manager snapshot with exclude-newer.\nSelect installed R versions with --r-version or frontmatter r-version.\nEvaluate inline expressions with ir run -e and add command-line dependencies with --with.\nRender Quarto documents through ir run report.qmd using the same dependency metadata model.\nRun package-shipped executables from an installed package’s exec/ directory with ir tool run.\nInstall persistent launchers for package executables with ir tool install.\nInspect and clear the cache with ir cache dir and ir cache clean."
+  },
+  {
+    "objectID": "index.html#common-commands",
+    "href": "index.html#common-commands",
+    "title": "ir",
+    "section": "Common commands",
+    "text": "Common commands\n$ ir run script.R\n$ ir run --with cli -e 'cli::cli_alert_success(\"hi\")'\n$ ir run --r-version 4.5 report.qmd --to html\n$ ir tool run --from btw btw --help\n$ ir tool install btw\n$ ir cache dir"
+  },
+  {
+    "objectID": "quarto.html",
+    "href": "quarto.html",
+    "title": "Quarto Documents",
+    "section": "",
+    "text": "ir run renders .qmd and .Rmd files with quarto render. Dependencies live under an ir: key in the document YAML.\n---\ntitle: \"My report\"\nir:\n  dependencies:\n    - dplyr&gt;=1.0\n    - gt@1.0\n  r-version: \"&gt;= 4.0\"\n  exclude-newer: \"2024-01-15\"\n---\nRun the document with the same command used for scripts:\n$ ir run report.qmd\n$ ir run report.qmd --to pdf\n$ ir run --vanilla report.qmd\nir resolves the document dependencies into the same cached library model used for scripts, then launches quarto render. Leading Rscript options are forwarded to Quarto’s knitr engine. Trailing arguments are passed to quarto render.\nWhen an R version is selected by frontmatter or --r-version, ir pins Quarto’s knitr R to that selection."
+  },
+  {
+    "objectID": "cache.html",
+    "href": "cache.html",
+    "title": "Cache",
+    "section": "",
+    "text": "ir caches both dependency resolution and materialised package libraries.\nResolution requests are keyed by declared dependencies, resolution source, R version, and platform. If the same request was already resolved, ir reuses the cached library and does not invoke pak again. Latest resolution includes the current date in the key, so newly published versions are picked up at most once per day. Snapshot resolution uses the exclude-newer date.\nMaterialised libraries are content-addressed by the resolved package set, R version, and platform. Scripts or tools that resolve to the same set share one library."
+  },
+  {
+    "objectID": "cache.html#commands",
+    "href": "cache.html#commands",
+    "title": "Cache",
+    "section": "Commands",
+    "text": "Commands\n$ ir cache dir\n$ ir cache clean\nir cache dir prints the cache root. ir cache clean removes the whole ir cache, including materialised libraries and resolution markers."
+  }
+]
