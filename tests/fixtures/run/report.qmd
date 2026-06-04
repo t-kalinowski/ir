@@ -24,5 +24,6 @@ data <- dplyr::tibble(group = c("a", "b", "a"), value = c(1L, 2L, 3L)) |>
 
 cat("ir.fixture=qmd\n")
 cat("qmd.lib_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
+cat("qmd.pkgs_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
 cat(glue::glue("qmd.result=a:{data$a},b:{data$b}"), "\n", sep = "")
 ```

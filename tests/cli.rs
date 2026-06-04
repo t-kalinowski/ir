@@ -139,6 +139,20 @@ fn python_minor_version() -> String {
     panic!("python3 or python is required for the reticulate fixture");
 }
 
+/// Version of the default R on `PATH` — the one `ir` uses without `--r-version`.
+/// `None` when that Rscript can't be run or reports nothing.
+fn default_r_version() -> Option<String> {
+    let out = Command::new(rscript())
+        .args(["-e", "cat(as.character(getRversion()))"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
+}
+
 #[test]
 fn ci_dependencies_are_available() {
     let r_expr = r#"
@@ -209,16 +223,31 @@ fn website_reference_page_runs_live_cli_help_chunks() {
         "{} should hide chunk source in rendered CLI help",
         reference.display()
     );
+    assert!(
+        source.contains(r#"output <- system2("ir", args, stdout = TRUE, stderr = TRUE)"#),
+        "{} should run live CLI help from ir on PATH",
+        reference.display()
+    );
+    assert!(
+        source.contains(r#"status <- attr(output, "status")"#),
+        "{} should inspect CLI help command status",
+        reference.display()
+    );
+    assert!(
+        source.contains(r#"` failed with status "#),
+        "{} should fail the render when a CLI help command fails",
+        reference.display()
+    );
 
     for expected in [
-        r#"system2("ir", c("--help")"#,
-        r#"system2("ir", c("run", "--help")"#,
-        r#"system2("ir", c("tool", "--help")"#,
-        r#"system2("ir", c("tool", "run", "--help")"#,
-        r#"system2("ir", c("tool", "install", "--help")"#,
-        r#"system2("ir", c("cache", "--help")"#,
-        r#"system2("ir", c("cache", "dir", "--help")"#,
-        r#"system2("ir", c("cache", "clean", "--help")"#,
+        "cli_help()",
+        r#"cli_help("run")"#,
+        r#"cli_help("tool")"#,
+        r#"cli_help("tool", "run")"#,
+        r#"cli_help("tool", "install")"#,
+        r#"cli_help("cache")"#,
+        r#"cli_help("cache", "dir")"#,
+        r#"cli_help("cache", "clean")"#,
     ] {
         assert!(
             source.contains(expected),
@@ -419,6 +448,7 @@ pkg_in_cache <- path.package(c("cli", "glue")) == expected
 cat("ir.fixture=inline\n")
 cat("inline.args=", paste(commandArgs(TRUE), collapse = "|"), "\n", sep = "")
 cat("inline.lib_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
+cat("inline.pkgs_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
 cat(glue::glue("inline.glue={1 + 1}\n"))
 "#;
 
@@ -443,6 +473,7 @@ cat(glue::glue("inline.glue={1 + 1}\n"))
     assert_stdout_contains(&out, "ir.fixture=inline");
     assert_stdout_contains(&out, "inline.args=inline-arg");
     assert_stdout_contains(&out, "inline.lib_in_cache=true");
+    assert_stdout_contains(&out, "inline.pkgs_in_cache=true");
     assert_stdout_contains(&out, "inline.glue=2");
 }
 
@@ -468,6 +499,7 @@ fn run_quarto_fixture_renders_html_with_resolved_packages() {
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
+    assert!(html.contains("qmd.pkgs_in_cache=true"), "{html}");
     assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
 
     let _ = fs::remove_dir_all(&cache_dir);
@@ -475,29 +507,129 @@ fn run_quarto_fixture_renders_html_with_resolved_packages() {
 }
 
 #[test]
-fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
+fn run_quarto_selects_requested_r_version() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-e2e-reticulate-cache");
-    let reticulate_cache = unique_dir("ir-e2e-reticulate-r-cache");
-    let reticulate_data = unique_dir("ir-e2e-reticulate-r-data");
-    let script = fixture("run/reticulate.R");
-    let python_version = python_minor_version();
+
+    // Opt-in: needs rig plus a non-default R installed (CI provisions both).
+    // `ir`'s `--r-version` path resolves through rig unconditionally, so with a
+    // single R there is nothing to select.
+    let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
+        eprintln!(
+            "SKIP run_quarto_selects_requested_r_version: set IR_TEST_R_VERSION to a rig-installed, non-default R version"
+        );
+        return;
+    };
+
+    // Selecting the version the default path already uses would prove nothing.
+    if default_r_version().as_deref() == Some(target.as_str()) {
+        eprintln!(
+            "SKIP run_quarto_selects_requested_r_version: IR_TEST_R_VERSION ({target}) matches the default R; pick a different installed version"
+        );
+        return;
+    }
+
+    let cache_dir = unique_dir("ir-e2e-rversion-cache");
+    let output_dir = unique_dir("ir-e2e-rversion-output");
+    let doc = fixture("run/r-version-select.qmd");
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_TEST_PYTHON_VERSION", &python_version)
-        .env("R_USER_CACHE_DIR", &reticulate_cache)
-        .env("R_USER_DATA_DIR", &reticulate_data)
-        .env("RETICULATE_PYTHON", "managed")
-        .env("UV_PYTHON_PREFERENCE", "only-system")
+        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        // The resolver inherits the environment, so an ambient R_LIBS_USER (CI's
+        // setup-r-dependencies exports one) would point the selected R at a
+        // library built for the *default* R, loading an ABI-mismatched
+        // secretbase. A real `--r-version` user has no R_LIBS_USER exported; drop
+        // it so the requested R uses its own toolchain.
+        .env_remove("R_LIBS_USER")
+        .args(["run", "--isolated", "--r-version"])
+        .arg(&target)
+        .arg(&doc)
+        .args(["--to", "html", "--output-dir"])
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+
+    let html = fs::read_to_string(output_dir.join("r-version-select.html"))
+        .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
+    assert!(html.contains("ir.fixture=r-version"), "{html}");
+    assert!(
+        html.contains(&format!("version.r_version=[{target}]")),
+        "rendered under a different R than the requested {target}\n{html}"
+    );
+    assert!(html.contains("version.lib_in_cache=true"), "{html}");
+    assert!(html.contains("version.jsonlite_in_cache=true"), "{html}");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn run_script_frontmatter_selects_r_version() {
+    let _guard = e2e_lock();
+
+    // The fixture pins `#| r-version` to this version, so the test only runs
+    // when CI has provisioned that exact R through rig (signalled by
+    // IR_TEST_R_VERSION). Unlike the flag, the frontmatter value can't come from
+    // the environment because it lives in the static fixture.
+    const FIXTURE_R_VERSION: &str = "4.4.3";
+    if std::env::var("IR_TEST_R_VERSION").ok().as_deref() != Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP run_script_frontmatter_selects_r_version: set IR_TEST_R_VERSION={FIXTURE_R_VERSION} (rig plus that R) to match the fixture's `#| r-version`"
+        );
+        return;
+    }
+
+    // Selecting the version the default path already uses would prove nothing.
+    if default_r_version().as_deref() == Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP run_script_frontmatter_selects_r_version: the fixture's R ({FIXTURE_R_VERSION}) matches the default R; nothing to select"
+        );
+        return;
+    }
+
+    let cache_dir = unique_dir("ir-e2e-rversion-fm-cache");
+    let script = fixture("run/r-version-frontmatter.R");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXPECT_CACHE_DIR", &cache_dir)
+        // See run_quarto_selects_requested_r_version: drop the ambient
+        // R_LIBS_USER so the frontmatter-selected R resolves against its own
+        // toolchain rather than the default R's (ABI-mismatched) library.
+        .env_remove("R_LIBS_USER")
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
 
     let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&reticulate_cache);
-    let _ = fs::remove_dir_all(&reticulate_data);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=r-version-frontmatter");
+    assert_stdout_contains(&out, &format!("version.r_version=[{FIXTURE_R_VERSION}]"));
+    assert_stdout_contains(&out, "version.lib_in_cache=true");
+    assert_stdout_contains(&out, "version.jsonlite_in_cache=true");
+}
+
+#[test]
+fn run_reticulate_fixture_uses_managed_ephemeral_venv() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-e2e-reticulate-cache");
+    let script = fixture("run/reticulate.R");
+    let python_version = python_minor_version();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_PYTHON_VERSION", &python_version)
+        .env("RETICULATE_PYTHON", "managed")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=reticulate");
