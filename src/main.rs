@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use saphyr::{LoadableYamlNode, Yaml};
 
 mod quarto;
@@ -54,22 +55,22 @@ struct ScriptSpec {
 
 fn main() {
     if let Err(err) = try_main() {
-        eprintln!("ir: {err}");
-        std::process::exit(1);
+        match err.downcast::<clap::Error>() {
+            Ok(err) => err.exit(),
+            Err(err) => {
+                eprintln!("ir: {err}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
 fn try_main() -> Result<(), Box<dyn Error>> {
-    let mut args = env::args().skip(1);
-    match args.next().as_deref() {
-        Some("run") => {
-            let args: Vec<String> = args.collect();
-            if matches!(args.as_slice(), [arg] if arg == "--help" || arg == "-h") {
-                print_run_help();
-                return Ok(());
-            }
-
-            let run = parse_run_args(args)?;
+    let argv: Vec<String> = env::args().collect();
+    let matches = cli().try_get_matches_from(argv.clone())?;
+    match matches.subcommand() {
+        Some(("run", _)) => {
+            let run = parse_run_args(argv[2..].to_vec())?;
             cmd_run(
                 &run.source,
                 &run.rscript_args,
@@ -79,18 +80,127 @@ fn try_main() -> Result<(), Box<dyn Error>> {
                 run.isolated,
             )
         }
-        Some("tool") => cmd_tool(args.collect()),
-        Some("cache") => cmd_cache(args.collect()),
-        Some("--version" | "-V") => {
-            println!("ir {}", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
-        Some("--help" | "-h") | None => {
-            print_help();
-            Ok(())
-        }
-        Some(other) => Err(format!("unknown command `{other}` (try `ir run script.R`)").into()),
+        Some(("tool", matches)) => cmd_tool(matches, &argv),
+        Some(("cache", matches)) => cmd_cache(matches),
+        _ => Ok(()),
     }
+}
+
+fn cli() -> ClapCommand {
+    ClapCommand::new("ir")
+        .version(env!("CARGO_PKG_VERSION"))
+        .about("Run self-describing R scripts")
+        .arg_required_else_help(true)
+        .subcommand(run_command())
+        .subcommand(tool_command())
+        .subcommand(cache_command())
+}
+
+fn run_command() -> ClapCommand {
+    ClapCommand::new("run")
+        .about("Run a script or inline R expression")
+        .arg(
+            Arg::new("expr")
+                .short('e')
+                .long("expr")
+                .value_name("EXPR")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help("Evaluate an inline R expression instead of a script file"),
+        )
+        .arg(
+            Arg::new("with")
+                .long("with")
+                .value_name("PKG")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help("Add a dependency for this run; may be repeated"),
+        )
+        .arg(
+            Arg::new("r-version")
+                .long("r-version")
+                .value_name("SPEC")
+                .num_args(1)
+                .help("Select the R version for this run with rig"),
+        )
+        .arg(
+            Arg::new("isolated")
+                .long("isolated")
+                .action(ArgAction::SetTrue)
+                .help("Disable the user library for this run"),
+        )
+        .arg(raw_args_arg(
+            "Rscript options, script path, and script arguments",
+        ))
+}
+
+fn tool_command() -> ClapCommand {
+    ClapCommand::new("tool")
+        .about("Run package executables")
+        .arg_required_else_help(true)
+        .subcommand(tool_run_command())
+}
+
+fn tool_run_command() -> ClapCommand {
+    ClapCommand::new("run")
+        .about("Resolve a package and run an executable from its exec directory")
+        .arg(
+            Arg::new("from")
+                .long("from")
+                .value_name("PKG_REF")
+                .num_args(1)
+                .help("Resolve a package ref and run <command> from its exec/ directory"),
+        )
+        .arg(
+            Arg::new("with")
+                .long("with")
+                .value_name("PKG")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help("Add a dependency for this tool run; may be repeated"),
+        )
+        .arg(
+            Arg::new("r-version")
+                .long("r-version")
+                .value_name("SPEC")
+                .num_args(1)
+                .help("Select the R version for this tool run with rig"),
+        )
+        .arg(
+            Arg::new("isolated")
+                .long("isolated")
+                .action(ArgAction::SetTrue)
+                .hide(true),
+        )
+        .arg(raw_args_arg(
+            "Rscript options, package ref or command, and tool arguments",
+        ))
+}
+
+fn cache_command() -> ClapCommand {
+    ClapCommand::new("cache")
+        .about("Manage ir's cache")
+        .arg_required_else_help(true)
+        .subcommand(
+            ClapCommand::new("clean")
+                .about("Clear the cache, removing all entries")
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .action(ArgAction::SetTrue)
+                        .help("Force removal of the cache"),
+                ),
+        )
+        .subcommand(ClapCommand::new("dir").about("Show the cache directory"))
+}
+
+fn raw_args_arg(help: &'static str) -> Arg {
+    Arg::new("args")
+        .value_name("ARGS")
+        .num_args(0..)
+        .allow_hyphen_values(true)
+        .trailing_var_arg(true)
+        .help(help)
 }
 
 /// Where the user's program comes from: a script file, or one or more inline
@@ -142,11 +252,13 @@ fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     let mut positional = None;
 
     while let Some(arg) = iter.next() {
-        if arg == "-e" {
+        if arg == "-e" || arg == "--expr" {
             let expr = iter
                 .next()
                 .ok_or("`-e` requires an expression (try `ir run -e '1 + 1'`)")?;
             expressions.push(expr);
+        } else if let Some(expr) = arg.strip_prefix("--expr=") {
+            expressions.push(expr.to_string());
         } else if arg == "--from" || arg.starts_with("--from=") {
             return Err("`--from` is only supported by `ir tool run`".into());
         } else if arg == "--with" {
@@ -321,58 +433,25 @@ fn push_with_deps(with_deps: &mut Vec<String>, value: &str) {
     }
 }
 
-fn cmd_tool(args: Vec<String>) -> Result<(), Box<dyn Error>> {
-    match args.first().map(String::as_str) {
-        Some("run") => {
-            let run_args = args[1..].to_vec();
-            if matches!(run_args.as_slice(), [arg] if arg == "--help" || arg == "-h") {
-                print_tool_run_help();
-                return Ok(());
-            }
-            let run = parse_tool_run_args(run_args)?;
+fn cmd_tool(matches: &ArgMatches, argv: &[String]) -> Result<(), Box<dyn Error>> {
+    match matches.subcommand() {
+        Some(("run", _)) => {
+            let run = parse_tool_run_args(argv[3..].to_vec())?;
             cmd_tool_run(&run)
         }
-        Some("--help" | "-h") => {
-            print_tool_help();
-            Ok(())
-        }
-        None => {
-            print_tool_help();
-            Err("`ir tool` requires a subcommand".into())
-        }
-        Some(other) => Err(format!("unrecognized tool subcommand `{other}`").into()),
+        _ => unreachable!("clap requires a tool subcommand"),
     }
 }
 
-fn cmd_cache(args: Vec<String>) -> Result<(), Box<dyn Error>> {
-    match args.first().map(String::as_str) {
-        Some("clean") => cmd_cache_clean(&args[1..]),
-        Some("dir") => cmd_cache_dir(&args[1..]),
-        Some("--help" | "-h") => {
-            print_cache_help();
-            Ok(())
-        }
-        None => {
-            print_cache_help();
-            Err("`ir cache` requires a subcommand".into())
-        }
-        Some(other) => Err(format!("unrecognized subcommand `{other}`").into()),
+fn cmd_cache(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    match matches.subcommand() {
+        Some(("clean", matches)) => cmd_cache_clean(matches.get_flag("force")),
+        Some(("dir", _)) => cmd_cache_dir(),
+        _ => unreachable!("clap requires a cache subcommand"),
     }
 }
 
-fn cmd_cache_clean(args: &[String]) -> Result<(), Box<dyn Error>> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_cache_clean_help();
-        return Ok(());
-    }
-
-    for arg in args {
-        match arg.as_str() {
-            "--force" => {}
-            other => return Err(format!("unexpected argument `{other}`").into()),
-        }
-    }
-
+fn cmd_cache_clean(_force: bool) -> Result<(), Box<dyn Error>> {
     let cache_dir = ir_cache_dir()?;
     if !cache_dir.exists() {
         println!("No cache found at: {}", cache_dir.display());
@@ -390,176 +469,9 @@ fn cmd_cache_clean(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn cmd_cache_dir(args: &[String]) -> Result<(), Box<dyn Error>> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_cache_dir_help();
-        return Ok(());
-    }
-    if let Some(arg) = args.first() {
-        return Err(format!("unexpected argument `{arg}`").into());
-    }
-
+fn cmd_cache_dir() -> Result<(), Box<dyn Error>> {
     println!("{}", ir_cache_dir()?.display());
     Ok(())
-}
-
-fn print_help() {
-    println!(
-        concat!(
-            "ir {} — self-describing R scripts\n",
-            "\n",
-            "USAGE:\n",
-            "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
-            "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] -e <expr> [args...]\n",
-            "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]\n",
-            "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]\n",
-            "    ir cache <command>\n",
-            "\n",
-            "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
-            "dependencies, builds a dedicated package library, and runs the script\n",
-            "against it. With -e it evaluates inline R expressions instead of a file.\n",
-            "`ir tool run` resolves a package ref and runs an executable from that\n",
-            "package's exec directory. --with adds dependencies on the command line,\n",
-            "and --r-version selects the R version with rig. Leading Rscript options\n",
-            "are passed to Rscript for script and tool targets; trailing args are\n",
-            "passed through to the program.\n",
-            "`ir cache` manages the dependency resolution and materialised library cache.\n",
-            "\n",
-            "Quarto documents (.qmd, .Rmd) are also supported: declare\n",
-            "dependencies under an `ir:` key in the document's YAML frontmatter\n",
-            "and ir renders them with `quarto render`.\n",
-            "\n",
-            "ENVIRONMENT:\n",
-            "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-            "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)\n",
-            "    IR_QUARTO      path to the quarto executable (default: quarto on PATH)"
-        ),
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
-fn print_run_help() {
-    println!(concat!(
-        "Run an R script\n",
-        "\n",
-        "USAGE:\n",
-        "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] <script.R> [args...]\n",
-        "    ir run [Rscript-options...] [--isolated] [--with <pkg>]... [--r-version <spec>] -e <expr> [-e <expr>]... [args...]\n",
-        "\n",
-        "`ir run` reads the YAML frontmatter from <script.R>, resolves its\n",
-        "dependencies, builds a dedicated package library, and runs the script\n",
-        "against it. With -e it instead evaluates inline R expressions (mirroring\n",
-        "Rscript) against the same isolated library. --r-version selects the R\n",
-        "version with rig and overrides script frontmatter. Leading Rscript options\n",
-        "are passed to Rscript for the user-code phase; trailing args are passed\n",
-        "through to the program.\n",
-        "\n",
-        "OPTIONS:\n",
-        "    -e <expr>     Evaluate an inline R expression instead of a script file.\n",
-        "                  May be repeated; runs in place of <script.R>.\n",
-        "    --with <pkg>  Add a dependency for this run, merged with any declared\n",
-        "                  in the script frontmatter. May be repeated and accepts a\n",
-        "                  comma-separated list (e.g. --with dplyr,tidyr). Uses the\n",
-        "                  same spec format as `dependencies:` (e.g. cli==3.6.6).\n",
-        "    --r-version <spec>\n",
-        "                  Select the R version for this run with rig. Overrides\n",
-        "                  `r-version:` in script frontmatter.\n",
-        "    --isolated    Disable the user library (R_LIBS_USER) so the run cannot\n",
-        "                  borrow undeclared packages from it.\n",
-        "\n",
-        "Quarto documents (.qmd, .Rmd) are also supported: declare\n",
-        "dependencies under an `ir:` key in the document's YAML frontmatter\n",
-        "and ir renders them with `quarto render`.\n",
-        "\n",
-        "ENVIRONMENT:\n",
-        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)\n",
-        "    IR_QUARTO      path to the quarto executable (default: quarto on PATH)"
-    ));
-}
-
-fn print_tool_help() {
-    println!(concat!(
-        "Run package executables\n",
-        "\n",
-        "USAGE:\n",
-        "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]\n",
-        "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]\n",
-        "\n",
-        "COMMANDS:\n",
-        "    run  Resolve a package and run an executable from its exec directory\n",
-        "\n",
-        "ENVIRONMENT:\n",
-        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
-    ));
-}
-
-fn print_tool_run_help() {
-    println!(concat!(
-        "Run a package executable\n",
-        "\n",
-        "USAGE:\n",
-        "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] --from <pkg-ref> <command> [args...]\n",
-        "    ir tool run [Rscript-options...] [--with <pkg>]... [--r-version <spec>] <pkg-ref> [args...]\n",
-        "\n",
-        "`ir tool run` resolves <pkg-ref>, finds <library>/<package>/exec/<command>\n",
-        "or <command>.R, and launches it with the selected Rscript. A bare package\n",
-        "ref such as `btw` is treated as `--from btw btw`. Tool runs are isolated:\n",
-        "R_LIBS_USER is set to NULL so undeclared user-library packages are not\n",
-        "borrowed.\n",
-        "\n",
-        "OPTIONS:\n",
-        "    --from <pkg-ref>\n",
-        "                  Resolve a package ref and run <command> from its exec/\n",
-        "                  directory. Omit for self-named commands such as `btw`.\n",
-        "    --with <pkg>  Add a dependency for this run, resolved alongside the\n",
-        "                  provider package. May be repeated and accepts a\n",
-        "                  comma-separated list (e.g. --with cli,jsonlite).\n",
-        "    --r-version <spec>\n",
-        "                  Select the R version for this tool run with rig.\n",
-        "\n",
-        "ENVIRONMENT:\n",
-        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))\n",
-        "    IR_RSCRIPT     path to the Rscript executable (default: Rscript on PATH)"
-    ));
-}
-
-fn print_cache_help() {
-    println!(concat!(
-        "Manage ir's cache\n",
-        "\n",
-        "USAGE:\n",
-        "    ir cache <COMMAND>\n",
-        "\n",
-        "COMMANDS:\n",
-        "    clean  Clear the cache, removing all entries\n",
-        "    dir    Show the cache directory\n",
-        "\n",
-        "ENVIRONMENT:\n",
-        "    IR_CACHE_DIR   override the cache dir (default: tools::R_user_dir(\"ir\", \"cache\"))"
-    ));
-}
-
-fn print_cache_clean_help() {
-    println!(concat!(
-        "Clear the cache, removing all entries\n",
-        "\n",
-        "USAGE:\n",
-        "    ir cache clean [OPTIONS]\n",
-        "\n",
-        "OPTIONS:\n",
-        "    --force  Force removal of the cache"
-    ));
-}
-
-fn print_cache_dir_help() {
-    println!(concat!(
-        "Show the cache directory\n",
-        "\n",
-        "USAGE:\n",
-        "    ir cache dir"
-    ));
 }
 
 /// Resolve dependencies for `source`, then run it against the resulting
