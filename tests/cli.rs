@@ -484,6 +484,7 @@ fn run_quarto_fixture_renders_html_with_resolved_packages() {
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd"), "{html}");
     assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
+    assert!(html.contains("qmd.pkgs_in_cache=true"), "{html}");
     assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
 
     let _ = fs::remove_dir_all(&cache_dir);
