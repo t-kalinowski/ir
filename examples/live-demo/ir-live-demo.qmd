@@ -1,0 +1,154 @@
+---
+title: "ir live demo"
+subtitle: "One project, multiple R package timelines"
+format:
+  revealjs:
+    theme: simple
+    slide-number: true
+    code-line-numbers: false
+execute:
+  eval: false
+---
+
+## User pain
+
+A project can contain old production scripts and newer analysis work.
+
+Upgrading the project library to make new tidyverse syntax available can break
+old code. Freezing the whole project keeps old code working but blocks newer
+syntax.
+
+## The demo setup
+
+```console
+examples/live-demo/
+  01-legacy-tidyverse.R
+  02-modern-tidyverse.R
+  03-legacy-tidyverse-report.qmd
+  04-modern-tidyverse-report.qmd
+```
+
+Each file declares its own dependency timeline.
+
+## Legacy script frontmatter
+
+```r
+#| dependencies:
+#|   - dplyr==1.0.10
+#|   - tidyr==1.2.1
+#| exclude-newer: "2022-12-31"
+```
+
+The body uses older tidyverse syntax:
+
+```r
+orders %>%
+  tidyr::separate(account_region, into = c("account", "region"), sep = "\\|") %>%
+  dplyr::group_by(account, region) %>%
+  dplyr::summarise(tickets = sum(tickets), .groups = "drop")
+```
+
+## Run the legacy script
+
+```console
+ir run examples/live-demo/01-legacy-tidyverse.R
+```
+
+Watch for:
+
+```text
+dialect=legacy tidyverse
+exclude_newer=2022-12-31
+dplyr=...
+tidyr=...
+library=...
+```
+
+## Modern script frontmatter
+
+```r
+#| dependencies:
+#|   - dplyr==1.1.4
+#|   - tidyr==1.3.1
+#| exclude-newer: "2024-06-01"
+```
+
+The body uses newer tidyverse syntax:
+
+```r
+orders |>
+  tidyr::separate_wider_delim(account_region, delim = "|", names = c("account", "region")) |>
+  dplyr::summarise(tickets = sum(tickets), .by = c(account, region))
+```
+
+## Run the modern script
+
+```console
+ir run examples/live-demo/02-modern-tidyverse.R
+```
+
+Watch for a different dependency timeline:
+
+```text
+dialect=modern tidyverse
+exclude_newer=2024-06-01
+dplyr=...
+tidyr=...
+library=...
+```
+
+## Side by side terminal view
+
+Run these in two panes from the same checkout:
+
+```console
+ir run examples/live-demo/01-legacy-tidyverse.R
+ir run examples/live-demo/02-modern-tidyverse.R
+```
+
+The scripts share the project, but not the resolved dependency library.
+
+## Same idea for Quarto
+
+```console
+ir run examples/live-demo/03-legacy-tidyverse-report.qmd
+ir run examples/live-demo/04-modern-tidyverse-report.qmd
+```
+
+The `ir:` key in each document controls the render-time package timeline:
+
+```yaml
+ir:
+  dependencies:
+    - dplyr==1.1.4
+    - tidyr==1.3.1
+  exclude-newer: "2024-06-01"
+```
+
+## What changed for the user
+
+Before:
+
+```console
+Rscript old-script.R
+quarto render new-report.qmd
+```
+
+Both commands depend on whichever library is active for the project.
+
+After:
+
+```console
+ir run old-script.R
+ir run new-report.qmd
+```
+
+Each file carries the dependency contract it needs.
+
+## Closing sequence
+
+1. Run the legacy script.
+2. Run the modern script.
+3. Render the legacy Quarto report.
+4. Render the modern Quarto report.
+5. Re-run one command to show the cache hit path.
