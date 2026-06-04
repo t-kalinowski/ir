@@ -54,7 +54,11 @@ jobs:
         run: |
           rig add 4.5.3
           rig add ${{ env.IR_E2E_R_VERSION }}
-          rig default 4.5.3
+          # rig names installs differently per platform (e.g. `4.5-arm64` on
+          # macOS), and `rig default` matches the name, not the patch version.
+          # Resolve the 4.5.x install's name from `rig list --json` and use that.
+          default_name=$(rig list --json | jq -r '[.[] | select(.version | startswith("4.5"))][0].name')
+          rig default "$default_name"
           rig list
 
       # The resolver runs under the selected R, so both R versions need pak,
