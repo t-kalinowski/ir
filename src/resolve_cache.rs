@@ -55,9 +55,13 @@ pub(crate) fn entry(
 }
 
 pub(crate) fn read(
-    cache: &Entry,
+    cache: Option<&Entry>,
     primary_package: bool,
 ) -> Result<Option<CachedResolution>, Box<dyn Error>> {
+    let Some(cache) = cache else {
+        return Ok(None);
+    };
+
     if !cache.marker.exists() {
         return Ok(None);
     }

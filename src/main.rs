@@ -858,14 +858,14 @@ fn resolve_library_inner(
     primary_package: bool,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
     let dependencies = normalized_dependencies(&spec.dependencies);
-    let cache = resolve_cache::entry(
+    let cached_entry = resolve_cache::entry(
         rscript,
         &dependencies,
         spec.exclude_newer.as_deref(),
         spec.quarto,
     )?;
-    if let Some(cache) = &cache {
-        if let Some(resolved) = resolve_cache::read(cache, primary_package)? {
+    if let Some(cached_entry) = &cached_entry {
+        if let Some(resolved) = resolve_cache::read(cached_entry, primary_package)? {
             return Ok(ResolvedLibrary {
                 library: Some(resolved.library),
                 primary_package: resolved.primary_package,
@@ -888,15 +888,17 @@ fn resolve_library_inner(
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true");
-    if let Some(cache) = &cache {
-        cmd.env("IR_RESOLUTION_MARKER", &cache.marker)
-            .env("IR_RESOLUTION_ADVISORY_MARKER", &cache.advisory_marker);
+    if let Some(cached_entry) = &cached_entry {
+        cmd.env("IR_RESOLUTION_MARKER", &cached_entry.marker).env(
+            "IR_RESOLUTION_ADVISORY_MARKER",
+            &cached_entry.advisory_marker,
+        );
     }
     if let Some(package_result_file) = &package_result_file {
         cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
-        if let Some(package_marker) = cache
+        if let Some(package_marker) = cached_entry
             .as_ref()
-            .and_then(|cache| cache.package_marker.as_ref())
+            .and_then(|cached_entry| cached_entry.package_marker.as_ref())
         {
             cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
         }
