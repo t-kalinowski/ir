@@ -707,17 +707,16 @@ fn cmd_run(
     let rscript = rscript_for_spec(&spec)?;
 
     // Reject comma-bearing Rscript options before resolving, so a run that could
-    // never be launched fails fast instead of after phase-1 resolution. quarto
+    // never be launched fails fast instead of after dependency resolution. quarto
     // forwards them via comma-separated QUARTO_KNITR_RSCRIPT_ARGS, which has no
     // escaping.
     source.reject_unsupported_rscript_args(rscript_args)?;
 
-    // Phase 1: reuse a warm resolution marker, or launch the private resolver
-    // R session to resolve deps and materialise the library.
+    // Reuse a warm resolution marker, or launch the private resolver R session
+    // to resolve deps and materialise the library.
     let library = resolve_library(&rscript, &spec)?;
 
-    // Phase 2: render the document, or run the user's program, in an isolated
-    // R session.
+    // Render the document, or run the user's program, in an isolated R session.
     let code = source.run_user_code(
         &rscript,
         library.as_deref(),
@@ -825,10 +824,10 @@ fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Phase 1 — return a cached materialised library path, or run the embedded
-/// driver in a private R session to resolve and materialise it. The dependency
-/// specs in `spec` (the script's frontmatter plus any `--with` packages) are
-/// normalized into pak refs before cache keying and resolver input.
+/// Return a cached materialised library path, or run the embedded driver in a
+/// private R session to resolve and materialise it. The dependency specs in
+/// `spec` (the script's frontmatter plus any `--with` packages) are normalized
+/// into pak refs before cache keying and resolver input.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
     Ok(resolve_library_inner(rscript, spec, false)?.library)
 }
@@ -1420,9 +1419,9 @@ fn parse_simple_version_ref(dependency: &str) -> Option<(&str, &str, &str)> {
     ))
 }
 
-/// Phase 2 — run the user's program in an ordinary R session pointed at
-/// `library`. The program is a script file, `-` stdin source, or one or more
-/// inline expressions evaluated via `Rscript -e`.
+/// Run the user's program in an ordinary R session pointed at `library`. The
+/// program is a script file, `-` stdin source, or one or more inline expressions
+/// evaluated via `Rscript -e`.
 ///
 /// It runs as an ordinary `Rscript [Rscript-options...] (script.R | - | -e
 /// expr...)` - its `.Renviron`, `.Rprofile` and site files are read unless the
