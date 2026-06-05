@@ -154,22 +154,34 @@ fn assert_command_success(mut command: Command, label: &str) {
     );
 }
 
-fn python_minor_version() -> String {
+fn python_executable() -> PathBuf {
     for command in ["python3", "python"] {
         let output = Command::new(command)
-            .args([
-                "-c",
-                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-            ])
+            .args(["-c", "import sys; print(sys.executable)"])
             .output();
         if let Ok(output) = output {
             if output.status.success() {
-                return String::from_utf8(output.stdout).unwrap().trim().to_string();
+                let executable = String::from_utf8(output.stdout).unwrap().trim().to_string();
+                if !executable.is_empty() {
+                    return PathBuf::from(executable);
+                }
             }
         }
     }
 
     panic!("python3 or python is required for the reticulate fixture");
+}
+
+fn python_minor_version() -> String {
+    let output = Command::new(python_executable())
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .output()
+        .expect("failed to run python version probe");
+    assert_success(&output);
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 /// Version of the default R on `PATH` — the one `ir` uses without `--r-version`.
@@ -569,10 +581,7 @@ fn run_inline_expression_resolves_with_dependencies() {
 fn run_normalizes_version_specs_before_resolution_cache_keying() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-ref-normalized-cache");
-    let expr = r#"
-library(cli)
-cat("ir.fixture=normalized-cache\n")
-"#;
+    let expr = "{ library(cli); cat('ir.fixture=normalized-cache\\n') }";
 
     for dep in ["cli==3.6.6", "cli@3.6.6"] {
         let out = ir()
@@ -863,6 +872,8 @@ fn run_reticulate_fixture_imports_python_module() {
         cmd.env("IR_TEST_RETICULATE_MANAGED", "1")
             .env("IR_TEST_PYTHON_VERSION", python_minor_version())
             .env("RETICULATE_PYTHON", "managed");
+    } else {
+        cmd.env("RETICULATE_PYTHON", python_executable());
     }
 
     let out = cmd
