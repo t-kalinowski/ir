@@ -13,7 +13,6 @@ use time::OffsetDateTime;
 pub(crate) struct Paths {
     pub(crate) marker: PathBuf,
     pub(crate) package_marker: Option<PathBuf>,
-    pub(crate) advisory_marker: PathBuf,
 }
 
 pub(crate) struct CachedResolution {
@@ -45,12 +44,10 @@ pub(crate) fn paths(
     let package_marker = dependencies.first().map(|primary_ref| {
         marker.with_file_name(format!("{marker_name}-primary-{}", sha256_hex(primary_ref)))
     });
-    let advisory_marker = marker.with_file_name(format!("{marker_name}-advisory"));
 
     Ok(Some(Paths {
         marker,
         package_marker,
-        advisory_marker,
     }))
 }
 
@@ -72,7 +69,6 @@ pub(crate) fn read(
     if library.is_empty() || !Path::new(library).is_dir() {
         return Ok(None);
     }
-    replay_advisory(cache)?;
 
     let primary_package = if primary_package {
         let Some(package_marker) = &cache.package_marker else {
@@ -96,21 +92,6 @@ pub(crate) fn read(
         library: PathBuf::from(library),
         primary_package,
     }))
-}
-
-fn replay_advisory(cache: &Paths) -> Result<(), Box<dyn Error>> {
-    if !cache.advisory_marker.exists() {
-        return Ok(());
-    }
-
-    let advisory = fs::read_to_string(&cache.advisory_marker)
-        .map_err(|e| format!("failed to read `{}`: {e}", cache.advisory_marker.display()))?;
-    let advisory = advisory.trim();
-    if !advisory.is_empty() {
-        eprintln!("{advisory}");
-    }
-
-    Ok(())
 }
 
 fn resolution_cache_key(
