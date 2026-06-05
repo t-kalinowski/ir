@@ -42,6 +42,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use saphyr::{Yaml, YamlLoader};
 use saphyr_parser::Parser;
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 
 mod quarto;
 mod rig;
@@ -1045,28 +1046,7 @@ fn find_on_path(command: &OsStr) -> Option<PathBuf> {
 }
 
 fn current_utc_date() -> String {
-    let days = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() / 86_400)
-        .unwrap_or(0);
-    let (year, month, day) = civil_from_days(days as i64);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-fn civil_from_days(days: i64) -> (i32, u32, u32) {
-    let days = days + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_part = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
-    let month = month_part + if month_part < 10 { 3 } else { -9 };
-    let year = year + if month <= 2 { 1 } else { 0 };
-
-    (year as i32, month as u32, day as u32)
+    OffsetDateTime::now_utc().date().to_string()
 }
 
 fn sha256_hex(value: &str) -> String {
