@@ -32,7 +32,6 @@ fn rscript() -> OsString {
         return rscript;
     }
 
-    #[cfg(windows)]
     if let Some(rscript) = rig_default_rscript() {
         return rscript.into_os_string();
     }
@@ -40,7 +39,6 @@ fn rscript() -> OsString {
     "Rscript".into()
 }
 
-#[cfg(windows)]
 fn rig_default_rscript() -> Option<PathBuf> {
     let output = Command::new("rig").args(["list", "--json"]).output().ok()?;
     if !output.status.success() {
@@ -52,9 +50,17 @@ fn rig_default_rscript() -> Option<PathBuf> {
         .as_array()?
         .iter()
         .find(|version| version.get("default").and_then(|value| value.as_bool()) == Some(true))?;
-    let binary = default.get("binary")?.as_str()?;
-    let rscript = Path::new(binary).with_file_name("Rscript.exe");
+    let rscript = rscript_from_r_binary(Path::new(default.get("binary")?.as_str()?));
     rscript.exists().then_some(rscript)
+}
+
+fn rscript_from_r_binary(binary: &Path) -> PathBuf {
+    let mut name = OsString::from("Rscript");
+    if let Some(ext) = binary.extension() {
+        name.push(".");
+        name.push(ext);
+    }
+    binary.with_file_name(name)
 }
 
 fn normalize_cli_output(output: &[u8]) -> String {
