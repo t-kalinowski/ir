@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -51,7 +51,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     let executables = discover_package_executables(&library, &package_name)?;
     if executables.is_empty() {
         return Err(format!(
-            "package `{}` does not expose Rscript or Rapp executables in `{}`",
+            "package `{}` does not expose supported executables in `{}`",
             package_name,
             library.join(&package_name).join("exec").display()
         )
@@ -180,15 +180,19 @@ fn discover_package_executables(
 
 fn package_executables_in_dir(exec_dir: &Path) -> Result<Vec<PackageExecutable>, Box<dyn Error>> {
     let mut executables = Vec::new();
-    if exec_dir
+    let rapp_frontend = if exec_dir
         .parent()
         .and_then(Path::file_name)
         .and_then(OsStr::to_str)
         == Some("Rapp")
     {
-        let path = exec_dir.join("Rapp");
+        Some(exec_dir.join("Rapp"))
+    } else {
+        None
+    };
+    if let Some(path) = &rapp_frontend {
         if path.is_file() {
-            executables.push(rapp_frontend_executable(path));
+            executables.push(rapp_frontend_executable(path.to_path_buf()));
         }
     }
 
@@ -197,6 +201,9 @@ fn package_executables_in_dir(exec_dir: &Path) -> Result<Vec<PackageExecutable>,
     {
         let path = entry?.path();
         if !path.is_file() {
+            continue;
+        }
+        if rapp_frontend.as_ref() == Some(&path) {
             continue;
         }
         let Some(executable) = package_executable_from_discovered_path(&path)? else {
@@ -284,7 +291,7 @@ fn package_executable_launcher_name(
     } else if path
         .extension()
         .and_then(OsStr::to_str)
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("R"))
+        .is_some_and(is_package_executable_launcher_suffix)
     {
         path.file_stem()
             .and_then(OsStr::to_str)
@@ -308,6 +315,18 @@ fn package_executable_launcher_name(
     Ok(name)
 }
 
+#[cfg(unix)]
+fn is_package_executable_launcher_suffix(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("R")
+}
+
+#[cfg(not(unix))]
+fn is_package_executable_launcher_suffix(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("R")
+        || ext.eq_ignore_ascii_case("cmd")
+        || ext.eq_ignore_ascii_case("bat")
+}
+
 struct PackageLauncherMetadata {
     name: Option<String>,
     rscript_args: Vec<String>,
@@ -318,6 +337,13 @@ fn package_launcher_metadata(
     package: &str,
     package_launcher: PackageLauncher,
 ) -> Result<PackageLauncherMetadata, Box<dyn Error>> {
+    if matches!(package_launcher, PackageLauncher::Direct) {
+        return Ok(PackageLauncherMetadata {
+            name: None,
+            rscript_args: Vec::new(),
+        });
+    }
+
     let frontmatter = read_rapp_frontmatter_to_string(path)?;
     if frontmatter.trim().is_empty() {
         return package_launcher_metadata_from_mapping(None, None, path, package, package_launcher);
@@ -364,7 +390,9 @@ fn package_launcher_metadata_from_mapping(
         PackageLauncher::Rscript if launcher.is_some() => {
             launcher_rscript_args(launcher, path, package, false)?
         }
-        PackageLauncher::Rscript | PackageLauncher::RappFrontend => Vec::new(),
+        PackageLauncher::Direct | PackageLauncher::Rscript | PackageLauncher::RappFrontend => {
+            Vec::new()
+        }
     };
 
     Ok(PackageLauncherMetadata { name, rscript_args })
@@ -601,17 +629,38 @@ fn run_package_executable(
     rscript_args: &[String],
     args: &[String],
 ) -> Result<i32, Box<dyn Error>> {
-    let mut cmd = Command::new(rscript);
-    cmd.args(&executable.rscript_args);
-    cmd.args(rscript_args);
+    let launch_program: &OsStr;
+    let mut cmd;
     match executable.launcher {
+        PackageLauncher::Direct => {
+            if !executable.rscript_args.is_empty() || !rscript_args.is_empty() {
+                return Err(
+                    "Rscript options are only supported for Rscript and Rapp package executables"
+                        .into(),
+                );
+            }
+            launch_program = executable.path.as_os_str();
+            cmd = Command::new(&executable.path);
+        }
         PackageLauncher::Rscript => {
+            launch_program = rscript;
+            cmd = Command::new(rscript);
+            cmd.args(&executable.rscript_args);
+            cmd.args(rscript_args);
             cmd.arg(&executable.path);
         }
         PackageLauncher::Rapp => {
+            launch_program = rscript;
+            cmd = Command::new(rscript);
+            cmd.args(&executable.rscript_args);
+            cmd.args(rscript_args);
             cmd.arg("-e").arg("Rapp::run()").arg(&executable.path);
         }
         PackageLauncher::RappFrontend => {
+            launch_program = rscript;
+            cmd = Command::new(rscript);
+            cmd.args(&executable.rscript_args);
+            cmd.args(rscript_args);
             cmd.arg("-e").arg("Rapp::run()");
         }
     }
@@ -624,18 +673,31 @@ fn run_package_executable(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        Err(spawn_error(rscript, cmd.exec()).into())
+        let err = cmd.exec();
+        let message = match executable.launcher {
+            PackageLauncher::Direct => executable_spawn_error(launch_program, err),
+            PackageLauncher::Rscript | PackageLauncher::Rapp | PackageLauncher::RappFrontend => {
+                spawn_error(rscript, err)
+            }
+        };
+        Err(message.into())
     }
 
     #[cfg(not(unix))]
     {
-        let status = cmd.status().map_err(|e| spawn_error(rscript, e))?;
+        let status = cmd.status().map_err(|e| match executable.launcher {
+            PackageLauncher::Direct => executable_spawn_error(launch_program, e),
+            PackageLauncher::Rscript | PackageLauncher::Rapp | PackageLauncher::RappFrontend => {
+                spawn_error(rscript, e)
+            }
+        })?;
         Ok(status.code().unwrap_or(1))
     }
 }
 
 #[derive(Clone, Copy)]
 enum PackageLauncher {
+    Direct,
     Rscript,
     Rapp,
     RappFrontend,
@@ -651,16 +713,47 @@ fn package_executable_launcher_kind(
     reader.read_until(b'\n', &mut shebang)?;
 
     if !shebang.starts_with(b"#!") {
-        return Ok(None);
+        return if is_direct_package_script_without_shebang(executable)? {
+            Ok(Some(PackageLauncher::Direct))
+        } else {
+            Ok(None)
+        };
     }
 
     if shebang_mentions(&shebang, b"Rapp") {
         Ok(Some(PackageLauncher::Rapp))
     } else if shebang_mentions(&shebang, b"Rscript") {
         Ok(Some(PackageLauncher::Rscript))
+    } else if is_direct_package_script(executable)? {
+        Ok(Some(PackageLauncher::Direct))
     } else {
         Ok(None)
     }
+}
+
+#[cfg(unix)]
+fn is_direct_package_script_without_shebang(_path: &Path) -> Result<bool, Box<dyn Error>> {
+    Ok(false)
+}
+
+#[cfg(not(unix))]
+fn is_direct_package_script_without_shebang(path: &Path) -> Result<bool, Box<dyn Error>> {
+    is_direct_package_script(path)
+}
+
+#[cfg(unix)]
+fn is_direct_package_script(path: &Path) -> Result<bool, Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_direct_package_script(path: &Path) -> Result<bool, Box<dyn Error>> {
+    let Some(ext) = path.extension().and_then(OsStr::to_str) else {
+        return Ok(false);
+    };
+    Ok(ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
 }
 
 fn shebang_mentions(shebang: &[u8], name: &[u8]) -> bool {
@@ -751,17 +844,22 @@ fn installed_launcher_contents(
     }
 
     let mut cmd = vec!["exec".to_string(), sh_quote_os(rscript)];
-    cmd.extend(executable.rscript_args.iter().map(|arg| sh_quote_str(arg)));
     match executable.launcher {
+        PackageLauncher::Direct => {
+            cmd = vec!["exec".to_string(), sh_quote_path(&executable.path)?];
+        }
         PackageLauncher::Rscript => {
+            cmd.extend(executable.rscript_args.iter().map(|arg| sh_quote_str(arg)));
             cmd.push(sh_quote_path(&executable.path)?);
         }
         PackageLauncher::Rapp => {
+            cmd.extend(executable.rscript_args.iter().map(|arg| sh_quote_str(arg)));
             cmd.push("-e".to_string());
             cmd.push(sh_quote_str("Rapp::run()"));
             cmd.push(sh_quote_path(&executable.path)?);
         }
         PackageLauncher::RappFrontend => {
+            cmd.extend(executable.rscript_args.iter().map(|arg| sh_quote_str(arg)));
             cmd.push("-e".to_string());
             cmd.push(sh_quote_str("Rapp::run()"));
         }
@@ -777,27 +875,43 @@ fn installed_launcher_contents(
     rscript: &OsStr,
     library: &Path,
     executable: &PackageExecutable,
-    _path_prefix: &[PathBuf],
+    path_prefix: &[PathBuf],
     recovery_command: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let mut cmd = vec![cmd_quote_os(rscript)];
-    cmd.extend(executable.rscript_args.iter().map(|arg| cmd_quote_str(arg)));
+    let mut cmd = Vec::new();
     match executable.launcher {
+        PackageLauncher::Direct => {
+            cmd.push(cmd_quote_path(&executable.path)?);
+        }
         PackageLauncher::Rscript => {
+            cmd.push(cmd_quote_os(rscript));
+            cmd.extend(executable.rscript_args.iter().map(|arg| cmd_quote_str(arg)));
             cmd.push(cmd_quote_path(&executable.path)?);
         }
         PackageLauncher::Rapp => {
+            cmd.push(cmd_quote_os(rscript));
+            cmd.extend(executable.rscript_args.iter().map(|arg| cmd_quote_str(arg)));
             cmd.push("-e".to_string());
             cmd.push("Rapp::run()".to_string());
             cmd.push(cmd_quote_path(&executable.path)?);
         }
         PackageLauncher::RappFrontend => {
+            cmd.push(cmd_quote_os(rscript));
+            cmd.extend(executable.rscript_args.iter().map(|arg| cmd_quote_str(arg)));
             cmd.push("-e".to_string());
             cmd.push("Rapp::run()".to_string());
         }
     }
     cmd.push("%*".to_string());
     let library = launcher_path_str(library)?;
+    let mut env_lines = vec![
+        r#"set "R_LIBS=%IR_LIBRARY%""#.to_string(),
+        r#"set "R_LIBS_USER=NULL""#.to_string(),
+        format!(r#"set "RAPP_LAUNCHER_NAME={}""#, executable.name),
+    ];
+    if let Some(path_assignment) = cmd_path_prefix_assignment(path_prefix)? {
+        env_lines.push(path_assignment);
+    }
 
     Ok(format!(
         "@echo off\r\n\
@@ -809,13 +923,11 @@ fn installed_launcher_contents(
          echo ir: run `{}` to recreate this launcher after `ir cache clean`. 1>&2\r\n\
          exit /b 1\r\n\
          )\r\n\
-         set \"R_LIBS=%IR_LIBRARY%\"\r\n\
-         set \"R_LIBS_USER=NULL\"\r\n\
-         set \"RAPP_LAUNCHER_NAME={}\"\r\n\
+         {}\r\n\
          {}\r\n",
         library,
         recovery_command,
-        executable.name,
+        env_lines.join("\r\n"),
         cmd.join(" ")
     ))
 }
@@ -879,4 +991,28 @@ fn cmd_quote_os(value: &OsStr) -> String {
 #[cfg(not(unix))]
 fn cmd_quote_str(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[cfg(not(unix))]
+fn cmd_path_prefix_assignment(path_prefix: &[PathBuf]) -> Result<Option<String>, Box<dyn Error>> {
+    let paths = path_prefix
+        .iter()
+        .map(|path| launcher_path_str(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    if paths.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!(r#"set "PATH={};%PATH%""#, paths.join(";"))))
+    }
+}
+
+fn executable_spawn_error(program: &OsStr, err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        format!("could not find executable `{}`", program.to_string_lossy())
+    } else {
+        format!(
+            "failed to launch executable `{}`: {err}",
+            program.to_string_lossy()
+        )
+    }
 }

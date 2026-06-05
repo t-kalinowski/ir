@@ -256,6 +256,12 @@ fn make_executable(path: &Path) {
     fs::set_permissions(path, permissions).unwrap();
 }
 
+#[cfg(unix)]
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    make_executable(path);
+}
+
 fn python_executable() -> PathBuf {
     for command in ["python3", "python"] {
         let output = Command::new(command)
@@ -2648,6 +2654,78 @@ cat("selected=metadata\n")
     assert_success(&out);
     assert_stdout_contains(&out, "selected=metadata");
 
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_run_and_install_support_direct_package_scripts() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-direct-script-cache");
+    let bin_dir = unique_dir("ir-tool-direct-script-bin");
+    let package_dir = unique_dir("ir-tool-direct-script-packages");
+    let package = write_r_source_package(&package_dir, "irtooldirect", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(
+        &exec_dir.join("direct-sh"),
+        "#!/bin/sh\nprintf 'tool.fixture=sh\\n'\nprintf 'tool.args=%s\\n' \"$*\"\n",
+    );
+    write_executable(
+        &exec_dir.join("direct-python"),
+        &format!(
+            "#!{}\nimport sys\nprint('tool.fixture=python')\nprint('tool.args=' + '|'.join(sys.argv[1:]))\n",
+            python_executable().display()
+        ),
+    );
+    write_executable(&exec_dir.join("native-tool"), "not a script\n");
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    for executable in [
+        ("direct-sh", &["run", "sh"][..], "tool.fixture=sh"),
+        ("direct-python", &["run", "python"], "tool.fixture=python"),
+    ] {
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["tool", "run", "--from", &package_ref])
+            .arg(executable.0)
+            .args(executable.1)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(&out, executable.2);
+    }
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed 2 executables");
+
+    for executable in [
+        ("direct-sh", &["install", "sh"][..], "tool.fixture=sh"),
+        (
+            "direct-python",
+            &["install", "python"],
+            "tool.fixture=python",
+        ),
+    ] {
+        let out = Command::new(launcher_path(&bin_dir, executable.0))
+            .args(executable.1)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(&out, executable.2);
+    }
+
+    let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&package_dir);
 }
