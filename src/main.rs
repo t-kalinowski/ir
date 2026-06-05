@@ -1424,31 +1424,14 @@ fn run_script(
     isolated: bool,
 ) -> Result<i32, Box<dyn Error>> {
     let mut cmd = Command::new(rscript);
-    #[cfg(not(unix))]
-    let mut stdin_input = None;
-
     cmd.args(rscript_args);
     match source {
         RscriptSource::Script(script) => {
             cmd.arg(script);
         }
         RscriptSource::Expressions(expressions) => {
-            #[cfg(windows)]
-            {
-                // Windows Rscript can crash when a multiline expression is
-                // passed through CreateProcess as a `-e` argument. Feeding the
-                // same source on stdin keeps inline runs usable there.
-                cmd.arg("-");
-                let mut input = expressions.join("\n");
-                input.push('\n');
-                stdin_input = Some(input);
-            }
-
-            #[cfg(not(windows))]
-            {
-                for expr in expressions {
-                    cmd.arg("-e").arg(expr);
-                }
+            for expr in expressions {
+                cmd.arg("-e").arg(expr);
             }
         }
         RscriptSource::Stdin => {
@@ -1478,20 +1461,7 @@ fn run_script(
 
     #[cfg(not(unix))]
     {
-        let status = if let Some(input) = stdin_input {
-            cmd.stdin(Stdio::piped());
-            let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
-            let mut stdin = child.stdin.take().ok_or("failed to open Rscript stdin")?;
-            stdin
-                .write_all(input.as_bytes())
-                .map_err(|e| format!("failed to write inline expression to Rscript stdin: {e}"))?;
-            drop(stdin);
-            child
-                .wait()
-                .map_err(|e| format!("failed to wait for Rscript: {e}"))?
-        } else {
-            cmd.status().map_err(|e| spawn_error(rscript, e))?
-        };
+        let status = cmd.status().map_err(|e| spawn_error(rscript, e))?;
         Ok(status.code().unwrap_or(1))
     }
 }

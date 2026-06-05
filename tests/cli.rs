@@ -522,18 +522,20 @@ fn run_script_uses_only_the_first_yaml_document() {
 #[test]
 fn run_inline_expression_resolves_with_dependencies() {
     let _guard = e2e_lock();
-    let expr = r#"
-library(cli)
-library(glue)
-lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
-expected <- normalizePath(file.path(lib, c("cli", "glue")), mustWork = TRUE)
-pkg_in_cache <- normalizePath(path.package(c("cli", "glue")), mustWork = TRUE) == expected
-cat("ir.fixture=inline\n")
-cat("inline.args=", paste(commandArgs(TRUE), collapse = "|"), "\n", sep = "")
-cat("inline.lib_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
-cat("inline.pkgs_in_cache=", tolower(all(pkg_in_cache)), "\n", sep = "")
-cat(glue::glue("inline.glue={1 + 1}\n"))
-"#;
+    let expr = concat!(
+        "{",
+        "library(cli); ",
+        "library(glue); ",
+        "lib <- strsplit(Sys.getenv('R_LIBS'), .Platform$path.sep, fixed = TRUE)[[1]][[1]]; ",
+        "expected <- normalizePath(file.path(lib, c('cli', 'glue')), mustWork = TRUE); ",
+        "pkg_in_cache <- normalizePath(path.package(c('cli', 'glue')), mustWork = TRUE) == expected; ",
+        "cat('ir.fixture=inline\\n'); ",
+        "cat('inline.args=', paste(commandArgs(TRUE), collapse = '|'), '\\n', sep = ''); ",
+        "cat('inline.lib_in_cache=', tolower(all(pkg_in_cache)), '\\n', sep = ''); ",
+        "cat('inline.pkgs_in_cache=', tolower(all(pkg_in_cache)), '\\n', sep = ''); ",
+        "cat(glue::glue('inline.glue={1 + 1}\\n'))",
+        "}",
+    );
 
     let out = ir()
         .args([
