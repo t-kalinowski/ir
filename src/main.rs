@@ -1696,15 +1696,16 @@ fn installed_launcher_contents(
     let mut cmd = vec![cmd_quote_os(rscript)];
     match executable.launcher {
         PackageLauncher::Rscript => {
-            cmd.push(cmd_quote_path(&executable.path));
+            cmd.push(cmd_quote_path(&executable.path)?);
         }
         PackageLauncher::Rapp => {
             cmd.push("-e".to_string());
             cmd.push("Rapp::run()".to_string());
-            cmd.push(cmd_quote_path(&executable.path));
+            cmd.push(cmd_quote_path(&executable.path)?);
         }
     }
     cmd.push("%*".to_string());
+    let library = cmd_path_str(library)?;
 
     Ok(format!(
         "@echo off\r\n\
@@ -1720,7 +1721,7 @@ fn installed_launcher_contents(
          set \"R_LIBS_USER=NULL\"\r\n\
          set \"RAPP_LAUNCHER_NAME={}\"\r\n\
          {}\r\n",
-        cmd_path_str(library),
+        library,
         recovery_command,
         executable.name,
         cmd.join(" ")
@@ -1762,13 +1763,21 @@ fn sh_quote_str(value: &str) -> String {
 }
 
 #[cfg(not(unix))]
-fn cmd_quote_path(path: &Path) -> String {
-    cmd_quote_str(&cmd_path_str(path))
+fn cmd_quote_path(path: &Path) -> Result<String, Box<dyn Error>> {
+    Ok(cmd_quote_str(&cmd_path_str(path)?))
 }
 
 #[cfg(not(unix))]
-fn cmd_path_str(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\")
+fn cmd_path_str(path: &Path) -> Result<String, Box<dyn Error>> {
+    Ok(std::path::absolute(path)
+        .map_err(|e| {
+            format!(
+                "failed to normalize `{}` as an absolute path: {e}",
+                path.display()
+            )
+        })?
+        .to_string_lossy()
+        .into_owned())
 }
 
 #[cfg(not(unix))]
