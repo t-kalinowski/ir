@@ -235,15 +235,10 @@ ir_resolve_main <- function() {
   ## 2b. Quarto's knitr engine needs rmarkdown. Inject it (latest) only when the
   ## resolved set does not already provide it -- whether the user declared it
   ## directly or it arrived as a transitive dependency of a declared package.
-  ## A dated `exclude-newer` snapshot already pins the injected version, so the
-  ## reproducibility advisory fires only for unpinned (latest) resolution.
   have_rmarkdown <- !is.null(res) && "rmarkdown" %in% res$package
   if (quarto && !have_rmarkdown) {
     refs_in <- c(refs_in, "rmarkdown")
     res <- ir_resolve_refs(refs_in)
-    if (is.null(exclude_newer))
-      message("ir: using latest rmarkdown; pin a version under ir.dependencies ",
-              "for reproducibility.")
   }
 
   if (is.null(res)) {

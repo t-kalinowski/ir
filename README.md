@@ -148,9 +148,7 @@ Rendering a Quarto document needs the `rmarkdown` package (the knitr engine).
 `ir` appends `rmarkdown` to the resolved dependencies automatically, pulling the
 latest version (or the latest as of `exclude-newer` when set). To pin it, declare
 `rmarkdown` yourself under `ir.dependencies` (e.g. `rmarkdown@2.29`); an explicit
-ref overrides the injected one and silences the reproducibility advisory. When
-the injected `rmarkdown` is used, `ir` prints a one-line note advising you to pin
-a version.
+ref overrides the injected one.
 
 ## Cache management
 
@@ -372,4 +370,4 @@ default destination for `ir tool install`; `--bin-dir <dir>` overrides them.
 - The auto-injected `rmarkdown` for Quarto is added only when the resolved
   dependency set does not already contain it. Declaring `rmarkdown` yourself —
   directly, transitively (e.g. via `quarto`), or through any ref pak resolves to
-  the `rmarkdown` package — suppresses the injected seed and its advisory.
+  the `rmarkdown` package — suppresses the injected seed.
