@@ -64,22 +64,14 @@ fn rscript_from_r_binary(binary: &Path) -> PathBuf {
     binary.with_file_name(name)
 }
 
-fn real_rscript() -> PathBuf {
-    let out = Command::new(rscript())
-        .args([
-            "-e",
-            "writeLines(normalizePath(Sys.which(\"Rscript\"), mustWork = TRUE))",
-        ])
-        .output()
-        .expect("failed to run Rscript");
-    assert_success(&out);
-    PathBuf::from(stdout(&out).trim())
-}
-
 fn normalize_cli_output(output: &[u8]) -> String {
     String::from_utf8_lossy(output)
         .replace("\r\n", "\n")
         .replace(&ir_bin_name(), "ir")
+}
+
+fn normalize_path_output(output: &Output) -> String {
+    stdout(output).trim_end().replace('\\', "/")
 }
 
 fn assert_help_snapshot(name: &str, args: &[&str]) {
@@ -483,7 +475,10 @@ fn cache_dir_reports_override_and_real_r_default() {
         .output()
         .unwrap();
     assert_success(&out);
-    assert_eq!(stdout(&out), stdout(&expected));
+    assert_eq!(
+        normalize_path_output(&out),
+        normalize_path_output(&expected)
+    );
 
     let _ = fs::remove_dir_all(&cache_dir);
 }
@@ -970,7 +965,7 @@ fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-warm-tool-install-cache");
     let bin_dir = unique_dir("ir-warm-tool-install-bin");
-    let rscript = real_rscript();
+    let rscript = rscript();
     let profile = unique_path("ir-rprofile-fail", "R");
     fs::write(
         &profile,
