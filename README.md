@@ -74,13 +74,14 @@ the resolved `ir` cache library and set `R_LIBS_USER=NULL`; if
      the filesystem, or call `rig available`; newer dates use a cached
      `<cache>/rig/available.json`, fetching it with `rig available --json` only
      when the cache is absent.
-   - A *resolution cache* short-circuits this whole phase: the declared
-     dependencies plus the resolution source (and R version / platform) are
-     hashed, and if that exact request was already resolved, its library is
-     reused and **pak is not invoked at all**. Latest resolution folds the
-     current date into the key, forcing a fresh resolution — picking up newly
-     published versions — at most once a day. Dated Posit Package Manager
-     snapshot resolution uses the snapshot date instead.
+   - A *resolution cache* short-circuits this whole phase before the resolver R
+     session starts: the declared dependencies plus the resolution source and
+     selected R executable are hashed, and if that exact request was already
+     resolved, its library is reused and **pak is not invoked at all**. Latest
+     resolution folds the current UTC date into the key, forcing a fresh
+     resolution — picking up newly published versions — at most once a day.
+     Dated Posit Package Manager snapshot resolution uses the snapshot date
+     instead.
    - On a cache miss, the declared dependencies are resolved into concrete
      package versions with **pak** (`pak::pkg_deps`), including the full
      transitive closure.
@@ -340,7 +341,7 @@ fresh CI jobs download and materialise packages when pak is called.
 
 | Variable          | Used by           | Default                                          |
 | ----------------- | ----------------- | ------------------------------------------------ |
-| `IR_CACHE_DIR`    | all commands      | `tools::R_user_dir("ir", "cache")`               |
+| `IR_CACHE_DIR`    | all commands      | R's `tools::R_user_dir("ir", "cache")` convention |
 | `IR_RSCRIPT`      | runs without `r-version` | rig's default R install, then `Rscript` on `PATH` |
 | `IR_QUARTO`       | Quarto rendering  | `quarto` on `PATH`                               |
 | `IR_TOOL_BIN_DIR` | `ir tool install` | first launcher-directory override                |

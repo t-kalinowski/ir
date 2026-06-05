@@ -127,14 +127,11 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
 
 ## --- resolution cache -------------------------------------------------------
 
-# Key identifying a resolution request: the declared dependency specs (order
-# independent), the resolution source, and the R version / platform. Latest
-# resolution includes the current day so newly published versions are picked up
-# at most once per day. Dated PPM snapshot resolution uses only the snapshot date
-# because that repository state is immutable. Order independent so reordering
-# deps doesn't bust the cache.
+# Legacy fallback key identifying a resolution request when Rust does not pass
+# IR_RESOLUTION_MARKER. Normal CLI runs compute the marker path in Rust so warm
+# caches can return before this R resolver is launched.
 ir_input_key <- function(deps,
-                         date          = Sys.Date(),
+                         date          = as.Date(Sys.time(), tz = "UTC"),
                          rversion      = getRversion(),
                          platform      = R.version$platform,
                          exclude_newer = NULL,
@@ -179,20 +176,26 @@ ir_resolve_main <- function() {
   # already provide it. (Distinct from IR_QUARTO, the quarto executable path.)
   quarto <- !is.null(ir_env_optional("IR_QUARTO_RENDER"))
 
-  ## 1b. Resolution cache: if this exact request was resolved already and its
-  ## library still exists, reuse it and skip pak entirely. The marker is written
-  ## only after a successful materialise (below), so its presence implies a
-  ## complete library.
+  ## 1b. Resolution cache: Rust checks this marker before launching this
+  ## resolver. Keep the in-resolver check as the fallback for direct driver runs
+  ## and races where another process warms the marker first. The marker is
+  ## written only after a successful materialise (below), so its presence implies
+  ## a complete library.
   primary_ref <- if (length(deps)) deps[[1L]] else NULL
-  marker <- file.path(cache_dir, "resolutions",
-                      ir_input_key(deps, exclude_newer = exclude_newer,
-                                   quarto = quarto))
-  package_marker <- if (!is.null(primary_ref)) {
+  marker <- ir_env_optional("IR_RESOLUTION_MARKER")
+  if (is.null(marker)) {
+    marker <- file.path(cache_dir, "resolutions",
+                        ir_input_key(deps, exclude_newer = exclude_newer,
+                                     quarto = quarto))
+  }
+  package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
+  if (is.null(package_marker) && !is.null(primary_ref)) {
     file.path(cache_dir, "resolutions",
               paste0(basename(marker), "-primary-", secretbase::sha256(primary_ref)))
   } else {
-    NULL
+    package_marker
   }
+  advisory_marker <- ir_env_optional("IR_RESOLUTION_ADVISORY_MARKER")
   if (file.exists(marker)) {
     cached <- readLines(marker, n = 1L, warn = FALSE)
     if (length(cached) && nzchar(cached) && dir.exists(cached)) {
@@ -236,13 +239,16 @@ ir_resolve_main <- function() {
   ## directly or it arrived as a transitive dependency of a declared package.
   ## A dated `exclude-newer` snapshot already pins the injected version, so the
   ## reproducibility advisory fires only for unpinned (latest) resolution.
+  advisory <- NULL
   have_rmarkdown <- !is.null(res) && "rmarkdown" %in% res$package
   if (quarto && !have_rmarkdown) {
     refs_in <- c(refs_in, "rmarkdown")
     res <- ir_resolve_refs(refs_in)
-    if (is.null(exclude_newer))
-      message("ir: using latest rmarkdown; pin a version under ir.dependencies ",
-              "for reproducibility.")
+    if (is.null(exclude_newer)) {
+      advisory <- paste0("ir: using latest rmarkdown; pin a version under ",
+                         "ir.dependencies for reproducibility.")
+      message(advisory)
+    }
   }
 
   if (is.null(res)) {
@@ -292,6 +298,13 @@ ir_resolve_main <- function() {
   writeLines(library_path, marker)
   if (!is.null(primary_package)) {
     writeLines(primary_package, package_marker)
+  }
+  if (!is.null(advisory_marker)) {
+    if (!is.null(advisory)) {
+      writeLines(advisory, advisory_marker)
+    } else if (file.exists(advisory_marker)) {
+      unlink(advisory_marker)
+    }
   }
 
   writeLines(library_path, result_file)

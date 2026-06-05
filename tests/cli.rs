@@ -1,8 +1,9 @@
 //! Integration tests for the public `ir` CLI.
 //!
-//! These tests avoid mocked `Rscript`, `quarto`, `rig`, or package executable
-//! shims. The end-to-end cases run real fixture scripts/documents through the
-//! compiled binary and assert marker lines printed by those public workflows.
+//! These tests mostly avoid mocked `Rscript`, `quarto`, `rig`, or package
+//! executable shims. The end-to-end cases run real fixture scripts/documents
+//! through the compiled binary and assert marker lines printed by those public
+//! workflows.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,18 @@ fn ir_bin_name() -> String {
 
 fn rscript() -> String {
     std::env::var("IR_RSCRIPT").unwrap_or_else(|_| "Rscript".into())
+}
+
+fn real_rscript() -> PathBuf {
+    let out = Command::new(rscript())
+        .args([
+            "-e",
+            "writeLines(normalizePath(Sys.which(\"Rscript\"), mustWork = TRUE))",
+        ])
+        .output()
+        .expect("failed to run Rscript");
+    assert_success(&out);
+    PathBuf::from(stdout(&out).trim())
 }
 
 fn normalize_cli_output(output: &[u8]) -> String {
@@ -567,33 +580,40 @@ cat("ir.fixture=normalized-cache\n")
 fn run_quarto_fixture_injects_rmarkdown_and_renders() {
     let _guard = e2e_lock();
     let fixture_dir = fixture("run");
+    let cache_dir = unique_dir("ir-e2e-qmd-cache");
 
-    let out = ir()
-        .current_dir(&fixture_dir)
-        .args(["run", "--isolated"])
-        .arg("report.qmd")
-        .args(["--to", "html"])
-        .output()
-        .unwrap();
+    for _ in 0..2 {
+        let out = ir()
+            .current_dir(&fixture_dir)
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--isolated"])
+            .arg("report.qmd")
+            .args(["--to", "html"])
+            .output()
+            .unwrap();
 
-    assert_success(&out);
+        assert_success(&out);
 
-    let html = fs::read_to_string(fixture_dir.join("report.html"))
-        .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
-    assert!(html.contains("ir.fixture=qmd"), "{html}");
-    assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
-    assert!(html.contains("qmd.pkgs_in_cache=true"), "{html}");
-    assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
+        let html = fs::read_to_string(fixture_dir.join("report.html")).unwrap_or_else(|e| {
+            panic!("failed to read rendered report: {e}\n{}", output_text(&out))
+        });
+        assert!(html.contains("ir.fixture=qmd"), "{html}");
+        assert!(html.contains("qmd.lib_in_cache=true"), "{html}");
+        assert!(html.contains("qmd.pkgs_in_cache=true"), "{html}");
+        assert!(html.contains("qmd.result=a:4,b:2"), "{html}");
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("using latest rmarkdown"),
-        "expected the rmarkdown injection advisory\n{}",
-        output_text(&out)
-    );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("using latest rmarkdown"),
+            "expected the rmarkdown injection advisory\n{}",
+            output_text(&out)
+        );
 
-    let _ = fs::remove_file(fixture_dir.join("report.html"));
-    let _ = fs::remove_dir_all(fixture_dir.join("report_files"));
+        let _ = fs::remove_file(fixture_dir.join("report.html"));
+        let _ = fs::remove_dir_all(fixture_dir.join("report_files"));
+    }
+
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 // report-pinned.qmd declares rmarkdown itself, so the injected seed is
@@ -897,6 +917,62 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
 
     let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-warm-tool-install-cache");
+    let bin_dir = unique_dir("ir-warm-tool-install-bin");
+    let rscript = real_rscript();
+    let profile = unique_path("ir-rprofile-fail", "R");
+    fs::write(
+        &profile,
+        "stop('resolver Rscript should not be launched')\n",
+    )
+    .unwrap();
+
+    let warm = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", &rscript)
+        .env_remove("R_PROFILE_USER")
+        .args([
+            "tool",
+            "install",
+            "--with",
+            "docopt,pkgsearch,prettyunits",
+            "--bin-dir",
+        ])
+        .arg(&bin_dir)
+        .arg("cli")
+        .output()
+        .unwrap();
+    assert_success(&warm);
+
+    let cached = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", &rscript)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "tool",
+            "install",
+            "--force",
+            "--with",
+            "docopt,pkgsearch,prettyunits",
+            "--bin-dir",
+        ])
+        .arg(&bin_dir)
+        .arg("cli")
+        .output()
+        .unwrap();
+
+    assert_success(&cached);
+    assert_stdout_contains(&cached, "Installed");
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 fn launcher_path(bin_dir: &Path, name: &str) -> PathBuf {

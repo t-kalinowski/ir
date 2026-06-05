@@ -17,12 +17,13 @@
 //!
 //! The pipeline has two phases:
 //!
-//!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. A
-//!      private R session (`driver/resolve.R`) receives the normalized pak refs on
-//!      stdin, resolves them with pak, hashes the resolved set into a
-//!      content-addressed library path under the cache directory, and
-//!      materialises that path as a light-weight library of symlinks into renv's
-//!      package cache. The path is reported back to us.
+//!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. If
+//!      the resolution cache is warm, Rust reuses the cached library path
+//!      directly. Otherwise, a private R session (`driver/resolve.R`) receives
+//!      the normalized pak refs on stdin, resolves them with pak, hashes the
+//!      resolved set into a content-addressed library path under the cache
+//!      directory, and materialises that path as a light-weight library of
+//!      symlinks into renv's package cache. The path is reported back to us.
 //!
 //!   2. We launch the user's script in a fresh, isolated R session whose
 //!      library path is exactly that library plus base R.
@@ -30,8 +31,9 @@
 use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +41,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use saphyr::{Yaml, YamlLoader};
 use saphyr_parser::Parser;
+use sha2::{Digest, Sha256};
 
 mod quarto;
 mod rig;
@@ -710,8 +713,8 @@ fn cmd_run(
     // escaping.
     source.reject_unsupported_rscript_args(rscript_args)?;
 
-    // Phase 1: private R session resolves deps and materialises the library.
-    // Rust parses the frontmatter and sends normalized pak refs on stdin.
+    // Phase 1: reuse a warm resolution marker, or launch the private resolver
+    // R session to resolve deps and materialise the library.
     let library = resolve_library(&rscript, &spec)?;
 
     // Phase 2: render the document, or run the user's program, in an isolated
@@ -823,10 +826,10 @@ fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Phase 1 — run the embedded driver in a private R session and return the
-/// path to the materialised library. The dependency specs in `spec` (the
-/// script's frontmatter plus any `--with` packages) are normalized into pak refs
-/// and streamed on stdin.
+/// Phase 1 — return a cached materialised library path, or run the embedded
+/// driver in a private R session to resolve and materialise it. The dependency
+/// specs in `spec` (the script's frontmatter plus any `--with` packages) are
+/// normalized into pak refs before cache keying and resolver input.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
     Ok(resolve_library_inner(rscript, spec, false)?.library)
 }
@@ -850,11 +853,254 @@ struct ResolvedLibrary {
     primary_package: Option<String>,
 }
 
+struct ResolutionCacheEntry {
+    marker: PathBuf,
+    package_marker: Option<PathBuf>,
+    advisory_marker: PathBuf,
+}
+
+fn resolution_cache_entry(
+    rscript: &OsStr,
+    spec: &ScriptSpec,
+    dependencies: &[String],
+) -> Result<Option<ResolutionCacheEntry>, Box<dyn Error>> {
+    let Some(rscript_identity) = rscript_identity(rscript) else {
+        return Ok(None);
+    };
+
+    let cache_dir = ir_cache_dir()?;
+    let marker = cache_dir.join("resolutions").join(resolution_cache_key(
+        dependencies,
+        spec.exclude_newer.as_deref(),
+        spec.quarto,
+        &rscript_identity,
+    ));
+    let marker_name = marker
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or("resolution cache marker path is not valid UTF-8")?;
+    let package_marker = dependencies.first().map(|primary_ref| {
+        marker.with_file_name(format!("{marker_name}-primary-{}", sha256_hex(primary_ref)))
+    });
+    let advisory_marker = marker.with_file_name(format!("{marker_name}-advisory"));
+
+    Ok(Some(ResolutionCacheEntry {
+        marker,
+        package_marker,
+        advisory_marker,
+    }))
+}
+
+fn read_cached_resolution(
+    cache: &ResolutionCacheEntry,
+    primary_package: bool,
+) -> Result<Option<ResolvedLibrary>, Box<dyn Error>> {
+    if !cache.marker.exists() {
+        return Ok(None);
+    }
+
+    let result = fs::read_to_string(&cache.marker)
+        .map_err(|e| format!("failed to read `{}`: {e}", cache.marker.display()))?;
+    let library = result.lines().next().unwrap_or_default().trim();
+    if library.is_empty() || !Path::new(library).is_dir() {
+        return Ok(None);
+    }
+    if cache.advisory_marker.exists() {
+        let advisory = fs::read_to_string(&cache.advisory_marker)
+            .map_err(|e| format!("failed to read `{}`: {e}", cache.advisory_marker.display()))?;
+        let advisory = advisory.trim();
+        if !advisory.is_empty() {
+            eprintln!("{advisory}");
+        }
+    }
+
+    let primary_package = if primary_package {
+        let Some(package_marker) = &cache.package_marker else {
+            return Ok(None);
+        };
+        if !package_marker.exists() {
+            return Ok(None);
+        }
+        let package = fs::read_to_string(package_marker)
+            .map_err(|e| format!("failed to read `{}`: {e}", package_marker.display()))?;
+        let package = package.lines().next().unwrap_or_default().trim();
+        if package.is_empty() {
+            return Ok(None);
+        }
+        Some(package.to_string())
+    } else {
+        None
+    };
+
+    Ok(Some(ResolvedLibrary {
+        library: Some(PathBuf::from(library)),
+        primary_package,
+    }))
+}
+
+fn resolution_cache_key(
+    dependencies: &[String],
+    exclude_newer: Option<&str>,
+    quarto: bool,
+    rscript_identity: &str,
+) -> String {
+    let source_key = exclude_newer
+        .map(|date| format!("exclude-newer: {date}"))
+        .unwrap_or_else(current_utc_date);
+    let mut parts = dependencies.to_vec();
+    parts.sort();
+    parts.push(source_key);
+    if quarto {
+        parts.push("quarto".to_string());
+    }
+    parts.push("ir-resolution-v2".to_string());
+    parts.push(format!("rscript: {rscript_identity}"));
+
+    sha256_fields(&parts)
+}
+
+fn rscript_identity(rscript: &OsStr) -> Option<String> {
+    let command = rscript_command_path(rscript);
+    let path = fs::canonicalize(&command).ok()?;
+    if !is_rscript_executable(&path) {
+        return None;
+    }
+
+    let metadata = fs::metadata(&path).ok()?;
+    let mut identity = path.to_string_lossy().into_owned();
+
+    identity.push_str(&format!(";len={}", metadata.len()));
+    if let Ok(modified) = metadata.modified() {
+        let nanos = modified
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        identity.push_str(&format!(";mtime={nanos}"));
+    }
+
+    Some(identity)
+}
+
+fn is_rscript_executable(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    if !matches!(
+        name.to_ascii_lowercase().as_str(),
+        "rscript" | "rscript.exe"
+    ) {
+        return false;
+    }
+    !is_script_launcher(path)
+}
+
+fn is_script_launcher(path: &Path) -> bool {
+    if path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "bat" | "cmd" | "ps1" | "sh"
+        )
+    }) {
+        return true;
+    }
+
+    let Ok(mut file) = File::open(path) else {
+        return true;
+    };
+    let mut magic = [0; 2];
+    matches!(file.read(&mut magic), Ok(2)) && magic == *b"#!"
+}
+
+fn rscript_command_path(rscript: &OsStr) -> PathBuf {
+    let path = Path::new(rscript);
+    if path.components().count() > 1 {
+        return path.to_path_buf();
+    }
+
+    find_on_path(rscript).unwrap_or_else(|| path.to_path_buf())
+}
+
+fn find_on_path(command: &OsStr) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        let candidate = dir.join(command);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+
+        #[cfg(windows)]
+        {
+            let pathext = env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+            let command = command.to_string_lossy();
+            for ext in pathext.to_string_lossy().split(';') {
+                let candidate = dir.join(format!("{command}{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn current_utc_date() -> String {
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() / 86_400)
+        .unwrap_or(0);
+    let (year, month, day) = civil_from_days(days as i64);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = month_part + if month_part < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+
+    (year as i32, month as u32, day as u32)
+}
+
+fn sha256_hex(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").unwrap();
+    }
+    hex
+}
+
+fn sha256_fields(fields: &[String]) -> String {
+    let mut encoded = String::new();
+    for field in fields {
+        write!(&mut encoded, "{}:", field.len()).unwrap();
+        encoded.push_str(field);
+        encoded.push('\n');
+    }
+    sha256_hex(&encoded)
+}
+
 fn resolve_library_inner(
     rscript: &OsStr,
     spec: &ScriptSpec,
     primary_package: bool,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
+    let dependencies = normalized_dependencies(&spec.dependencies);
+    let cache = resolution_cache_entry(rscript, spec, &dependencies)?;
+    if let Some(cache) = &cache {
+        if let Some(resolved) = read_cached_resolution(cache, primary_package)? {
+            return Ok(resolved);
+        }
+    }
+
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let result_file = unique_path(&tmp, "ir-libpath", "txt");
@@ -870,8 +1116,18 @@ fn resolve_library_inner(
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true");
+    if let Some(cache) = &cache {
+        cmd.env("IR_RESOLUTION_MARKER", &cache.marker)
+            .env("IR_RESOLUTION_ADVISORY_MARKER", &cache.advisory_marker);
+    }
     if let Some(package_result_file) = &package_result_file {
         cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
+        if let Some(package_marker) = cache
+            .as_ref()
+            .and_then(|cache| cache.package_marker.as_ref())
+        {
+            cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+        }
     }
     if let Some(exclude_newer) = &spec.exclude_newer {
         cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
@@ -885,7 +1141,7 @@ fn resolve_library_inner(
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
     {
         let mut stdin = child.stdin.take().ok_or("failed to open resolver stdin")?;
-        for dependency in normalized_dependencies(&spec.dependencies) {
+        for dependency in dependencies {
             writeln!(stdin, "{dependency}")?;
         }
     }
@@ -1508,37 +1764,52 @@ fn rscript_command() -> OsString {
     rig::default_rscript().unwrap_or_else(|| "Rscript".into())
 }
 
-/// The `ir` cache root, matching `tools::R_user_dir("ir", "cache")` unless
-/// `IR_CACHE_DIR` overrides it.
+/// The `ir` cache root, matching R's `tools::R_user_dir("ir", "cache")`
+/// convention unless `IR_CACHE_DIR` overrides it.
 fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(path) = nonempty_env("IR_CACHE_DIR") {
         return Ok(PathBuf::from(path));
     }
 
-    let rscript = rscript_command();
-    let output = Command::new(&rscript)
-        .arg("-e")
-        .arg("writeLines(tools::R_user_dir(\"ir\", \"cache\"))")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| spawn_error(&rscript, e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("failed to resolve cache dir with tools::R_user_dir: {stderr}").into());
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let path = stdout.trim();
-    if path.is_empty() {
-        return Err("tools::R_user_dir returned an empty cache dir".into());
-    }
-
-    Ok(PathBuf::from(path))
+    Ok(r_user_cache_dir()?.join("R").join("ir"))
 }
 
 fn nonempty_env(name: &str) -> Option<OsString> {
     env::var_os(name).filter(|value| !value.is_empty())
+}
+
+fn r_user_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = nonempty_env("R_USER_CACHE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(path));
+    }
+
+    #[cfg(windows)]
+    {
+        let localappdata = env::var_os("LOCALAPPDATA").unwrap_or_default();
+        return Ok(PathBuf::from(localappdata).join("R").join("cache"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(home_dir()?
+            .join("Library")
+            .join("Caches")
+            .join("org.R-project.R"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Ok(home_dir()?.join(".cache"))
+    }
+}
+
+fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let home = nonempty_env("HOME").ok_or("cannot determine home directory")?;
+    let home = PathBuf::from(home);
+    Ok(fs::canonicalize(&home).unwrap_or(home))
 }
 
 fn tool_install_bin_dir() -> Result<PathBuf, Box<dyn Error>> {
