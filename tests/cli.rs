@@ -507,7 +507,15 @@ fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .args(["run", "--isolated", "--with", "cli", "--vanilla", "-e", expr])
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            expr,
+        ])
         .output()
         .unwrap();
     assert_success(&out);
@@ -540,7 +548,15 @@ fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .args(["run", "--isolated", "--with", "cli", "--vanilla", "-e", expr])
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            expr,
+        ])
         .output()
         .unwrap();
     assert_success(&out);
