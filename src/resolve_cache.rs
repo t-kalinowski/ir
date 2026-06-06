@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 pub(crate) struct Paths {
     pub(crate) marker: PathBuf,
     pub(crate) package_marker: Option<PathBuf>,
+    pub(crate) source: String,
 }
 
 pub(crate) struct CachedResolution {
@@ -31,6 +32,7 @@ pub(crate) fn paths(
     };
 
     let cache_dir = crate::ir_cache_dir()?;
+    let source = resolution_cache_source(exclude_newer);
     let marker = cache_dir.join("resolutions").join(resolution_cache_key(
         dependencies,
         exclude_newer,
@@ -48,6 +50,7 @@ pub(crate) fn paths(
     Ok(Some(Paths {
         marker,
         package_marker,
+        source,
     }))
 }
 
@@ -63,9 +66,13 @@ pub(crate) fn read(
         return Ok(None);
     }
 
-    let result = fs::read_to_string(&cache.marker)
+    let marker = fs::read_to_string(&cache.marker)
         .map_err(|e| format!("failed to read `{}`: {e}", cache.marker.display()))?;
-    let library = result.lines().next().unwrap_or_default().trim();
+    let mut lines = marker.lines();
+    if lines.next() != Some(cache.source.as_str()) {
+        return Ok(None);
+    }
+    let library = lines.next().unwrap_or_default().trim();
     if library.is_empty() || !Path::new(library).is_dir() {
         return Ok(None);
     }
@@ -102,7 +109,7 @@ fn resolution_cache_key(
 ) -> String {
     let source_key = exclude_newer
         .map(|date| format!("exclude-newer: {date}"))
-        .unwrap_or_else(current_utc_date);
+        .unwrap_or_else(|| "latest".to_string());
     let mut parts = dependencies.to_vec();
     parts.sort();
     parts.push(source_key);
@@ -112,6 +119,12 @@ fn resolution_cache_key(
     parts.push(format!("rscript: {rscript_identity}"));
 
     sha256_fields(&parts)
+}
+
+fn resolution_cache_source(exclude_newer: Option<&str>) -> String {
+    exclude_newer
+        .map(|date| format!("exclude-newer: {date}"))
+        .unwrap_or_else(|| format!("latest: {}", current_utc_date()))
 }
 
 fn rscript_identity(rscript: &OsStr) -> Option<String> {

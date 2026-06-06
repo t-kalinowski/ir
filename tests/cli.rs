@@ -499,6 +499,76 @@ fn run_normalizes_version_specs_before_resolution_cache_keying() {
     assert_eq!(resolution_count, 1);
 }
 
+#[test]
+fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-latest-cache-refresh");
+    let expr = "{ library(cli); cat('ir.fixture=latest-cache-refresh\\n') }";
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--with", "cli", "--vanilla", "-e", expr])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=latest-cache-refresh");
+
+    let resolution_dir = cache_dir.join("resolutions");
+    let markers = fs::read_dir(&resolution_dir)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", resolution_dir.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+
+    let marker = &markers[0];
+    let marker_text = fs::read_to_string(marker)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", marker.display()));
+    let mut lines = marker_text.lines();
+    let today = format!("latest: {}", time::OffsetDateTime::now_utc().date());
+    assert_eq!(lines.next(), Some(today.as_str()));
+    let library = lines
+        .next()
+        .unwrap_or_else(|| panic!("{} should record a library path", marker.display()));
+    assert!(
+        Path::new(library).is_dir(),
+        "{} should record an existing library path",
+        marker.display()
+    );
+
+    fs::write(marker, format!("latest: 1970-01-01\n{library}\n"))
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", marker.display()));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--with", "cli", "--vanilla", "-e", expr])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=latest-cache-refresh");
+
+    let markers = fs::read_dir(&resolution_dir)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", resolution_dir.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(markers, vec![marker.clone()]);
+
+    let marker_text = fs::read_to_string(marker)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", marker.display()));
+    let mut lines = marker_text.lines();
+    let today = format!("latest: {}", time::OffsetDateTime::now_utc().date());
+    assert_eq!(lines.next(), Some(today.as_str()));
+    let refreshed_library = lines
+        .next()
+        .unwrap_or_else(|| panic!("{} should record a library path", marker.display()));
+    assert!(
+        Path::new(refreshed_library).is_dir(),
+        "{} should record an existing library path",
+        marker.display()
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
 // report.qmd deliberately does NOT declare rmarkdown, so the render only
 // succeeds because ir injects it quietly for the knitr engine.
 #[test]
