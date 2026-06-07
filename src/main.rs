@@ -5,10 +5,11 @@
 //!
 //! ```r
 //! #!/usr/bin/env -S ir run
-//! #| dependencies:
+//! #| packages:
 //! #|   - dplyr>=1.0
 //! #|   - tidyr
 //! #| r-version: ">= 4.0"
+//! #| isolated: true
 //! #| exclude-newer: "2024-01-15"
 //!
 //! library(dplyr)
@@ -17,15 +18,17 @@
 //!
 //! The pipeline has two phases:
 //!
-//!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. A
-//!      private R session (`driver/resolve.R`) receives the normalized pak refs on
-//!      stdin, resolves them with pak, hashes the resolved set into a
-//!      content-addressed library path under the cache directory, and
-//!      materialises that path as an isolated package library. The path is
-//!      reported back to us.
+//!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. If
+//!      the resolution cache is warm, Rust reuses the cached library path
+//!      directly. Otherwise, a private R session (`driver/resolve.R`) receives
+//!      the normalized pak refs on stdin, resolves them with pak, hashes the
+//!      resolved set into a content-addressed library path under the cache
+//!      directory, and materialises that path as an isolated package library.
+//!      The path is reported back to us.
 //!
-//!   2. We launch the user's script in a fresh, isolated R session whose
-//!      library path is exactly that library plus base R.
+//!   2. We launch the user's script in a fresh R session with that library
+//!      prepended to `.libPaths()`. With `--isolated`, the user library is
+//!      dropped.
 
 use std::env;
 use std::error::Error;
@@ -41,6 +44,7 @@ use saphyr::{Yaml, YamlLoader};
 use saphyr_parser::Parser;
 
 mod quarto;
+mod resolve_cache;
 mod rig;
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
@@ -51,6 +55,7 @@ const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
 struct ScriptSpec {
     dependencies: Vec<String>,
     exclude_newer: Option<String>,
+    isolated: bool,
     r_requirement: Option<String>,
     // A Quarto source: the resolver injects rmarkdown for the knitr engine.
     quarto: bool,
@@ -142,12 +147,31 @@ fn tool_command() -> ClapCommand {
         .about("Run package executables")
         .arg_required_else_help(true)
         .subcommand(tool_run_command())
+        .subcommand(tool_rx_command())
         .subcommand(tool_install_command())
 }
 
 fn tool_run_command() -> ClapCommand {
-    ClapCommand::new("run")
-        .about("Resolve a package and run an executable from its exec directory")
+    tool_run_args(
+        ClapCommand::new("run")
+            .about("Resolve a package and run an executable from its exec directory"),
+    )
+}
+
+fn tool_rx_command() -> ClapCommand {
+    tool_run_args(
+        ClapCommand::new("rx")
+            .hide(true)
+            .display_name("rx")
+            .override_usage("rx [OPTIONS] [ARGS]...")
+            .about("Run a package executable")
+            .version(env!("CARGO_PKG_VERSION"))
+            .after_help("Use `ir tool run` for more details."),
+    )
+}
+
+fn tool_run_args(command: ClapCommand) -> ClapCommand {
+    command
         .arg(
             Arg::new("from")
                 .long("from")
@@ -157,6 +181,7 @@ fn tool_run_command() -> ClapCommand {
         )
         .arg(
             Arg::new("with")
+                .short('w')
                 .long("with")
                 .value_name("PKG")
                 .num_args(1)
@@ -485,11 +510,29 @@ fn is_package_executable_name(name: &str) -> bool {
         && !name.chars().any(char::is_whitespace)
 }
 
+#[derive(Clone, Copy)]
+enum ToolRunInvocation {
+    ToolRun,
+    Rx,
+}
+
+impl ToolRunInvocation {
+    fn command(self) -> &'static str {
+        match self {
+            Self::ToolRun => "ir tool run",
+            Self::Rx => "rx",
+        }
+    }
+}
+
 /// Parse `ir tool run`, which resolves a provider package and runs a command
 /// from that package's `exec/` directory. This is intentionally separate from
 /// `ir run`: script and expression runs are source-oriented, tool runs are
 /// package-oriented and isolated by default.
-fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>> {
+fn parse_tool_run_args(
+    args: Vec<String>,
+    invocation: ToolRunInvocation,
+) -> Result<ToolRunArgs, Box<dyn Error>> {
     let mut rscript_args = Vec::new();
     let mut with_deps = Vec::new();
     let mut r_requirement = None;
@@ -499,26 +542,35 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
 
     while let Some(arg) = iter.next() {
         if arg == "--from" {
-            let value = iter
-                .next()
-                .ok_or("`--from` requires a package ref (try `ir tool run --from cli cli`)")?;
+            let value = iter.next().ok_or_else(|| {
+                format!(
+                    "`--from` requires a package ref (try `{} --from cli cli`)",
+                    invocation.command()
+                )
+            })?;
             from = Some(value);
         } else if let Some(value) = arg.strip_prefix("--from=") {
             if value.is_empty() {
                 return Err("`--from` requires a package ref".into());
             }
             from = Some(value.to_string());
-        } else if arg == "--with" {
-            let value = iter
-                .next()
-                .ok_or("`--with` requires a package (try `ir tool run --with dplyr btw`)")?;
+        } else if arg == "--with" || arg == "-w" {
+            let value = iter.next().ok_or_else(|| {
+                format!(
+                    "`{arg}` requires a package (try `{} {arg} dplyr btw`)",
+                    invocation.command()
+                )
+            })?;
             push_with_deps(&mut with_deps, &value);
         } else if let Some(value) = arg.strip_prefix("--with=") {
             push_with_deps(&mut with_deps, value);
         } else if arg == "--r-version" {
-            let value = iter.next().ok_or(
-                "`--r-version` requires a version spec (try `ir tool run --r-version 4.5 btw`)",
-            )?;
+            let value = iter.next().ok_or_else(|| {
+                format!(
+                    "`--r-version` requires a version spec (try `{} --r-version 4.5 btw`)",
+                    invocation.command()
+                )
+            })?;
             r_requirement = Some(value);
         } else if let Some(value) = arg.strip_prefix("--r-version=") {
             r_requirement = Some(value.to_string());
@@ -526,7 +578,7 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
             // `ir tool run` is always isolated; accept this for symmetry with
             // `ir run` without changing behavior.
         } else if arg == "-e" {
-            return Err("`-e` is not supported by `ir tool run`".into());
+            return Err(format!("`-e` is not supported by `{}`", invocation.command()).into());
         } else if arg.starts_with('-') {
             rscript_args.push(arg);
         } else {
@@ -547,8 +599,12 @@ fn parse_tool_run_args(args: Vec<String>) -> Result<ToolRunArgs, Box<dyn Error>>
             executable,
         }
     } else {
-        let package_ref = positional
-            .ok_or("`ir tool run` requires a package ref or `--from <pkg-ref> <command>`")?;
+        let package_ref = positional.ok_or_else(|| {
+            format!(
+                "`{}` requires a package ref or `--from <pkg-ref> <command>`",
+                invocation.command()
+            )
+        })?;
         let executable = infer_self_named_executable(&package_ref)
             .ok_or("self-named package tools require an inferable package name; use `--from <pkg-ref> <command>`")?;
         PackageExecTarget {
@@ -643,7 +699,11 @@ fn push_with_deps(with_deps: &mut Vec<String>, value: &str) {
 fn cmd_tool(matches: &ArgMatches, argv: &[String]) -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
         Some(("run", _)) => {
-            let run = parse_tool_run_args(argv[3..].to_vec())?;
+            let run = parse_tool_run_args(argv[3..].to_vec(), ToolRunInvocation::ToolRun)?;
+            cmd_tool_run(&run)
+        }
+        Some(("rx", _)) => {
+            let run = parse_tool_run_args(argv[3..].to_vec(), ToolRunInvocation::Rx)?;
             cmd_tool_run(&run)
         }
         Some(("install", _)) => {
@@ -702,20 +762,20 @@ fn cmd_run(
     if let Some(req) = r_requirement {
         spec.r_requirement = Some(req.to_string());
     }
+    let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec)?;
 
     // Reject comma-bearing Rscript options before resolving, so a run that could
-    // never be launched fails fast instead of after phase-1 resolution. quarto
+    // never be launched fails fast instead of after dependency resolution. quarto
     // forwards them via comma-separated QUARTO_KNITR_RSCRIPT_ARGS, which has no
     // escaping.
     source.reject_unsupported_rscript_args(rscript_args)?;
 
-    // Phase 1: private R session resolves deps and materialises the library.
-    // Rust parses the frontmatter and sends normalized pak refs on stdin.
+    // Reuse a warm resolution marker, or launch the private resolver R session
+    // to resolve deps and materialise the library.
     let library = resolve_library(&rscript, &spec)?;
 
-    // Phase 2: render the document, or run the user's program, in an isolated
-    // R session.
+    // Render the document, or run the user's program, in an isolated R session.
     let code = source.run_user_code(
         &rscript,
         library.as_deref(),
@@ -823,10 +883,10 @@ fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Phase 1 — run the embedded driver in a private R session and return the
-/// path to the materialised library. The dependency specs in `spec` (the
-/// script's frontmatter plus any `--with` packages) are normalized into pak refs
-/// and streamed on stdin.
+/// Return a cached materialised library path, or run the embedded driver in a
+/// private R session to resolve and materialise it. The dependency specs in
+/// `spec` (the script's frontmatter plus any `--with` packages) are normalized
+/// into pak refs before cache keying and resolver input.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
     Ok(resolve_library_inner(rscript, spec, false)?.library)
 }
@@ -855,6 +915,22 @@ fn resolve_library_inner(
     spec: &ScriptSpec,
     primary_package: bool,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
+    let dependencies = normalized_dependencies(&spec.dependencies);
+    let cache_dir = ir_cache_dir()?;
+    let resolution_cache_paths = resolve_cache::paths(
+        &cache_dir,
+        rscript,
+        &dependencies,
+        spec.exclude_newer.as_deref(),
+        spec.quarto,
+    )?;
+    if let Some(resolved) = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)? {
+        return Ok(ResolvedLibrary {
+            library: Some(resolved.library),
+            primary_package: resolved.primary_package,
+        });
+    }
+
     let tmp = env::temp_dir();
     let driver = unique_path(&tmp, "ir-resolve", "R");
     let result_file = unique_path(&tmp, "ir-libpath", "txt");
@@ -867,11 +943,22 @@ fn resolve_library_inner(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .env("IR_RESOLVE_RESULT_FILE", &result_file)
+        .env("IR_CACHE_DIR", &cache_dir)
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true");
+    if let Some(paths) = &resolution_cache_paths {
+        cmd.env("IR_RESOLUTION_MARKER", &paths.marker)
+            .env("IR_RESOLUTION_SOURCE", &paths.source);
+    }
     if let Some(package_result_file) = &package_result_file {
         cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
+        if let Some(package_marker) = resolution_cache_paths
+            .as_ref()
+            .and_then(|paths| paths.package_marker.as_ref())
+        {
+            cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+        }
     }
     if let Some(exclude_newer) = &spec.exclude_newer {
         cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
@@ -885,7 +972,7 @@ fn resolve_library_inner(
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
     {
         let mut stdin = child.stdin.take().ok_or("failed to open resolver stdin")?;
-        for dependency in normalized_dependencies(&spec.dependencies) {
+        for dependency in dependencies {
             writeln!(stdin, "{dependency}")?;
         }
     }
@@ -1298,6 +1385,7 @@ fn script_spec_from_yaml_mapping(doc: &Yaml<'_>) -> Result<ScriptSpec, Box<dyn E
     Ok(ScriptSpec {
         dependencies: frontmatter_dependencies(doc)?,
         exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
+        isolated: frontmatter_optional_bool(doc, "isolated")?.unwrap_or(false),
         r_requirement: frontmatter_optional_string(doc, "r-version")?,
         // Quarto-ness is a property of the source, not its frontmatter; cmd_run
         // sets it from RunSource::is_quarto after parsing.
@@ -1323,7 +1411,7 @@ fn rscript_for_spec(spec: &ScriptSpec) -> Result<OsString, Box<dyn Error>> {
 }
 
 fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error>> {
-    let Some(value) = doc.as_mapping_get("dependencies") else {
+    let Some(value) = doc.as_mapping_get("packages") else {
         return Ok(Vec::new());
     };
     if value.is_null() {
@@ -1346,10 +1434,24 @@ fn push_dependency_words(
     value: &Yaml<'_>,
 ) -> Result<(), Box<dyn Error>> {
     let Some(value) = value.as_str() else {
-        return Err("frontmatter `dependencies` entries must be strings".into());
+        return Err("frontmatter `packages` entries must be strings".into());
     };
     dependencies.extend(value.split_whitespace().map(str::to_owned));
     Ok(())
+}
+
+fn frontmatter_optional_bool(doc: &Yaml<'_>, key: &str) -> Result<Option<bool>, Box<dyn Error>> {
+    let Some(value) = doc.as_mapping_get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("frontmatter `{key}` must be a boolean").into())
 }
 
 fn frontmatter_optional_string(
@@ -1455,9 +1557,9 @@ fn parse_simple_version_ref(dependency: &str) -> Option<(&str, &str, &str)> {
     ))
 }
 
-/// Phase 2 — run the user's program in an ordinary R session pointed at
-/// `library`. The program is a script file, `-` stdin source, or one or more
-/// inline expressions evaluated via `Rscript -e`.
+/// Run the user's program in an ordinary R session pointed at `library`. The
+/// program is a script file, `-` stdin source, or one or more inline expressions
+/// evaluated via `Rscript -e`.
 ///
 /// It runs as an ordinary `Rscript [Rscript-options...] (script.R | - | -e
 /// expr...)` - its `.Renviron`, `.Rprofile` and site files are read unless the
@@ -1569,37 +1671,66 @@ fn rscript_command() -> OsString {
     rig::default_rscript().unwrap_or_else(|| "Rscript".into())
 }
 
-/// The `ir` cache root, matching `tools::R_user_dir("ir", "cache")` unless
-/// `IR_CACHE_DIR` overrides it.
+/// The Rust-owned `ir` cache root. `IR_CACHE_DIR` overrides it; otherwise it
+/// follows R's per-package cache layout from the process environment and
+/// platform defaults.
 fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(path) = nonempty_env("IR_CACHE_DIR") {
         return Ok(PathBuf::from(path));
     }
 
-    let rscript = rscript_command();
-    let output = Command::new(&rscript)
-        .arg("-e")
-        .arg("writeLines(tools::R_user_dir(\"ir\", \"cache\"))")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| spawn_error(&rscript, e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("failed to resolve cache dir with tools::R_user_dir: {stderr}").into());
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let path = stdout.trim();
-    if path.is_empty() {
-        return Err("tools::R_user_dir returned an empty cache dir".into());
-    }
-
-    Ok(PathBuf::from(path))
+    Ok(r_user_cache_dir()?.join("R").join("ir"))
 }
 
 fn nonempty_env(name: &str) -> Option<OsString> {
     env::var_os(name).filter(|value| !value.is_empty())
+}
+
+fn r_user_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = nonempty_env("R_USER_CACHE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(path));
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(path) = nonempty_env("LOCALAPPDATA") {
+            return Ok(PathBuf::from(path).join("R").join("cache"));
+        }
+        if let Some(path) = nonempty_env("USERPROFILE") {
+            return Ok(PathBuf::from(path)
+                .join("AppData")
+                .join("Local")
+                .join("R")
+                .join("cache"));
+        }
+        Err(
+            "cannot determine Windows cache directory; set IR_CACHE_DIR, R_USER_CACHE_DIR, XDG_CACHE_HOME, LOCALAPPDATA, or USERPROFILE"
+                .into(),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(home_dir()?
+            .join("Library")
+            .join("Caches")
+            .join("org.R-project.R"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Ok(home_dir()?.join(".cache"))
+    }
+}
+
+#[cfg(unix)]
+fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let home = nonempty_env("HOME").ok_or("cannot determine home directory")?;
+    let home = PathBuf::from(home);
+    Ok(fs::canonicalize(&home).unwrap_or(home))
 }
 
 fn tool_install_bin_dir() -> Result<PathBuf, Box<dyn Error>> {

@@ -8,10 +8,11 @@ that library ready to use.
 
 ```r
 #!/usr/bin/env -S ir run
-#| dependencies:
+#| packages:
 #|   - dplyr>=1.0
 #|   - tidyr
 #| r-version: ">= 4.0"
+#| isolated: true
 #| exclude-newer: "2024-01-15"
 
 library(dplyr)
@@ -29,7 +30,7 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 
 ## Why use it?
 
-- **The file explains itself.** Dependencies live in the script or document, not
+- **The file explains itself.** Package requirements live in the script or document, not
   in a separate setup note.
 - **Fast by design.** `ir` keeps package setup direct and reuses cached
   resolutions and libraries when the same requirements are seen again.
@@ -37,9 +38,9 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
   `exclude-newer` to resolve packages as of a specific date.
 - **It works with normal R habits.** Forward `Rscript` options, render Quarto
   documents, evaluate inline expressions, or use `--with` for one-off packages.
-- **Package tools are easy to try.** Run or install R package executables,
-  including direct executable scripts, from `exec/` without setting up a
-  project by hand.
+- **Package tools are easy to try.** Run package executables with `rx`, or
+  install persistent launchers for R, Rapp, and direct executable scripts from
+  `exec/` without setting up a project by hand.
 
 `ir` is designed to be small, fast, and predictable: resolve once, reuse cached
 libraries aggressively, and avoid making you manage a project directory for a
@@ -53,7 +54,8 @@ $ ir run --vanilla script.R
 $ ir run report.qmd --to html
 $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --r-version 4.5 script.R
-$ ir tool run btw --help
+$ rx btw --help
+$ ir tool run --from btw btw --help
 $ ir tool install btw
 $ ir cache dir
 ```
@@ -72,15 +74,17 @@ Install on Windows PowerShell:
 > irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
 ```
 
-The installers download the latest release into `~/.local/bin` on Unix or
-`$HOME\bin` on Windows, and tell you if that directory is not on `PATH`. Set
-`IR_INSTALL_DIR` to choose another directory.
+The installers download the latest release and install `ir` and `rx` into
+`~/.local/bin` on Unix or `$HOME\bin` on Windows. They tell you if that
+directory is not on `PATH`. Set `IR_INSTALL_DIR` to choose another directory.
 
 You can also build from source with Rust:
 
 ```console
 $ cargo build --release
 ```
+
+This builds `target/release/ir` and `target/release/rx`.
 
 ## Requirements
 

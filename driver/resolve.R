@@ -15,7 +15,7 @@
 # The resulting library path is written to the temp result file named by
 # IR_RESOLVE_RESULT_FILE. stdout/stderr stay available for pak progress.
 # This session then exits; the Rust process launches the user's script in a
-# fresh, isolated R session pointed at the library.
+# fresh R session with the resolved library prepended to `.libPaths()`.
 #
 # The helpers below are pure and side-effect free. The pipeline runs only when
 # this file is executed as a script -- `sys.nframe() == 0L` is false when the
@@ -135,20 +135,17 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
 
 ## --- resolution cache -------------------------------------------------------
 
-# Key identifying a resolution request: the declared dependency specs (order
-# independent), the resolution source, and the R version / platform. Latest
-# resolution includes the current day so newly published versions are picked up
-# at most once per day. Dated PPM snapshot resolution uses only the snapshot date
-# because that repository state is immutable. Order independent so reordering
-# deps doesn't bust the cache.
+# Legacy fallback key identifying a resolution request when Rust does not pass
+# IR_RESOLUTION_MARKER. Normal CLI runs compute the marker path in Rust so warm
+# caches can return before this R resolver is launched. Latest resolution keeps
+# a stable key and stores the current UTC date in the marker value.
 ir_input_key <- function(deps,
-                         date          = Sys.Date(),
                          rversion      = getRversion(),
                          platform      = R.version$platform,
                          exclude_newer = NULL,
                          quarto        = FALSE) {
   source_key <- if (is.null(exclude_newer))
-    as.character(date)
+    "latest"
   else
     sprintf("exclude-newer: %s", exclude_newer)
 
@@ -161,6 +158,14 @@ ir_input_key <- function(deps,
                              as.character(rversion),
                              platform),
                            collapse = "\n"))
+}
+
+ir_marker_source <- function(exclude_newer,
+                             date = as.Date(Sys.time(), tz = "UTC")) {
+  if (is.null(exclude_newer))
+    sprintf("latest: %s", date)
+  else
+    sprintf("exclude-newer: %s", exclude_newer)
 }
 
 ## --- pipeline ---------------------------------------------------------------
@@ -187,29 +192,40 @@ ir_resolve_main <- function() {
   # already provide it. (Distinct from IR_QUARTO, the quarto executable path.)
   quarto <- !is.null(ir_env_optional("IR_QUARTO_RENDER"))
 
-  ## 1b. Resolution cache: if this exact request was resolved already and its
-  ## library still exists, reuse it and skip pak entirely. The marker is written
-  ## only after a successful materialise (below), so its presence implies a
-  ## complete library.
+  ## 1b. Resolution cache: Rust checks this marker before launching this
+  ## resolver. Keep the in-resolver check as the fallback for direct driver runs
+  ## and races where another process warms the marker first. The marker is
+  ## written only after a successful materialise (below), so its presence implies
+  ## a complete library.
   primary_ref <- if (length(deps)) deps[[1L]] else NULL
-  marker <- file.path(cache_dir, "resolutions",
-                      ir_input_key(deps, exclude_newer = exclude_newer,
-                                   quarto = quarto))
-  package_marker <- if (!is.null(primary_ref)) {
-    file.path(cache_dir, "resolutions",
-              paste0(basename(marker), "-primary-", secretbase::sha256(primary_ref)))
-  } else {
-    NULL
+  marker <- ir_env_optional("IR_RESOLUTION_MARKER")
+  if (is.null(marker)) {
+    marker <- file.path(cache_dir, "resolutions",
+                        ir_input_key(deps, exclude_newer = exclude_newer,
+                                     quarto = quarto))
+  }
+  marker_source <- ir_env_optional("IR_RESOLUTION_SOURCE")
+  if (is.null(marker_source))
+    marker_source <- ir_marker_source(exclude_newer)
+
+  package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
+  if (is.null(package_marker) && !is.null(primary_ref)) {
+    package_marker <- file.path(cache_dir, "resolutions",
+                                paste0(basename(marker), "-primary-",
+                                       secretbase::sha256(primary_ref)))
   }
   if (file.exists(marker)) {
-    cached <- readLines(marker, n = 1L, warn = FALSE)
-    if (length(cached) && nzchar(cached) && dir.exists(cached)) {
+    cached <- readLines(marker, n = 2L, warn = FALSE)
+    if (length(cached) >= 2L &&
+        identical(cached[[1L]], marker_source) &&
+        nzchar(cached[[2L]]) &&
+        dir.exists(cached[[2L]])) {
       if (!is.null(package_result_file) &&
           (is.null(package_marker) || !file.exists(package_marker))) {
         # The library is reusable, but this caller needs primary-package
         # metadata that older cache entries did not record.
       } else {
-        writeLines(cached, result_file)
+        writeLines(cached[[2L]], result_file)
         if (!is.null(package_result_file)) {
           package <- readLines(package_marker, n = 1L, warn = FALSE)
           writeLines(package, package_result_file)
@@ -220,10 +236,10 @@ ir_resolve_main <- function() {
   }
 
   ## 2. Resolve with pak
-  # A script may legitimately declare no dependencies; a non-Quarto run then
-  # gets an empty but still isolated library (base R only), so undeclared
-  # library() calls fail loudly instead of silently borrowing the user's
-  # packages. A Quarto render still resolves rmarkdown (injected below).
+  # A script may legitimately declare no dependencies; a non-Quarto run then gets
+  # an empty resolved library. If the user requested `--isolated`, undeclared
+  # library() calls fail loudly instead of borrowing from the user library. A
+  # Quarto render still resolves rmarkdown (injected below).
   primary_package <- NULL
   refs_in <- deps
   res <- if (length(refs_in)) ir_resolve_refs(refs_in) else NULL
@@ -242,15 +258,12 @@ ir_resolve_main <- function() {
   ## 2b. Quarto's knitr engine needs rmarkdown. Inject it (latest) only when the
   ## resolved set does not already provide it -- whether the user declared it
   ## directly or it arrived as a transitive dependency of a declared package.
-  ## A dated `exclude-newer` snapshot already pins the injected version, so the
-  ## reproducibility advisory fires only for unpinned (latest) resolution.
-  have_rmarkdown <- !is.null(res) && "rmarkdown" %in% res$package
-  if (quarto && !have_rmarkdown) {
-    refs_in <- c(refs_in, "rmarkdown")
-    res <- ir_resolve_refs(refs_in)
-    if (is.null(exclude_newer))
-      message("ir: using latest rmarkdown; pin a version under ir.dependencies ",
-              "for reproducibility.")
+  if (quarto) {
+    have_rmarkdown <- !is.null(res) && "rmarkdown" %in% res$package
+    if (!have_rmarkdown) {
+      refs_in <- c(refs_in, "rmarkdown")
+      res <- ir_resolve_refs(refs_in)
+    }
   }
 
   if (is.null(res)) {
@@ -297,11 +310,10 @@ ir_resolve_main <- function() {
 
   ## 4b. Record the resolution so an identical request skips pak.
   dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
-  writeLines(library_path, marker)
+  writeLines(c(marker_source, library_path), marker)
   if (!is.null(primary_package)) {
     writeLines(primary_package, package_marker)
   }
-
   writeLines(library_path, result_file)
   if (!is.null(package_result_file)) {
     writeLines(primary_package, package_result_file)
