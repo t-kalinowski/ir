@@ -710,6 +710,46 @@ fn run_normalizes_version_specs_before_resolution_cache_keying() {
 }
 
 #[test]
+fn run_latest_resolution_cache_marker_truncates_fractional_creation_time() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-latest-cache-fractional-time");
+    let profile = unique_path("ir-fractional-systime", "R");
+    fs::write(
+        &profile,
+        "Sys.time <- function() as.POSIXct(1.9, origin = '1970-01-01', tz = 'UTC')\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=fractional-latest-marker\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=fractional-latest-marker");
+
+    let resolution_dir = cache_dir.join("resolutions");
+    let markers = fs::read_dir(&resolution_dir)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", resolution_dir.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+    let marker_text = fs::read_to_string(&markers[0])
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", markers[0].display()));
+    assert_eq!(marker_text.lines().next(), Some("latest: 1"));
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
 fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-latest-cache-refresh");

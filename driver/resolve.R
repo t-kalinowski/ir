@@ -169,7 +169,7 @@ ir_latest_resolution_max_age_seconds <- function() {
 ir_marker_source <- function(exclude_newer,
                              created_at = ir_current_utc_seconds()) {
   if (is.null(exclude_newer))
-    sprintf("latest: %.0f", created_at)
+    sprintf("latest: %.0f", floor(created_at))
   else
     sprintf("exclude-newer: %s", exclude_newer)
 }
