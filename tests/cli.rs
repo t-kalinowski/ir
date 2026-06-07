@@ -783,6 +783,39 @@ fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", marker.display()));
     assert_eq!(marker_text, still_fresh_marker_text);
 
+    let future_created_at = current_utc_seconds() + 3600;
+    let future_marker_text = format!("latest: {future_created_at}\n{library}\n");
+    fs::write(marker, &future_marker_text)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", marker.display()));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            expr,
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=latest-cache-refresh");
+
+    let marker_text = fs::read_to_string(marker)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", marker.display()));
+    assert_ne!(marker_text, future_marker_text);
+    let refreshed_from_future_at = marker_text
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("latest: "))
+        .and_then(|timestamp| timestamp.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("{} should record a latest timestamp", marker.display()));
+    assert!(refreshed_from_future_at < future_created_at);
+    assert!(refreshed_from_future_at <= current_utc_seconds());
+
     let stale_created_at = current_utc_seconds() - 86_401;
     fs::write(marker, format!("latest: {stale_created_at}\n{library}\n"))
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", marker.display()));

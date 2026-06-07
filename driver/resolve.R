@@ -182,8 +182,9 @@ ir_marker_source_current <- function(source, exclude_newer) {
   created_at <- suppressWarnings(as.numeric(sub("^latest: ", "", source)))
   if (is.na(created_at)) return(FALSE)
 
-  ir_current_utc_seconds() - created_at <=
-    ir_latest_resolution_max_age_seconds()
+  now <- ir_current_utc_seconds()
+  if (created_at > now) return(FALSE)
+  now - created_at <= ir_latest_resolution_max_age_seconds()
 }
 
 ## --- pipeline ---------------------------------------------------------------

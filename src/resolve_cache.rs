@@ -149,7 +149,11 @@ fn source_is_current(source: &str, cache: &Paths) -> Result<bool, Box<dyn Error>
     let Ok(created_at) = created_at.parse::<u64>() else {
         return Ok(false);
     };
-    let age_seconds = current_utc_seconds()?.saturating_sub(created_at);
+    let now = current_utc_seconds()?;
+    if created_at > now {
+        return Ok(false);
+    }
+    let age_seconds = now - created_at;
     Ok(age_seconds <= max_age_seconds)
 }
 
