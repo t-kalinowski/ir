@@ -145,8 +145,19 @@ fn rscript_identity(rscript: &OsStr) -> Option<String> {
             .unwrap_or(0);
         identity.push_str(&format!(";mtime={nanos}"));
     }
+    append_runtime_env(&mut identity, "R_ARCH");
+    append_runtime_env(&mut identity, "R_HOME");
 
     Some(identity)
+}
+
+fn append_runtime_env(identity: &mut String, name: &str) {
+    if let Some(value) = env::var_os(name) {
+        identity.push(';');
+        identity.push_str(name);
+        identity.push('=');
+        identity.push_str(&value.to_string_lossy());
+    }
 }
 
 fn is_rscript_executable(path: &Path) -> bool {
@@ -233,4 +244,98 @@ fn sha256_fields(fields: &[String]) -> String {
         encoded.push('\n');
     }
     sha256_hex(&encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        name: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn capture(name: &'static str) -> Self {
+            Self {
+                name,
+                previous: env::var_os(name),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                env::set_var(self.name, previous);
+            } else {
+                env::remove_var(self.name);
+            }
+        }
+    }
+
+    fn unique_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let dir = env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn dummy_rscript(dir: &Path) -> PathBuf {
+        let name = if cfg!(windows) {
+            "Rscript.exe"
+        } else {
+            "Rscript"
+        };
+        let path = dir.join(name);
+        fs::write(&path, "not a script launcher").unwrap();
+        path
+    }
+
+    #[test]
+    fn runtime_selection_env_changes_resolution_marker() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _r_arch = EnvVarGuard::capture("R_ARCH");
+        let _r_home = EnvVarGuard::capture("R_HOME");
+        let dir = unique_dir("ir-resolve-cache-unit");
+        let cache_dir = dir.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let rscript = dummy_rscript(&dir);
+        let dependencies = vec!["cli".to_string()];
+
+        env::set_var("R_ARCH", "x64");
+        env::remove_var("R_HOME");
+        let x64_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
+            .unwrap()
+            .unwrap()
+            .marker;
+
+        env::set_var("R_ARCH", "i386");
+        let i386_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
+            .unwrap()
+            .unwrap()
+            .marker;
+
+        env::set_var("R_ARCH", "x64");
+        env::set_var("R_HOME", dir.join("R-home"));
+        let r_home_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
+            .unwrap()
+            .unwrap()
+            .marker;
+
+        assert_ne!(x64_marker, i386_marker);
+        assert_ne!(x64_marker, r_home_marker);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
