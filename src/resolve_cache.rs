@@ -15,7 +15,7 @@ const LATEST_MAX_AGE_SECONDS_ENV: &str = "IR_LATEST_RESOLUTION_MAX_AGE_SECONDS";
 pub(crate) struct Paths {
     pub(crate) marker: PathBuf,
     pub(crate) package_marker: Option<PathBuf>,
-    pub(crate) source: String,
+    source: String,
     latest_max_age_seconds: Option<u64>,
 }
 

@@ -223,10 +223,6 @@ ir_resolve_main <- function() {
                         ir_input_key(deps, exclude_newer = exclude_newer,
                                      quarto = quarto))
   }
-  marker_source <- ir_env_optional("IR_RESOLUTION_SOURCE")
-  if (is.null(marker_source))
-    marker_source <- ir_marker_source(exclude_newer)
-
   package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
   if (is.null(package_marker) && !is.null(primary_ref)) {
     package_marker <- file.path(cache_dir, "resolutions",
@@ -329,7 +325,7 @@ ir_resolve_main <- function() {
 
   ## 4b. Record the resolution so an identical request skips pak.
   dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
-  writeLines(c(marker_source, library_path), marker)
+  writeLines(c(ir_marker_source(exclude_newer), library_path), marker)
   if (!is.null(primary_package)) {
     writeLines(primary_package, package_marker)
   }

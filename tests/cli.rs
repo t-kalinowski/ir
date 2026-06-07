@@ -748,6 +748,7 @@ fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
         .and_then(|timestamp| timestamp.parse::<u64>().ok())
         .unwrap_or_else(|| panic!("{} should record a latest timestamp", marker.display()));
     assert!(created_at <= current_utc_seconds());
+    assert!(current_utc_seconds() - created_at <= 1);
     let library = lines
         .next()
         .unwrap_or_else(|| panic!("{} should record a library path", marker.display()));
