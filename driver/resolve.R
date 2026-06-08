@@ -252,11 +252,30 @@ ir_is_source_ref <- function(res) {
   tolower(res$type) %in% source_types
 }
 
+ir_renv_github_url_ref <- function(ref) {
+  stopifnot(length(ref) == 1L)
+
+  package_prefix <- ir_package_prefix(ref)
+  source <- sub("^github::", "", ir_strip_package_prefix(ref))
+  if (!grepl("^https?://github[.]com/", source, ignore.case = TRUE))
+    return(ref)
+
+  source <- sub("^https?://github[.]com/", "", source, ignore.case = TRUE)
+  source <- sub("^([^/]+/[^/]+)[.]git($|/)", "\\1\\2", source)
+  source <- sub("/+$", "", source)
+  source <- sub("^([^/]+/[^/]+)/(tree|commit|releases/tag)/(.+)$",
+                "\\1@\\3",
+                source)
+  paste0(package_prefix, source)
+}
+
 ir_renv_source_refs <- function(ref, type) {
   stopifnot(length(ref) == length(type))
 
   package_prefix <- "(([[:alpha:]][[:alnum:].]*[[:alnum:]])=)?"
   is_github <- tolower(type) == "github"
+  ref[is_github] <- vapply(ref[is_github], ir_renv_github_url_ref, character(1),
+                           USE.NAMES = FALSE)
   ref[is_github] <- sub(paste0("^", package_prefix,
                                "((github::)?[^/]+/[^/@#]+)/(.*)$"),
                         "\\1\\3:\\5",

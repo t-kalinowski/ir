@@ -852,6 +852,63 @@ cat("github.remote=", paste(
 }
 
 #[test]
+fn run_frontmatter_github_url_ref_installs_github_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-github-url-ref-cache");
+    let script = unique_path("ir-github-url-ref", "R");
+    let ref_name = "v3.0.2";
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - https://github.com/r-lib/withr/tree/{}
+
+library(withr)
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, "withr"), mustWork = TRUE)
+loaded <- normalizePath(path.package("withr"), mustWork = TRUE)
+desc_file <- system.file("DESCRIPTION", package = "withr")
+desc <- as.list(read.dcf(desc_file)[1, ])
+stopifnot(
+  identical(loaded, expected),
+  identical(desc$RemoteType, "github"),
+  identical(desc$RemoteUsername, "r-lib"),
+  identical(desc$RemoteRepo, "withr"),
+  identical(desc$RemoteRef, "{}"),
+  nzchar(desc$RemoteSha)
+)
+cat("ir.fixture=github-url-ref\n")
+cat("github.remote=", paste(
+  desc$RemoteType,
+  desc$RemoteUsername,
+  desc$RemoteRepo,
+  desc$RemoteRef,
+  sep = "/"
+), "\n", sep = "")
+"#,
+            ref_name, ref_name
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=github-url-ref");
+    assert_stdout_contains(&out, "github.remote=github/r-lib/withr/v3.0.2");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
 fn run_frontmatter_preserves_transitive_source_refs() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-transitive-source-cache");
