@@ -1171,21 +1171,21 @@ cat("ir.fixture=local-ref-params\n")
 }
 
 #[test]
-fn run_frontmatter_named_bare_local_ref_installs_local_package() {
+fn run_frontmatter_named_local_ref_installs_local_package() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-named-bare-local-ref-cache");
-    let package_dir = unique_dir("ir-named-bare-local-ref-packages");
+    let cache_dir = unique_dir("ir-named-local-ref-cache");
+    let package_dir = unique_dir("ir-named-local-ref-packages");
     let package = write_r_source_package(&package_dir, "irlocal", &[]);
-    let script = unique_path("ir-named-bare-local-ref", "R");
+    let script = unique_path("ir-named-local-ref", "R");
     fs::write(
         &script,
         format!(
             r#"#!/usr/bin/env -S ir run
 #| packages:
-#|   - irlocal={}
+#|   - irlocal=local::{}
 
 library(irlocal)
-cat("ir.fixture=named-bare-local-ref\n")
+cat("ir.fixture=named-local-ref\n")
 "#,
             renviron_path(&package)
         ),
@@ -1201,7 +1201,7 @@ cat("ir.fixture=named-bare-local-ref\n")
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=named-bare-local-ref");
+    assert_stdout_contains(&out, "ir.fixture=named-local-ref");
 
     let _ = fs::remove_file(&script);
     let _ = fs::remove_dir_all(&package_dir);
