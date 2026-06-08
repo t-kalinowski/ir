@@ -294,6 +294,60 @@ fn ci_dependencies_are_available() {
 }
 
 #[test]
+fn resolver_fallback_treats_windows_root_relative_refs_as_source_refs() {
+    let driver = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("driver")
+        .join("resolve.R");
+    let r_expr = format!(
+        r#"source("{}"); stopifnot(ir_has_source_input_ref(r"(\work\pkg)")); cat("ir.fixture=windows-root-local-ref\n")"#,
+        renviron_path(&driver)
+    );
+
+    let out = Command::new(rscript())
+        .args(["-e", &r_expr])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=windows-root-local-ref");
+}
+
+#[test]
+fn resolver_github_record_preserves_git_submodule_retrieval() {
+    let driver = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("driver")
+        .join("resolve.R");
+    let sha = "0123456789012345678901234567890123456789";
+    let r_expr = format!(
+        r#"source("{}")
+ir_renv_github_has_submodules <- function(record) TRUE
+res <- data.frame(package = "pkg", version = "0.0.1", type = "github")
+res$remote <- list(list(username = "owner", repo = "repo", subdir = "",
+                        commitish = "main", pull = "", release = ""))
+res$sources <- list("https://api.github.com/repos/owner/repo/zipball/{}")
+record <- ir_renv_github_record(res, 1L)
+stopifnot(
+  identical(record$Source, "git"),
+  identical(record$RemoteType, "git"),
+  identical(record$RemoteUrl, "https://github.com/owner/repo"),
+  identical(record$RemoteSha, "{}")
+)
+cat("ir.fixture=github-submodules-record\n")"#,
+        renviron_path(&driver),
+        sha,
+        sha
+    );
+
+    let out = Command::new(rscript())
+        .args(["-e", &r_expr])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=github-submodules-record");
+}
+
+#[test]
 fn version_flag_reports_version() {
     let out = ir().arg("--version").output().unwrap();
     assert_success(&out);

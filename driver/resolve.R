@@ -197,7 +197,7 @@ ir_package_prefix <- function(ref) {
 }
 
 ir_is_bare_local_ref <- function(ref) {
-  local_prefixes <- c("/", "~/", "./", ".\\", "../", "..\\")
+  local_prefixes <- c("/", "\\", "~/", "./", ".\\", "../", "..\\")
   any(startsWith(ref, local_prefixes)) |
     ref %in% c("~", ".") |
     grepl("^[A-Za-z]:[\\\\/]", ref)
@@ -293,6 +293,26 @@ ir_github_source_sha <- function(sources) {
   sub("^.*/(zipball|tarball)/", "", source[[1L]])
 }
 
+ir_renv_github_has_submodules <- function(record) {
+  sha <- ir_remote_field(record, "RemoteSha")
+  if (!nzchar(sha)) return(FALSE)
+
+  getFromNamespace("renv_remotes_resolve_github_modules", "renv")(
+    ir_remote_field(record, "RemoteHost"),
+    ir_remote_field(record, "RemoteUsername"),
+    ir_remote_field(record, "RemoteRepo"),
+    ir_remote_field(record, "RemoteSubdir"),
+    sha
+  )
+}
+
+ir_renv_github_url <- function(record) {
+  paste("https://github.com",
+        ir_remote_field(record, "RemoteUsername"),
+        ir_remote_field(record, "RemoteRepo"),
+        sep = "/")
+}
+
 ir_renv_github_record <- function(res, i) {
   remote <- res$remote[[i]]
   ref <- ir_remote_field(remote, "commitish")
@@ -313,6 +333,11 @@ ir_renv_github_record <- function(res, i) {
   if (nzchar(ref)) record$RemoteRef <- ref
   sha <- ir_github_source_sha(res$sources[[i]])
   if (nzchar(sha)) record$RemoteSha <- sha
+  if (ir_renv_github_has_submodules(record)) {
+    record$Source <- "git"
+    record$RemoteType <- "git"
+    record$RemoteUrl <- ir_renv_github_url(record)
+  }
   record
 }
 
