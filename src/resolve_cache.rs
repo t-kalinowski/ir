@@ -31,9 +31,9 @@ pub(crate) fn paths(
     exclude_newer: Option<&str>,
     quarto: bool,
 ) -> Result<Option<Paths>, Box<dyn Error>> {
-    if dependencies
+    if !dependencies
         .iter()
-        .any(|dependency| is_uncacheable_ref(dependency))
+        .all(|dependency| is_standard_ref(dependency))
     {
         return Ok(None);
     }
@@ -138,53 +138,31 @@ fn resolution_cache_key(
     sha256_fields(&parts)
 }
 
-fn is_uncacheable_ref(dependency: &str) -> bool {
-    is_local_ref(dependency) || is_source_ref(dependency)
-}
-
-fn strip_package_prefix(dependency: &str) -> &str {
+fn is_standard_ref(dependency: &str) -> bool {
     let dependency = dependency.trim();
-    dependency
-        .split_once('=')
-        .filter(|(package, _)| is_package_name(package))
-        .map(|(_, dependency)| dependency)
-        .unwrap_or(dependency)
+
+    let Some((package, version)) = dependency.split_once('@') else {
+        return is_package_name(dependency);
+    };
+
+    is_package_name(package) && is_standard_version(version)
 }
 
-fn is_local_ref(dependency: &str) -> bool {
-    let dependency = strip_package_prefix(dependency);
+fn is_standard_version(version: &str) -> bool {
+    let version = version.strip_prefix(">=").unwrap_or(version);
+    if matches!(version, "current" | "last") {
+        return true;
+    }
 
-    dependency.starts_with("local::")
-        || dependency.starts_with("~/")
-        || dependency == "~"
-        || dependency.starts_with("./")
-        || dependency.starts_with(".\\")
-        || dependency == "."
-        || dependency.starts_with("../")
-        || dependency.starts_with("..\\")
-        || dependency.starts_with('\\')
-        || Path::new(dependency).is_absolute()
-}
+    let mut part_count = 0;
+    for part in version.split(['.', '-']) {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return false;
+        }
+        part_count += 1;
+    }
 
-fn is_source_ref(dependency: &str) -> bool {
-    let dependency = strip_package_prefix(dependency);
-    let lower = dependency.to_ascii_lowercase();
-    let source_prefixes = [
-        "github::",
-        "gitlab::",
-        "bitbucket::",
-        "git::",
-        "url::",
-        "http://",
-        "https://",
-        "ssh://",
-        "git@",
-    ];
-
-    source_prefixes
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
-        || dependency.contains('/')
+    part_count >= 2
 }
 
 fn is_package_name(name: &str) -> bool {
@@ -456,18 +434,20 @@ mod tests {
     }
 
     #[test]
-    fn source_refs_skip_resolution_markers() {
-        let dir = unique_dir("ir-source-ref-cache-unit");
+    fn nonstandard_refs_skip_resolution_markers() {
+        let dir = unique_dir("ir-nonstandard-ref-cache-unit");
         let cache_dir = dir.join("cache");
         fs::create_dir_all(&cache_dir).unwrap();
         let rscript = dummy_rscript(&dir);
 
         for dependency in [
             "github::owner/repo@branch",
+            "owner/repo/subdir@main",
             "pkg=owner/repo/subdir@main",
             "gitlab::group/project",
             "https://example.com/pkg.tar.gz",
             "\\work\\pkg",
+            "cli@3",
         ] {
             let dependencies = vec![dependency.to_string()];
             assert!(
@@ -480,7 +460,33 @@ mod tests {
                 )
                 .unwrap()
                 .is_none(),
-                "{dependency} should not use a warm resolution marker"
+                "{dependency} should not use a warm resolution marker",
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn standard_refs_use_resolution_markers() {
+        let dir = unique_dir("ir-standard-ref-cache-unit");
+        let cache_dir = dir.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let rscript = dummy_rscript(&dir);
+
+        for dependency in ["cli", "cli@3.6.6", "cli@>=3.6.6"] {
+            let dependencies = vec![dependency.to_string()];
+            assert!(
+                paths(
+                    &cache_dir,
+                    rscript.as_os_str(),
+                    &dependencies,
+                    Some("2026-06-01"),
+                    false
+                )
+                .unwrap()
+                .is_some(),
+                "{dependency} should use a warm resolution marker",
             );
         }
 
