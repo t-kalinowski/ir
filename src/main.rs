@@ -884,9 +884,9 @@ fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
 }
 
 /// Return a cached materialised library path, or run the embedded driver in a
-/// private R session to resolve and materialise it. The dependency specs in
-/// `spec` (the script's frontmatter plus any `--with` packages) are normalized
-/// into pak refs before cache keying and resolver input.
+/// private R session to resolve and materialise it. Shorthand version specs in
+/// `spec` are normalized before cache keying and resolver input; other package
+/// refs are passed through.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
     Ok(resolve_library_inner(rscript, spec, false)?.library)
 }

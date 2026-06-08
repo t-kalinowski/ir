@@ -6,9 +6,9 @@
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
 #   1. Consume package refs from stdin, one ref per line.
-#   2. Normalize local path refs and resolve dependencies with pak.
-#   3. Hash the install refs and local source fingerprints to derive a
-#      content-addressed library path under <cache_dir>.
+#   2. Resolve dependencies with pak.
+#   3. Hash the install refs to derive a content-addressed library path under
+#      <cache_dir>.
 #   4. Materialise that path as a light-weight library of symlinks into
 #      renv's package cache via renv::use().
 #
