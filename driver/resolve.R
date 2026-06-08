@@ -202,37 +202,6 @@ ir_has_nonstandard_input_ref <- function(refs) {
   any(!vapply(refs, ir_is_standard_input_ref, logical(1)))
 }
 
-ir_normalize_github_tree_ref <- function(ref) {
-  stopifnot(length(ref) == 1L)
-
-  ref <- trimws(ref)
-  match <- regexpr("^([[:alpha:]]([[:alnum:].]*[[:alnum:]])?)=", ref)
-  package_prefix <- if (match[[1L]] == 1L) regmatches(ref, match) else ""
-  source <- substring(ref, nchar(package_prefix) + 1L)
-  source <- sub("^github::", "", source, ignore.case = TRUE)
-
-  pattern <- paste0("^https?://github[.]com/",
-                    "([^/]+/[^/]+?)(?:[.]git)?/tree/",
-                    "([^/]+)(?:/(.+))?$")
-  match <- regexec(pattern, source, ignore.case = TRUE, perl = TRUE)
-  parts <- regmatches(source, match)[[1L]]
-  if (!length(parts)) return(ref)
-
-  remote <- parts[[2L]]
-  tree <- parts[[3L]]
-  subdir <- parts[[4L]]
-
-  if (nzchar(subdir) && !grepl("^[[:xdigit:]]{40}$", tree))
-    return(ref)
-  paste0(package_prefix, "github::", remote,
-         if (nzchar(subdir)) paste0("/", subdir) else "",
-         "@", tree)
-}
-
-ir_normalize_input_refs <- function(refs) {
-  vapply(refs, ir_normalize_github_tree_ref, character(1), USE.NAMES = FALSE)
-}
-
 ir_is_standard_resolved_ref <- function(res) {
   stopifnot("type" %in% names(res))
 
@@ -321,7 +290,7 @@ ir_resolve_main <- function() {
   # library() calls fail loudly instead of borrowing from the user library. A
   # Quarto render still resolves rmarkdown (injected below).
   primary_package <- NULL
-  refs_in <- ir_normalize_input_refs(deps)
+  refs_in <- deps
   res <- if (length(refs_in)) ir_resolve_refs(refs_in) else NULL
 
   if (!is.null(package_result_file)) {
