@@ -21,10 +21,10 @@
 //!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. If
 //!      the resolution cache is warm, Rust reuses the cached library path
 //!      directly. Otherwise, a private R session (`driver/resolve.R`) receives
-//!      the normalized pak refs on stdin, resolves them with pak, hashes the
-//!      resolved set into a content-addressed library path under the cache
-//!      directory, and materialises that path as a light-weight library of
-//!      symlinks into renv's package cache. The path is reported back to us.
+//!      the package refs on stdin, resolves them with pak, hashes the install
+//!      refs into a content-addressed library path under the cache directory,
+//!      and materialises that path as a light-weight library of symlinks into
+//!      renv's package cache. The path is reported back to us.
 //!
 //!   2. We launch the user's script in a fresh R session with that library
 //!      prepended to `.libPaths()`. With `--isolated`, the user library is

@@ -5,10 +5,10 @@
 #   IR_RESOLVE_RESULT_FILE=<result_file> Rscript resolve.R
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
-#   1. Consume pak package refs from stdin, one ref per line.
-#   2. Resolve the declared dependencies into concrete versions with pak.
-#   3. Hash the resolved set to derive a content-addressed library path
-#      under <cache_dir>.
+#   1. Consume package refs from stdin, one ref per line.
+#   2. Normalize local path refs and resolve dependencies with pak.
+#   3. Hash the install refs and local source fingerprints to derive a
+#      content-addressed library path under <cache_dir>.
 #   4. Materialise that path as a light-weight library of symlinks into
 #      renv's package cache via renv::use().
 #
@@ -416,7 +416,7 @@ ir_resolve_main <- function() {
     has_source_ref <- any(ir_is_source_ref(res))
   }
 
-  ## 3. Hash the resolved set -> content-addressed library path
+  ## 3. Hash install refs -> content-addressed library path
   # Bind the hash to the R version and platform: the symlinks point into the
   # renv cache, whose layout is itself keyed by R version and platform.
   key <- paste(c(install_refs,
