@@ -187,19 +187,19 @@ ir_marker_source_current <- function(source, exclude_newer) {
   now - created_at <= ir_latest_resolution_max_age_seconds()
 }
 
-ir_source_ref_rows <- function(res) {
-  stopifnot(all(c("direct", "type") %in% names(res)))
+ir_is_source_ref <- function(res) {
+  stopifnot(c("direct", "type") %in% names(res))
 
   source_types <- c("github", "gitlab", "bitbucket", "git", "local", "url")
-  res$direct %in% TRUE & tolower(res$type) %in% source_types
+  res$direct & tolower(res$type) %in% source_types
 }
 
 ir_install_refs <- function(res) {
-  stopifnot(all(c("package", "version", "ref") %in% names(res)))
+  stopifnot(c("package", "version", "ref") %in% names(res))
 
   refs <- sprintf("%s@%s", res$package, res$version)
-  source <- ir_source_ref_rows(res)
-  refs[source] <- res$ref[source]
+  is_source_ref <- ir_is_source_ref(res)
+  refs[is_source_ref] <- res$ref[is_source_ref]
   sort(unique(refs))
 }
 
@@ -307,7 +307,7 @@ ir_resolve_main <- function() {
     res <- res[keep, , drop = FALSE]
     pkgs     <- res$package
     install_refs <- ir_install_refs(res)
-    has_source_ref <- any(ir_source_ref_rows(res))
+    has_source_ref <- any(ir_is_source_ref(res))
   }
 
   ## 3. Hash the resolved set -> content-addressed library path
