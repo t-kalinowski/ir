@@ -319,20 +319,16 @@ fn resolver_github_record_preserves_git_submodule_retrieval() {
         .join("resolve.R");
     let sha = "0123456789012345678901234567890123456789";
     let r_expr = format!(
-        r#"source("{}")
-ir_renv_github_has_submodules <- function(record) TRUE
-res <- data.frame(package = "pkg", version = "0.0.1", type = "github")
-res$remote <- list(list(username = "owner", repo = "repo", subdir = "",
-                        commitish = "main", pull = "", release = ""))
-res$sources <- list("https://api.github.com/repos/owner/repo/zipball/{}")
-record <- ir_renv_github_record(res, 1L)
-stopifnot(
-  identical(record$Source, "git"),
-  identical(record$RemoteType, "git"),
-  identical(record$RemoteUrl, "https://github.com/owner/repo"),
-  identical(record$RemoteSha, "{}")
-)
-cat("ir.fixture=github-submodules-record\n")"#,
+        concat!(
+            r#"source("{}"); "#,
+            "ir_renv_github_has_submodules <- function(record) TRUE; ",
+            r#"res <- data.frame(package = "pkg", version = "0.0.1", type = "github"); "#,
+            r#"res$remote <- list(list(username = "owner", repo = "repo", subdir = "", commitish = "main", pull = "", release = "")); "#,
+            r#"res$sources <- list("https://api.github.com/repos/owner/repo/zipball/{}"); "#,
+            "record <- ir_renv_github_record(res, 1L); ",
+            r#"stopifnot(identical(record$Source, "git"), identical(record$RemoteType, "git"), identical(record$RemoteUrl, "https://github.com/owner/repo"), identical(record$RemoteSha, "{}")); "#,
+            r#"cat("ir.fixture=github-submodules-record\n")"#
+        ),
         renviron_path(&driver),
         sha,
         sha
