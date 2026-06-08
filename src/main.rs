@@ -1359,12 +1359,23 @@ fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error
     let mut dependencies = Vec::new();
     if let Some(seq) = value.as_vec() {
         for item in seq {
-            push_dependency_words(&mut dependencies, item)?;
+            push_dependency_entry(&mut dependencies, item)?;
         }
     } else {
         push_dependency_words(&mut dependencies, value)?;
     }
     Ok(dependencies)
+}
+
+fn push_dependency_entry(
+    dependencies: &mut Vec<String>,
+    value: &Yaml<'_>,
+) -> Result<(), Box<dyn Error>> {
+    let Some(value) = value.as_str() else {
+        return Err("frontmatter `packages` entries must be strings".into());
+    };
+    dependencies.push(value.to_owned());
+    Ok(())
 }
 
 fn push_dependency_words(

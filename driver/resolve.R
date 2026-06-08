@@ -233,6 +233,7 @@ ir_normalize_input_ref <- function(ref) {
   stopifnot(length(ref) == 1L)
 
   ref <- trimws(ref)
+  ref <- ir_pak_github_url_subdir_ref(ref)
   package_prefix <- ir_package_prefix(ref)
   source <- ir_strip_package_prefix(ref)
   if (startsWith(source, "local::") || !ir_is_bare_local_ref(source))
@@ -252,8 +253,41 @@ ir_is_source_ref <- function(res) {
   tolower(res$type) %in% source_types
 }
 
+ir_github_url_subdir_match <- function(ref) {
+  stopifnot(length(ref) == 1L)
+
+  source <- sub("^github::", "", ir_strip_package_prefix(ref))
+  if (!grepl("^https?://github[.]com/", source, ignore.case = TRUE))
+    return(NULL)
+
+  source <- sub("^https?://github[.]com/", "", source, ignore.case = TRUE)
+  source <- sub("^([^/]+/[^/]+)[.]git/", "\\1/", source)
+  source <- sub("/+$", "", source)
+  pattern <- paste0("^([^/]+/[^/]+)/tree/",
+                    "([[:xdigit:]]{40})/(.+)$")
+  match <- regexec(pattern, source)
+  parts <- regmatches(source, match)[[1L]]
+  if (!length(parts)) return(NULL)
+  parts
+}
+
+ir_pak_github_url_subdir_ref <- function(ref) {
+  stopifnot(length(ref) == 1L)
+
+  parts <- ir_github_url_subdir_match(ref)
+  if (is.null(parts)) return(ref)
+  paste0(ir_package_prefix(ref), "github::", parts[[2L]], "/", parts[[4L]],
+         "@", parts[[3L]])
+}
+
 ir_renv_github_url_ref <- function(ref) {
   stopifnot(length(ref) == 1L)
+
+  parts <- ir_github_url_subdir_match(ref)
+  if (!is.null(parts)) {
+    return(paste0(ir_package_prefix(ref), parts[[2L]], ":", parts[[4L]],
+                  "@", parts[[3L]]))
+  }
 
   package_prefix <- ir_package_prefix(ref)
   source <- sub("^github::", "", ir_strip_package_prefix(ref))
