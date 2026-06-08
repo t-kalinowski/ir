@@ -214,7 +214,7 @@ ir_normalize_github_tree_ref <- function(ref) {
   pattern <- paste0("^https?://github[.]com/",
                     "([^/]+/[^/]+?)(?:[.]git)?/tree/",
                     "([^/]+)(?:/(.+))?$")
-  match <- regexec(pattern, source, ignore.case = TRUE)
+  match <- regexec(pattern, source, ignore.case = TRUE, perl = TRUE)
   parts <- regmatches(source, match)[[1L]]
   if (!length(parts)) return(ref)
 
