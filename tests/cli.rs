@@ -801,7 +801,7 @@ fn run_frontmatter_github_subdir_ref_installs_subdir_package() {
         format!(
             r#"#!/usr/bin/env -S ir run
 #| packages:
-#|   - github::r-lib/pkgdepends/tests/testthat/fixtures/foo@{}
+#|   - r-lib/pkgdepends/tests/testthat/fixtures/foo@{}
 
 library(foo)
 lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
@@ -896,6 +896,67 @@ cat("ir.fixture=transitive-source\n")
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=transitive-source");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_local_ref_reruns_resolution_when_package_changes() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-local-ref-cache");
+    let package_dir = unique_dir("ir-local-ref-packages");
+    let package = write_r_source_package(&package_dir, "irlocal", &[]);
+    let script = unique_path("ir-local-ref", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}
+
+library(irlocal)
+cat("ir.fixture=local-ref\n")
+cat("irlocal.version=", as.character(packageVersion("irlocal")), "\n", sep = "")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref");
+    assert_stdout_contains(&out, "irlocal.version=0.0.1");
+
+    let description_path = package.join("DESCRIPTION");
+    let description = fs::read_to_string(&description_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", description_path.display()));
+    fs::write(
+        &description_path,
+        description.replace("Version: 0.0.1", "Version: 0.0.2"),
+    )
+    .unwrap_or_else(|e| panic!("failed to write {}: {e}", description_path.display()));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref");
+    assert_stdout_contains(&out, "irlocal.version=0.0.2");
 
     let _ = fs::remove_file(&script);
     let _ = fs::remove_dir_all(&package_dir);

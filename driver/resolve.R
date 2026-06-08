@@ -187,6 +187,24 @@ ir_marker_source_current <- function(source, exclude_newer) {
   now - created_at <= ir_latest_resolution_max_age_seconds()
 }
 
+ir_strip_package_prefix <- function(ref) {
+  sub("^([[:alpha:]][[:alnum:].]*[[:alnum:]])=", "", ref)
+}
+
+ir_is_local_input_ref <- function(ref) {
+  stopifnot(length(ref) == 1L)
+
+  ref <- trimws(ir_strip_package_prefix(ref))
+  local_prefixes <- c("local::", "/", "~/", "./", ".\\", "../", "..\\")
+  any(startsWith(ref, local_prefixes)) |
+    ref %in% c("~", ".") |
+    grepl("^[A-Za-z]:[\\\\/]", ref)
+}
+
+ir_has_local_input_ref <- function(refs) {
+  any(vapply(refs, ir_is_local_input_ref, logical(1)))
+}
+
 ir_is_source_ref <- function(res) {
   stopifnot("type" %in% names(res))
 
@@ -197,10 +215,45 @@ ir_is_source_ref <- function(res) {
 ir_renv_source_refs <- function(ref, type) {
   stopifnot(length(ref) == length(type))
 
+  package_prefix <- "(([[:alpha:]][[:alnum:].]*[[:alnum:]])=)?"
   is_github <- tolower(type) == "github"
-  ref[is_github] <- sub("^(github::[^/]+/[^/@#]+)/(.*)$", "\\1:\\2",
+  ref[is_github] <- sub(paste0("^", package_prefix,
+                               "((github::)?[^/]+/[^/@#]+)/(.*)$"),
+                        "\\1\\3:\\5",
                         ref[is_github])
   ref
+}
+
+ir_local_ref_paths <- function(ref) {
+  sub("^(([[:alpha:]][[:alnum:].]*[[:alnum:]])=)?local::", "", ref)
+}
+
+ir_local_ref_fingerprint <- function(path) {
+  stopifnot(file.exists(path))
+
+  root <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  if (!dir.exists(root)) {
+    info <- file.info(root)
+    return(paste(root, info$size, unname(tools::md5sum(root)), sep = ":"))
+  }
+
+  files <- sort(list.files(root, all.files = TRUE, recursive = TRUE,
+                           full.names = TRUE, no.. = TRUE))
+  files <- normalizePath(files, winslash = "/", mustWork = TRUE)
+  info <- file.info(files)
+  hash <- unname(tools::md5sum(files))
+  rel <- substring(files, nchar(root) + 2L)
+  paste(c(root, paste(rel, info$size, hash, sep = ":")),
+        collapse = "\n")
+}
+
+ir_local_ref_fingerprints <- function(res) {
+  stopifnot(c("type", "ref") %in% names(res))
+
+  local <- tolower(res$type) == "local"
+  if (!any(local)) return(character())
+  vapply(ir_local_ref_paths(res$ref[local]), ir_local_ref_fingerprint,
+         character(1))
 }
 
 ir_install_refs <- function(res) {
@@ -243,19 +296,20 @@ ir_resolve_main <- function() {
   ## written only after a successful materialise (below), so its presence implies
   ## a complete library.
   primary_ref <- if (length(deps)) deps[[1L]] else NULL
+  cache_resolution <- !ir_has_local_input_ref(deps)
   marker <- ir_env_optional("IR_RESOLUTION_MARKER")
-  if (is.null(marker)) {
+  if (is.null(marker) && cache_resolution) {
     marker <- file.path(cache_dir, "resolutions",
                         ir_input_key(deps, exclude_newer = exclude_newer,
                                      quarto = quarto))
   }
   package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
-  if (is.null(package_marker) && !is.null(primary_ref)) {
+  if (is.null(package_marker) && !is.null(marker) && !is.null(primary_ref)) {
     package_marker <- file.path(cache_dir, "resolutions",
                                 paste0(basename(marker), "-primary-",
                                        secretbase::sha256(primary_ref)))
   }
-  if (file.exists(marker)) {
+  if (!is.null(marker) && file.exists(marker)) {
     cached <- readLines(marker, n = 2L, warn = FALSE)
     if (length(cached) >= 2L &&
         ir_marker_source_current(cached[[1L]], exclude_newer) &&
@@ -310,6 +364,7 @@ ir_resolve_main <- function() {
   if (is.null(res)) {
     pkgs     <- character()
     install_refs <- character()
+    local_ref_fingerprints <- character()
     has_source_ref <- FALSE
   } else {
     # Drop base / recommended packages: those are supplied by R itself.
@@ -317,6 +372,7 @@ ir_resolve_main <- function() {
     res <- res[keep, , drop = FALSE]
     pkgs     <- res$package
     install_refs <- ir_install_refs(res)
+    local_ref_fingerprints <- ir_local_ref_fingerprints(res)
     has_source_ref <- any(ir_is_source_ref(res))
   }
 
@@ -324,6 +380,7 @@ ir_resolve_main <- function() {
   # Bind the hash to the R version and platform: the symlinks point into the
   # renv cache, whose layout is itself keyed by R version and platform.
   key <- paste(c(install_refs,
+                 local_ref_fingerprints,
                  as.character(getRversion()),
                  R.version$platform),
                collapse = "\n")
@@ -352,9 +409,11 @@ ir_resolve_main <- function() {
   }
 
   ## 4b. Record the resolution so an identical request skips pak.
-  dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
-  writeLines(c(ir_marker_source(exclude_newer), library_path), marker)
-  if (!is.null(primary_package)) {
+  if (!is.null(marker)) {
+    dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
+    writeLines(c(ir_marker_source(exclude_newer), library_path), marker)
+  }
+  if (!is.null(primary_package) && !is.null(package_marker)) {
     writeLines(primary_package, package_marker)
   }
   writeLines(library_path, result_file)

@@ -31,6 +31,13 @@ pub(crate) fn paths(
     exclude_newer: Option<&str>,
     quarto: bool,
 ) -> Result<Option<Paths>, Box<dyn Error>> {
+    if dependencies
+        .iter()
+        .any(|dependency| is_local_ref(dependency))
+    {
+        return Ok(None);
+    }
+
     let Some(rscript_identity) = rscript_identity(rscript) else {
         return Ok(None);
     };
@@ -129,6 +136,38 @@ fn resolution_cache_key(
     parts.push(format!("rscript: {rscript_identity}"));
 
     sha256_fields(&parts)
+}
+
+fn is_local_ref(dependency: &str) -> bool {
+    let dependency = dependency.trim();
+    let dependency = dependency
+        .split_once('=')
+        .filter(|(package, _)| is_package_name(package))
+        .map(|(_, dependency)| dependency)
+        .unwrap_or(dependency);
+
+    dependency.starts_with("local::")
+        || dependency.starts_with("~/")
+        || dependency == "~"
+        || dependency.starts_with("./")
+        || dependency.starts_with(".\\")
+        || dependency == "."
+        || dependency.starts_with("../")
+        || dependency.starts_with("..\\")
+        || Path::new(dependency).is_absolute()
+}
+
+fn is_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '.')
+        && name
+            .chars()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
 }
 
 fn resolution_cache_source(exclude_newer: Option<&str>) -> Result<String, Box<dyn Error>> {
