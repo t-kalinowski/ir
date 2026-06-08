@@ -37,7 +37,7 @@ The script frontmatter supports:
 - `isolated`: `true` disables the user library for the run.
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date.
 
-Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Source refs supported by pak are also supported, including GitHub, GitLab, Bitbucket, git, URL, and local package refs. Local packages may be written as `local::path`, as a bare file-system path, or with a package prefix such as `mypkg=./path`. `packages` is usually a YAML sequence; each sequence entry is one package ref, so use a sequence for local paths containing spaces. A string value is accepted and split on whitespace. Unknown keys are ignored after YAML parsing, so future metadata such as `sys-reqs` can be present before `ir` supports it.
+Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Source refs supported by pak are also supported, including GitHub, GitLab, Bitbucket, git, URL, and local package refs. Local packages may be written as `local::path`, as a bare file-system path, or with a package prefix such as `mypkg=./path`. `packages` must be a YAML sequence; each sequence entry is one package ref. Omit `packages`, use `packages: []`, or use `packages: null` when no package refs are needed. Unknown keys are ignored after YAML parsing, so future metadata such as `sys-reqs` can be present before `ir` supports it.
 
 ## Inline runs
 

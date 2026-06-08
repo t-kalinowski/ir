@@ -588,6 +588,57 @@ fn malformed_frontmatter_errors_before_resolution() {
 }
 
 #[test]
+fn frontmatter_packages_must_be_sequence() {
+    let script = unique_path("ir-packages-scalar-frontmatter", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages: ""
+
+cat('not reached')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&script);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("frontmatter `packages` must be a YAML sequence"),
+        "{}",
+        output_text(&out)
+    );
+}
+
+#[test]
+fn frontmatter_packages_null_means_empty_sequence() {
+    let script = unique_path("ir-packages-null-frontmatter", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages: null
+
+cat("ir.fixture=packages-null\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .args(["run", "--vanilla", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&script);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=packages-null");
+}
+
+#[test]
 fn run_script_frontmatter_accepts_packages_and_isolated() {
     let _guard = e2e_lock();
     let script = unique_path("ir-packages-frontmatter", "R");
