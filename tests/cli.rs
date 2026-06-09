@@ -460,9 +460,14 @@ fn docs_run_page_dark_mode_styles_console_blocks() {
 
     let styles = fs::read_to_string(output_dir.join("styles.css"))
         .unwrap_or_else(|e| panic!("failed to read rendered styles.css: {e}"));
+    assert!(styles.contains("body.quarto-dark .navbar"), "{styles}");
     assert!(styles.contains("pre.console"), "{styles}");
     assert!(
         styles.contains("background-color: var(--ir-panel)"),
+        "{styles}"
+    );
+    assert!(
+        styles.contains("background-color: var(--ir-help-panel)"),
         "{styles}"
     );
 

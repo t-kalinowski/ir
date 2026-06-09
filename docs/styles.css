@@ -1,15 +1,22 @@
 :root {
   --ir-muted: #52616b;
   --ir-panel: #f6f8f7;
+  --ir-help-panel: #eef3f0;
 }
 
 body.quarto-dark {
   --ir-muted: #aeb8be;
   --ir-panel: #172026;
+  --ir-help-panel: #172026;
 }
 
 .navbar-title {
   font-weight: 700;
+}
+
+body.quarto-dark .navbar {
+  background-color: #111a20;
+  box-shadow: inset 0 -1px 0 var(--bs-border-color);
 }
 
 .quarto-title-block .subtitle {
@@ -24,10 +31,17 @@ pre {
 
 pre.console,
 pre.ir-cli-help {
-  background-color: var(--ir-panel);
   box-shadow: inset 0 0 0 1px var(--bs-border-color);
   color: var(--bs-body-color);
   padding: 1rem;
+}
+
+pre.console {
+  background-color: var(--ir-panel);
+}
+
+pre.ir-cli-help {
+  background-color: var(--ir-help-panel);
 }
 
 pre.console code,
