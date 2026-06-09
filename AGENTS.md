@@ -1,42 +1,37 @@
-# Repository Map
+# Agent Map
 
-`ir` is a Rust CLI that runs self-describing R scripts and Quarto documents. It
-extracts dependency metadata, resolves packages through an embedded R driver,
-materializes a cached library, and launches the requested R or Quarto workload.
+`ir` is a Rust CLI for self-describing R scripts and Quarto documents. Flow:
+parse CLI -> read source metadata -> resolve packages with the embedded R driver
+-> materialize a cached library -> launch R or Quarto.
 
-## Layout
+## Source Of Truth
 
-- `src/main.rs`: binary entrypoint and top-level subcommand routing.
-- `src/cli.rs`: clap command definitions plus hand-scanned argument parsing for
-  `run`, `tool run`, `tool install`, and the hidden `rx` path.
-- `src/script.rs`: script source selection and YAML frontmatter parsing.
-- `src/runtime.rs`: Rscript selection, dependency resolution, cache directory
-  helpers, resolver temp files, and user script execution.
-- `src/tool.rs`: package executable discovery, `ir tool run`, `ir tool install`,
-  generated launcher contents, and launcher quoting.
-- `src/cache.rs`: `ir cache` subcommand behavior.
-- `src/resolve_cache.rs`: resolution marker keys and warm-cache reads.
+- User behavior: `README.md`, `docs/*.qmd`, and help snapshots in
+  `tests/snapshots/`.
+- Public CLI coverage: `tests/cli.rs`; fixtures live in `tests/fixtures/run/`.
+- Resolver behavior: Rust orchestration in `src/runtime.rs`; R implementation in
+  `driver/resolve.R`.
+- Release/install surfaces: `scripts/` and `.github/workflows/`.
+
+## Rust Map
+
+- `src/main.rs`: entrypoint and top-level routing only.
+- `src/cli.rs`: clap definitions and argument scanning.
+- `src/script.rs`: source detection and YAML frontmatter parsing.
+- `src/runtime.rs`: Rscript selection, dependency resolution, cache roots, and
+  user code execution.
+- `src/tool.rs`: `ir tool run/install`, executable discovery, and launcher
+  generation.
+- `src/cache.rs`: `ir cache` commands.
+- `src/resolve_cache.rs`: resolution cache keys and marker reads.
 - `src/rig.rs`: R version selection through `rig`.
-- `src/quarto.rs`: Quarto document detection, rendering, and render-specific
-  Rscript argument handling.
-- `src/bin/rx.rs`: standalone `rx` shim that forwards into `ir tool rx`.
-- `driver/resolve.R`: embedded R resolver used by `runtime.rs`.
-- `tests/cli.rs`: end-to-end CLI coverage.
-- `tests/fixtures/`: R and Quarto inputs used by integration tests.
-- `tests/snapshots/`: expected help output snapshots.
-- `docs/`: Quarto documentation site.
-- `examples/`: small runnable examples.
-- `scripts/`: install scripts for release artifacts.
+- `src/quarto.rs`: Quarto detection and rendering.
+- `src/bin/rx.rs`: `rx` shim into `ir tool rx`.
 
 ## Conventions
 
-- Keep `main.rs` small. New command behavior should live in the focused module
-  that owns the command or runtime behavior.
-- CLI shape and argument scanning belong in `src/cli.rs`; command execution
-  belongs in `src/runtime.rs`, `src/tool.rs`, or `src/cache.rs`.
-- Frontmatter concerns belong in `src/script.rs`. Package ref normalization for
-  resolver input belongs in `src/runtime.rs`.
-- Code that shells out to R, `rig`, or Quarto should produce direct, actionable
-  errors and should not silently fall back between unrelated behaviors.
-- Public behavior is covered through CLI integration tests in `tests/cli.rs`.
-  Update help snapshots when command help changes.
+- Keep `main.rs` small; place behavior in the owning module.
+- Preserve public CLI behavior unless tests and snapshots change intentionally.
+- Prefer direct, actionable errors over fallback chains when invoking R, `rig`,
+  or Quarto.
+- Keep this file a compact map; put durable details in README, docs, or tests.
