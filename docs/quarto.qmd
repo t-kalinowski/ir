@@ -22,7 +22,6 @@ Run the document with the render subcommand:
 ```console
 $ ir render report.qmd
 $ ir render report.qmd --to pdf
-$ ir render --vanilla report.qmd
 ```
 
 Quarto R scripts use Quarto's knitr script header syntax:
@@ -42,11 +41,11 @@ $ ir render report.R
 
 The `ir.packages` value follows the same rules as script `packages`: use a YAML sequence where each entry is one package ref, or omit it, set it to `[]`, or set it to `null` for no dependencies.
 
-`ir` resolves the document packages into the same cached library model used for scripts, then launches `quarto render`. Leading Rscript options are forwarded to Quarto's knitr engine. Trailing arguments are passed to `quarto render`.
+`ir` resolves the document packages into the same cached library model used for scripts, then launches `quarto render`. Arguments after the source path are passed to `quarto render`.
 
 When an R version is selected by frontmatter or `--r-version`, `ir` pins Quarto's knitr R to that selection.
 
-Set `IR_QUARTO` to use a specific Quarto executable. Rscript options containing commas cannot be forwarded, because Quarto reads `QUARTO_KNITR_RSCRIPT_ARGS` as a comma-separated value with no escaping.
+Set `IR_QUARTO` to use a specific Quarto executable.
 
 ## rmarkdown injection
 

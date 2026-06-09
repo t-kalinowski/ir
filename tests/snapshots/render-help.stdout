@@ -1,9 +1,10 @@
 Render a Quarto document or script
 
-Usage: ir render [OPTIONS] [ARGS]...
+Usage: ir render [OPTIONS] <SOURCE> [QUARTO_ARGS]...
 
 Arguments:
-  [ARGS]...  Rscript options, source path, and Quarto render arguments
+  <SOURCE>          Quarto document or script to render
+  [QUARTO_ARGS]...  Arguments passed to `quarto render`
 
 Options:
       --with <PKG>        Add a dependency for this render; may be repeated

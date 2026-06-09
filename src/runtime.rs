@@ -55,7 +55,6 @@ pub(crate) fn cmd_run(
 /// process with Quarto's own exit code.
 pub(crate) fn cmd_render(
     source: &RenderSource,
-    rscript_args: &[String],
     with_deps: &[String],
     r_requirement: Option<&str>,
     render_args: &[String],
@@ -70,14 +69,11 @@ pub(crate) fn cmd_render(
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec)?;
 
-    source.reject_unsupported_rscript_args(rscript_args)?;
-
     let library = resolve_library(&rscript, &spec)?;
     let code = quarto::run(
         &rscript,
         library.as_deref(),
         source.path(),
-        rscript_args,
         render_args,
         isolated,
     )?;

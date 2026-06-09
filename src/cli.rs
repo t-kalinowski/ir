@@ -80,9 +80,20 @@ fn render_command() -> ClapCommand {
                 .action(ArgAction::SetTrue)
                 .help("Disable the user library for this render"),
         )
-        .arg(raw_args_arg(
-            "Rscript options, source path, and Quarto render arguments",
-        ))
+        .arg(
+            Arg::new("source")
+                .value_name("SOURCE")
+                .required(true)
+                .help("Quarto document or script to render"),
+        )
+        .arg(
+            Arg::new("quarto-args")
+                .value_name("QUARTO_ARGS")
+                .num_args(0..)
+                .allow_hyphen_values(true)
+                .trailing_var_arg(true)
+                .help("Arguments passed to `quarto render`"),
+        )
 }
 
 fn tool_command() -> ClapCommand {
@@ -230,7 +241,6 @@ pub(crate) struct RunArgs {
 }
 
 pub(crate) struct RenderArgs {
-    pub(crate) rscript_args: Vec<String>,
     pub(crate) with_deps: Vec<String>,
     pub(crate) r_requirement: Option<String>,
     pub(crate) source: RenderSource,
@@ -337,7 +347,6 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error
 /// Parse `ir render`, which resolves metadata for a Quarto source and then
 /// forwards the source plus trailing args to `quarto render`.
 pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn Error>> {
-    let mut rscript_args = Vec::new();
     let mut with_deps = Vec::new();
     let mut r_requirement = None;
     let mut isolated = false;
@@ -368,7 +377,7 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
         } else if arg == "-" {
             return Err("`ir render` requires a source path, not stdin".into());
         } else if arg.starts_with('-') {
-            rscript_args.push(arg);
+            return Err(format!("unexpected option `{arg}` before render source").into());
         } else {
             positional = Some(arg);
             break;
@@ -380,7 +389,6 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
         positional.ok_or("`ir render` requires a source path (try `ir render report.qmd`)")?;
 
     Ok(RenderArgs {
-        rscript_args,
         with_deps,
         r_requirement,
         source: RenderSource::from_source_arg(source)?,

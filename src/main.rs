@@ -74,7 +74,6 @@ fn try_main() -> Result<(), Box<dyn Error>> {
             let render = cli::parse_render_args(argv[2..].to_vec())?;
             runtime::cmd_render(
                 &render.source,
-                &render.rscript_args,
                 &render.with_deps,
                 render.r_requirement.as_deref(),
                 &render.render_args,

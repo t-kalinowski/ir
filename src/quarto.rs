@@ -32,42 +32,29 @@ impl RenderSource {
         }
         Ok(RuntimeSpec::default())
     }
-
-    pub(crate) fn reject_unsupported_rscript_args(
-        &self,
-        rscript_args: &[String],
-    ) -> Result<(), Box<dyn Error>> {
-        reject_comma_rscript_args(rscript_args)
-    }
 }
 
 /// Phase 2 — render `doc` with `quarto render`, pointed at the selected R and
 /// the materialised library.
 ///
 /// `QUARTO_R` pins quarto's knitr R to `ir`'s selected Rscript. `R_LIBS`
-/// injects the resolved library exactly as for a script. `rscript_args`
-/// (leading Rscript options) are forwarded to quarto's knitr Rscript via
-/// `QUARTO_KNITR_RSCRIPT_ARGS`, which quarto splits on commas with no escaping.
-/// `script_args` (trailing) become `quarto render <doc> <script_args>`.
+/// injects the resolved library exactly as for a script. `render_args` become
+/// `quarto render <doc> <render_args>`.
 pub(crate) fn run(
     rscript: &OsStr,
     library: Option<&Path>,
     doc: &Path,
-    rscript_args: &[String],
-    script_args: &[String],
+    render_args: &[String],
     isolated: bool,
 ) -> Result<i32, Box<dyn Error>> {
     let mut cmd = Command::new(command());
-    cmd.arg("render").arg(doc).args(script_args);
+    cmd.arg("render").arg(doc).args(render_args);
 
     if let Some(value) = r_value(rscript) {
         cmd.env("QUARTO_R", value);
     }
     if let Some(lib) = library {
         cmd.env("R_LIBS", lib);
-    }
-    if !rscript_args.is_empty() {
-        cmd.env("QUARTO_KNITR_RSCRIPT_ARGS", rscript_args.join(","));
     }
     if isolated {
         cmd.env("R_LIBS_USER", "NULL");
@@ -121,20 +108,6 @@ fn is_r_script(script: &Path) -> bool {
             .as_deref(),
         Some("r")
     )
-}
-
-/// `QUARTO_KNITR_RSCRIPT_ARGS` is comma-separated with no escaping, so an
-/// Rscript option containing a comma cannot be forwarded faithfully.
-fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), Box<dyn Error>> {
-    if let Some(arg) = rscript_args.iter().find(|arg| arg.contains(',')) {
-        return Err(format!(
-            "Rscript option `{arg}` contains a comma, which cannot be forwarded to \
-             quarto's knitr engine: QUARTO_KNITR_RSCRIPT_ARGS is comma-separated \
-             with no escaping."
-        )
-        .into());
-    }
-    Ok(())
 }
 
 fn read_quarto_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {

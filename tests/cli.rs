@@ -357,11 +357,11 @@ fn clap_reports_public_usage_errors() {
         (vec!["run"], "requires a script"),
         (vec!["run", "--from", "btw", "btw"], "ir tool run"),
         (vec!["run", "-e"], "a value is required for '--expr <EXPR>'"),
-        (vec!["render"], "requires a source"),
         (
-            vec!["render", "-e", "1"],
-            "`-e` is only supported by `ir run`",
+            vec!["render"],
+            "the following required arguments were not provided",
         ),
+        (vec!["render", "-e", "1"], "unexpected argument '-e'"),
         (
             vec!["tool", "run", "--from", "btw"],
             "`--from` requires a command",
