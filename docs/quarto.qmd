@@ -25,6 +25,8 @@ $ ir run report.qmd --to pdf
 $ ir run --vanilla report.qmd
 ```
 
+The `ir.packages` value follows the same rules as script `packages`: use a YAML sequence where each entry is one package ref, or omit it, set it to `[]`, or set it to `null` for no dependencies.
+
 `ir` resolves the document packages into the same cached library model used for scripts, then launches `quarto render`. Leading Rscript options are forwarded to Quarto's knitr engine. Trailing arguments are passed to `quarto render`.
 
 When an R version is selected by frontmatter or `--r-version`, `ir` pins Quarto's knitr R to that selection.

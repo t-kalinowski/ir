@@ -5,10 +5,10 @@
 #   IR_RESOLVE_RESULT_FILE=<result_file> Rscript resolve.R
 #
 # Responsibilities (steps 1-4 of the `ir` pipeline):
-#   1. Consume pak package refs from stdin, one ref per line.
-#   2. Resolve the declared dependencies into concrete versions with pak.
-#   3. Hash the resolved set to derive a content-addressed library path
-#      under <cache_dir>.
+#   1. Consume package refs from stdin, one ref per line.
+#   2. Resolve dependencies with pak.
+#   3. Hash the install refs to derive a content-addressed library path under
+#      <cache_dir>.
 #   4. Materialise that path as a light-weight library of symlinks into
 #      renv's package cache via renv::use().
 #
@@ -187,6 +187,39 @@ ir_marker_source_current <- function(source, exclude_newer) {
   now - created_at <= ir_latest_resolution_max_age_seconds()
 }
 
+ir_is_standard_input_ref <- function(ref) {
+  stopifnot(length(ref) == 1L)
+
+  ref <- trimws(ref)
+  grepl(paste0("^",
+               "[[:alpha:]]([[:alnum:].]*[[:alnum:]])?",
+               "(@(>=)?([0-9]+[-.][0-9]+([-.][0-9]+)*|current|last))?",
+               "$"),
+        ref)
+}
+
+ir_has_nonstandard_input_ref <- function(refs) {
+  any(!vapply(refs, ir_is_standard_input_ref, logical(1)))
+}
+
+ir_is_standard_resolved_ref <- function(res) {
+  stopifnot("type" %in% names(res))
+
+  tolower(res$type) == "standard"
+}
+
+ir_install_spec <- function(res, i) {
+  if (ir_is_standard_resolved_ref(res[i, , drop = FALSE]))
+    return(sprintf("%s@%s", res$package[[i]], res$version[[i]]))
+
+  res$ref[[i]]
+}
+
+ir_install_specs <- function(res) {
+  sort(unique(vapply(seq_len(nrow(res)), function(i) ir_install_spec(res, i),
+                     character(1))))
+}
+
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
@@ -217,19 +250,20 @@ ir_resolve_main <- function() {
   ## written only after a successful materialise (below), so its presence implies
   ## a complete library.
   primary_ref <- if (length(deps)) deps[[1L]] else NULL
+  cache_resolution <- !ir_has_nonstandard_input_ref(deps)
   marker <- ir_env_optional("IR_RESOLUTION_MARKER")
-  if (is.null(marker)) {
+  if (is.null(marker) && cache_resolution) {
     marker <- file.path(cache_dir, "resolutions",
                         ir_input_key(deps, exclude_newer = exclude_newer,
                                      quarto = quarto))
   }
   package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
-  if (is.null(package_marker) && !is.null(primary_ref)) {
+  if (is.null(package_marker) && !is.null(marker) && !is.null(primary_ref)) {
     package_marker <- file.path(cache_dir, "resolutions",
                                 paste0(basename(marker), "-primary-",
                                        secretbase::sha256(primary_ref)))
   }
-  if (file.exists(marker)) {
+  if (!is.null(marker) && file.exists(marker)) {
     cached <- readLines(marker, n = 2L, warn = FALSE)
     if (length(cached) >= 2L &&
         ir_marker_source_current(cached[[1L]], exclude_newer) &&
@@ -283,19 +317,21 @@ ir_resolve_main <- function() {
 
   if (is.null(res)) {
     pkgs     <- character()
-    resolved <- character()
+    install_specs <- character()
+    has_source_ref <- FALSE
   } else {
     # Drop base / recommended packages: those are supplied by R itself.
     keep <- is.na(res$priority) | !(res$priority %in% c("base", "recommended"))
     res <- res[keep, , drop = FALSE]
     pkgs     <- res$package
-    resolved <- sort(unique(sprintf("%s@%s", res$package, res$version)))
+    install_specs <- ir_install_specs(res)
+    has_source_ref <- any(!ir_is_standard_resolved_ref(res))
   }
 
-  ## 3. Hash the resolved set -> content-addressed library path
+  ## 3. Hash install specs -> content-addressed library path
   # Bind the hash to the R version and platform: the symlinks point into the
   # renv cache, whose layout is itself keyed by R version and platform.
-  key <- paste(c(resolved,
+  key <- paste(c(install_specs,
                  as.character(getRversion()),
                  R.version$platform),
                collapse = "\n")
@@ -306,12 +342,12 @@ ir_resolve_main <- function() {
   # an unchanged script then cost nothing beyond resolution.
   dir.create(library_path, recursive = TRUE, showWarnings = FALSE)
   have <- list.files(library_path)
-  if (length(pkgs) && !all(pkgs %in% have)) {
+  if (length(pkgs) && (has_source_ref || !all(pkgs %in% have))) {
     # renv::use() installs into the renv cache and links the packages into
     # `library` as symlinks. Because `library` lives in our cache (not the R
     # temp dir), renv leaves it in place when the session ends.
     do.call(renv::use, c(
-      as.list(resolved),
+      as.list(install_specs),
       list(
         library = library_path,
         repos   = repos,
@@ -324,9 +360,11 @@ ir_resolve_main <- function() {
   }
 
   ## 4b. Record the resolution so an identical request skips pak.
-  dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
-  writeLines(c(ir_marker_source(exclude_newer), library_path), marker)
-  if (!is.null(primary_package)) {
+  if (!is.null(marker)) {
+    dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
+    writeLines(c(ir_marker_source(exclude_newer), library_path), marker)
+  }
+  if (!is.null(primary_package) && !is.null(package_marker)) {
     writeLines(primary_package, package_marker)
   }
   writeLines(library_path, result_file)

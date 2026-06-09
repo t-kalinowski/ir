@@ -21,10 +21,10 @@
 //!   1. Rust extracts and parses the leading `#| ` YAML frontmatter block. If
 //!      the resolution cache is warm, Rust reuses the cached library path
 //!      directly. Otherwise, a private R session (`driver/resolve.R`) receives
-//!      the normalized pak refs on stdin, resolves them with pak, hashes the
-//!      resolved set into a content-addressed library path under the cache
-//!      directory, and materialises that path as a light-weight library of
-//!      symlinks into renv's package cache. The path is reported back to us.
+//!      the package refs on stdin, resolves them with pak, hashes the install
+//!      refs into a content-addressed library path under the cache directory,
+//!      and materialises that path as a light-weight library of symlinks into
+//!      renv's package cache. The path is reported back to us.
 //!
 //!   2. We launch the user's script in a fresh R session with that library
 //!      prepended to `.libPaths()`. With `--isolated`, the user library is
@@ -884,9 +884,9 @@ fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn Error>> {
 }
 
 /// Return a cached materialised library path, or run the embedded driver in a
-/// private R session to resolve and materialise it. The dependency specs in
-/// `spec` (the script's frontmatter plus any `--with` packages) are normalized
-/// into pak refs before cache keying and resolver input.
+/// private R session to resolve and materialise it. Shorthand version specs in
+/// `spec` are normalized before cache keying and resolver input; other package
+/// refs are passed through.
 fn resolve_library(rscript: &OsStr, spec: &ScriptSpec) -> Result<Option<PathBuf>, Box<dyn Error>> {
     Ok(resolve_library_inner(rscript, spec, false)?.library)
 }
@@ -1357,24 +1357,23 @@ fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error
     }
 
     let mut dependencies = Vec::new();
-    if let Some(seq) = value.as_vec() {
-        for item in seq {
-            push_dependency_words(&mut dependencies, item)?;
-        }
-    } else {
-        push_dependency_words(&mut dependencies, value)?;
+    let Some(seq) = value.as_vec() else {
+        return Err("frontmatter `packages` must be a YAML sequence".into());
+    };
+    for item in seq {
+        push_dependency_entry(&mut dependencies, item)?;
     }
     Ok(dependencies)
 }
 
-fn push_dependency_words(
+fn push_dependency_entry(
     dependencies: &mut Vec<String>,
     value: &Yaml<'_>,
 ) -> Result<(), Box<dyn Error>> {
     let Some(value) = value.as_str() else {
         return Err("frontmatter `packages` entries must be strings".into());
     };
-    dependencies.extend(value.split_whitespace().map(str::to_owned));
+    dependencies.push(value.to_owned());
     Ok(())
 }
 

@@ -31,6 +31,13 @@ pub(crate) fn paths(
     exclude_newer: Option<&str>,
     quarto: bool,
 ) -> Result<Option<Paths>, Box<dyn Error>> {
+    if !dependencies
+        .iter()
+        .all(|dependency| is_standard_ref(dependency))
+    {
+        return Ok(None);
+    }
+
     let Some(rscript_identity) = rscript_identity(rscript) else {
         return Ok(None);
     };
@@ -129,6 +136,46 @@ fn resolution_cache_key(
     parts.push(format!("rscript: {rscript_identity}"));
 
     sha256_fields(&parts)
+}
+
+fn is_standard_ref(dependency: &str) -> bool {
+    let dependency = dependency.trim();
+
+    let Some((package, version)) = dependency.split_once('@') else {
+        return is_package_name(dependency);
+    };
+
+    is_package_name(package) && is_standard_version(version)
+}
+
+fn is_standard_version(version: &str) -> bool {
+    let version = version.strip_prefix(">=").unwrap_or(version);
+    if matches!(version, "current" | "last") {
+        return true;
+    }
+
+    let mut part_count = 0;
+    for part in version.split(['.', '-']) {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return false;
+        }
+        part_count += 1;
+    }
+
+    part_count >= 2
+}
+
+fn is_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '.')
+        && name
+            .chars()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
 }
 
 fn resolution_cache_source(exclude_newer: Option<&str>) -> Result<String, Box<dyn Error>> {
@@ -382,6 +429,66 @@ mod tests {
 
         assert_ne!(x64_marker, i386_marker);
         assert_ne!(x64_marker, r_home_marker);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nonstandard_refs_skip_resolution_markers() {
+        let dir = unique_dir("ir-nonstandard-ref-cache-unit");
+        let cache_dir = dir.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let rscript = dummy_rscript(&dir);
+
+        for dependency in [
+            "github::owner/repo@branch",
+            "owner/repo/subdir@main",
+            "pkg=owner/repo/subdir@main",
+            "gitlab::group/project",
+            "https://example.com/pkg.tar.gz",
+            "\\work\\pkg",
+            "cli@3",
+        ] {
+            let dependencies = vec![dependency.to_string()];
+            assert!(
+                paths(
+                    &cache_dir,
+                    rscript.as_os_str(),
+                    &dependencies,
+                    Some("2026-06-01"),
+                    false
+                )
+                .unwrap()
+                .is_none(),
+                "{dependency} should not use a warm resolution marker",
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn standard_refs_use_resolution_markers() {
+        let dir = unique_dir("ir-standard-ref-cache-unit");
+        let cache_dir = dir.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let rscript = dummy_rscript(&dir);
+
+        for dependency in ["cli", "cli@3.6.6", "cli@>=3.6.6"] {
+            let dependencies = vec![dependency.to_string()];
+            assert!(
+                paths(
+                    &cache_dir,
+                    rscript.as_os_str(),
+                    &dependencies,
+                    Some("2026-06-01"),
+                    false
+                )
+                .unwrap()
+                .is_some(),
+                "{dependency} should use a warm resolution marker",
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }

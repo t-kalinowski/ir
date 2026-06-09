@@ -161,6 +161,31 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn write_r_source_package(root: &Path, name: &str, extra_description: &[String]) -> PathBuf {
+    let source = root.join(name);
+    fs::create_dir_all(source.join("R")).unwrap();
+
+    let mut description = vec![
+        format!("Package: {name}"),
+        "Version: 0.0.1".to_string(),
+        format!("Title: {name} fixture"),
+        format!("Description: {name} fixture."),
+        "Authors@R: person(\"IR\", \"Fixture\", email = \"ir@example.com\", role = c(\"aut\", \"cre\"))".to_string(),
+        "License: MIT".to_string(),
+        "Encoding: UTF-8".to_string(),
+    ];
+    description.extend(extra_description.iter().cloned());
+    fs::write(source.join("DESCRIPTION"), description.join("\n") + "\n").unwrap();
+    fs::write(
+        source.join("NAMESPACE"),
+        "exportPattern(\"^[[:alpha:]]+\")\n",
+    )
+    .unwrap();
+    fs::write(source.join("R").join("ok.R"), "ok <- function() TRUE\n").unwrap();
+
+    source
+}
+
 fn output_text(output: &Output) -> String {
     format!(
         "status: {}\nstdout:\n{}\nstderr:\n{}",
@@ -424,6 +449,57 @@ fn malformed_frontmatter_errors_before_resolution() {
         "{}",
         output_text(&out)
     );
+}
+
+#[test]
+fn frontmatter_packages_must_be_sequence() {
+    let script = unique_path("ir-packages-scalar-frontmatter", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages: ""
+
+cat('not reached')
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&script);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("frontmatter `packages` must be a YAML sequence"),
+        "{}",
+        output_text(&out)
+    );
+}
+
+#[test]
+fn frontmatter_packages_null_means_empty_sequence() {
+    let script = unique_path("ir-packages-null-frontmatter", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages: null
+
+cat("ir.fixture=packages-null\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .args(["run", "--vanilla", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&script);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=packages-null");
 }
 
 #[test]
@@ -707,6 +783,349 @@ fn run_normalizes_version_specs_before_resolution_cache_keying() {
     let _ = fs::remove_dir_all(&cache_dir);
 
     assert_eq!(resolution_count, 1);
+}
+
+#[test]
+fn run_frontmatter_github_ref_installs_github_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-github-ref-cache");
+    let script = unique_path("ir-github-ref", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - github::rstudio/reticulate@fix-windows-pwsh-uv-bootstrap
+
+library(reticulate)
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, "reticulate"), mustWork = TRUE)
+loaded <- normalizePath(path.package("reticulate"), mustWork = TRUE)
+desc_file <- system.file("DESCRIPTION", package = "reticulate")
+desc <- as.list(read.dcf(desc_file)[1, ])
+stopifnot(
+  identical(loaded, expected),
+  identical(desc$RemoteType, "github"),
+  identical(desc$RemoteUsername, "rstudio"),
+  identical(desc$RemoteRepo, "reticulate"),
+  identical(desc$RemoteRef, "fix-windows-pwsh-uv-bootstrap"),
+  nzchar(desc$RemoteSha)
+)
+cat("ir.fixture=github-ref\n")
+cat("github.remote=", paste(
+  desc$RemoteType,
+  desc$RemoteUsername,
+  desc$RemoteRepo,
+  desc$RemoteRef,
+  sep = "/"
+), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=github-ref");
+    assert_stdout_contains(
+        &out,
+        "github.remote=github/rstudio/reticulate/fix-windows-pwsh-uv-bootstrap",
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_github_subdir_ref_installs_subdir_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-github-subdir-ref-cache");
+    let script = unique_path("ir-github-subdir-ref", "R");
+    let sha = "a7c16d1ea299853694af95b3cdd3b7ab3e97fb0e";
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - r-lib/pkgdepends/tests/testthat/fixtures/foo@{}
+
+library(foo)
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, "foo"), mustWork = TRUE)
+loaded <- normalizePath(path.package("foo"), mustWork = TRUE)
+desc_file <- system.file("DESCRIPTION", package = "foo")
+desc <- as.list(read.dcf(desc_file)[1, ])
+stopifnot(
+  identical(loaded, expected),
+  identical(desc$RemoteType, "github"),
+  identical(desc$RemoteUsername, "r-lib"),
+  identical(desc$RemoteRepo, "pkgdepends"),
+  identical(desc$RemoteRef, "{}"),
+  identical(desc$RemoteSubdir, "tests/testthat/fixtures/foo"),
+  nzchar(desc$RemoteSha)
+)
+cat("ir.fixture=github-subdir-ref\n")
+cat("github.remote=", paste(
+  desc$RemoteType,
+  desc$RemoteUsername,
+  desc$RemoteRepo,
+  desc$RemoteSubdir,
+  sep = "/"
+), "\n", sep = "")
+"#,
+            sha, sha
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=github-subdir-ref");
+    assert_stdout_contains(
+        &out,
+        "github.remote=github/r-lib/pkgdepends/tests/testthat/fixtures/foo",
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_preserves_transitive_source_refs() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-transitive-source-cache");
+    let package_dir = unique_dir("ir-transitive-source-packages");
+    let dep = write_r_source_package(&package_dir, "irdep", &[]);
+    let parent = write_r_source_package(
+        &package_dir,
+        "irparent",
+        &[
+            "Imports: irdep".to_string(),
+            format!("Remotes: irdep=local::{}", renviron_path(&dep)),
+        ],
+    );
+    let script = unique_path("ir-transitive-source", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}
+
+library(irparent)
+library(irdep)
+lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+expected <- normalizePath(file.path(lib, c("irparent", "irdep")), mustWork = TRUE)
+loaded <- normalizePath(path.package(c("irparent", "irdep")), mustWork = TRUE)
+stopifnot(identical(loaded, expected))
+cat("ir.fixture=transitive-source\n")
+"#,
+            renviron_path(&parent)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=transitive-source");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_local_ref_reruns_resolution_when_package_changes() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-local-ref-cache");
+    let package_dir = unique_dir("ir-local-ref-packages");
+    let package = write_r_source_package(&package_dir, "irlocal", &[]);
+    let script = unique_path("ir-local-ref", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}
+
+library(irlocal)
+cat("ir.fixture=local-ref\n")
+cat("irlocal.version=", as.character(packageVersion("irlocal")), "\n", sep = "")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref");
+    assert_stdout_contains(&out, "irlocal.version=0.0.1");
+
+    let description_path = package.join("DESCRIPTION");
+    let description = fs::read_to_string(&description_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", description_path.display()));
+    fs::write(
+        &description_path,
+        description.replace("Version: 0.0.1", "Version: 0.0.2"),
+    )
+    .unwrap_or_else(|e| panic!("failed to write {}: {e}", description_path.display()));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref");
+    assert_stdout_contains(&out, "irlocal.version=0.0.2");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_local_ref_with_pak_params_installs_local_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-local-ref-params-cache");
+    let package_dir = unique_dir("ir-local-ref-params-packages");
+    let package = write_r_source_package(&package_dir, "irlocal", &[]);
+    let script = unique_path("ir-local-ref-params", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}?reinstall
+
+library(irlocal)
+cat("ir.fixture=local-ref-params\n")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref-params");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_named_local_ref_installs_local_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-named-local-ref-cache");
+    let package_dir = unique_dir("ir-named-local-ref-packages");
+    let package = write_r_source_package(&package_dir, "irlocal", &[]);
+    let script = unique_path("ir-named-local-ref", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - irlocal=local::{}
+
+library(irlocal)
+cat("ir.fixture=named-local-ref\n")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=named-local-ref");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_frontmatter_sequence_entry_preserves_space_containing_local_ref() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-local-ref-spaces-cache");
+    let package_dir = unique_dir("ir local ref spaces packages");
+    let package = write_r_source_package(&package_dir, "irlocal", &[]);
+    let script = unique_path("ir-local-ref-spaces", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}
+
+library(irlocal)
+cat("ir.fixture=local-ref-spaces\n")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=local-ref-spaces");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
