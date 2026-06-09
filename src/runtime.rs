@@ -59,6 +59,7 @@ pub(crate) fn cmd_render(
     r_requirement: Option<&str>,
     render_args: &[String],
     isolated: bool,
+    vanilla: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
     spec.dependencies.extend(with_deps.iter().cloned());
@@ -76,6 +77,7 @@ pub(crate) fn cmd_render(
         source.path(),
         render_args,
         isolated,
+        vanilla,
     )?;
     std::process::exit(code);
 }

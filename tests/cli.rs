@@ -1576,7 +1576,7 @@ fn render_quarto_script_fixture_renders_with_dependencies() {
     let out = ir()
         .current_dir(&fixture_dir)
         .env("IR_CACHE_DIR", &cache_dir)
-        .args(["render", "--isolated"])
+        .args(["render", "--isolated", "--vanilla"])
         .arg("report-script.R")
         .args(["--to", "html"])
         .output()
@@ -1588,6 +1588,7 @@ fn render_quarto_script_fixture_renders_with_dependencies() {
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=render-script"), "{html}");
     assert!(html.contains("render.script.glue_in_cache=true"), "{html}");
+    assert!(html.contains("render.script.vanilla=true"), "{html}");
     assert!(html.contains("render.script.result=4"), "{html}");
 
     let _ = fs::remove_file(fixture_dir.join("report-script.html"));

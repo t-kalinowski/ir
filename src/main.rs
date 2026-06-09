@@ -78,6 +78,7 @@ fn try_main() -> Result<(), Box<dyn Error>> {
                 render.r_requirement.as_deref(),
                 &render.render_args,
                 render.isolated,
+                render.vanilla,
             )
         }
         Some(("tool", matches)) => match matches.subcommand() {

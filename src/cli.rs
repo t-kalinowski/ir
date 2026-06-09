@@ -81,6 +81,12 @@ fn render_command() -> ClapCommand {
                 .help("Disable the user library for this render"),
         )
         .arg(
+            Arg::new("vanilla")
+                .long("vanilla")
+                .action(ArgAction::SetTrue)
+                .help("Run Quarto's knitr R with --vanilla"),
+        )
+        .arg(
             Arg::new("source")
                 .value_name("SOURCE")
                 .required(true)
@@ -246,6 +252,7 @@ pub(crate) struct RenderArgs {
     pub(crate) source: RenderSource,
     pub(crate) render_args: Vec<String>,
     pub(crate) isolated: bool,
+    pub(crate) vanilla: bool,
 }
 
 pub(crate) struct ToolRunArgs {
@@ -350,6 +357,7 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
     let mut with_deps = Vec::new();
     let mut r_requirement = None;
     let mut isolated = false;
+    let mut vanilla = false;
     let mut iter = args.into_iter();
     let mut positional = None;
 
@@ -374,6 +382,8 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
             r_requirement = Some(value.to_string());
         } else if arg == "--isolated" {
             isolated = true;
+        } else if arg == "--vanilla" {
+            vanilla = true;
         } else if arg == "-" {
             return Err("`ir render` requires a source path, not stdin".into());
         } else if arg.starts_with('-') {
@@ -394,6 +404,7 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
         source: RenderSource::from_source_arg(source)?,
         render_args,
         isolated,
+        vanilla,
     })
 }
 

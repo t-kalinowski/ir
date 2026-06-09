@@ -38,7 +38,8 @@ impl RenderSource {
 /// the materialised library.
 ///
 /// `QUARTO_R` pins quarto's knitr R to `ir`'s selected Rscript. `R_LIBS`
-/// injects the resolved library exactly as for a script. `render_args` become
+/// injects the resolved library exactly as for a script. With `vanilla`, Quarto's
+/// knitr Rscript receives `--vanilla`. `render_args` become
 /// `quarto render <doc> <render_args>`.
 pub(crate) fn run(
     rscript: &OsStr,
@@ -46,6 +47,7 @@ pub(crate) fn run(
     doc: &Path,
     render_args: &[String],
     isolated: bool,
+    vanilla: bool,
 ) -> Result<i32, Box<dyn Error>> {
     let mut cmd = Command::new(command());
     cmd.arg("render").arg(doc).args(render_args);
@@ -58,6 +60,9 @@ pub(crate) fn run(
     }
     if isolated {
         cmd.env("R_LIBS_USER", "NULL");
+    }
+    if vanilla {
+        cmd.env("QUARTO_KNITR_RSCRIPT_ARGS", "--vanilla");
     }
 
     #[cfg(unix)]
