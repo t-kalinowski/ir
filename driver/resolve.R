@@ -77,17 +77,19 @@ ir_tooling_packages <- function() c("pak", "renv", "secretbase")
 ir_tooling_repos <- function()
   c(CRAN = "https://packagemanager.posit.co/cran/latest")
 
-# Tooling packages not loadable from the current library paths. Uses
-# requireNamespace so a user who already has pak/renv/secretbase anywhere on
-# their search path pays nothing.
-ir_missing_tooling <- function(packages = ir_tooling_packages())
-  Filter(function(p) !requireNamespace(p, quietly = TRUE), packages)
-
 # Path to the tooling library, keyed by R version and platform so compiled
 # packages match the running R, mirroring renv's cache layout.
 ir_tooling_lib <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "tooling",
             paste0(getRversion(), "-", R.version$platform))
+
+# Tooling packages not installed in ir's private tooling library. Do not probe
+# with requireNamespace() over the full search path: an inherited user library
+# may hold ABI-incompatible tooling for another R version.
+ir_missing_tooling <- function(packages = ir_tooling_packages(),
+                               lib = ir_tooling_lib())
+  Filter(function(p) !length(find.package(p, lib.loc = lib, quiet = TRUE)),
+         packages)
 
 # Ensure pak/renv/secretbase are available. Any that are missing are installed
 # into the tooling library, which is then put first on the search path.
@@ -97,12 +99,12 @@ ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
   dir.create(lib, recursive = TRUE, showWarnings = FALSE)
   .libPaths(c(lib, .libPaths()))
 
-  missing <- ir_missing_tooling()
+  missing <- ir_missing_tooling(lib = lib)
   if (!length(missing)) return(invisible())
 
   utils::install.packages(missing, lib = lib, repos = repos)
 
-  still_missing <- ir_missing_tooling()
+  still_missing <- ir_missing_tooling(lib = lib)
   if (length(still_missing))
     stop("could not install resolver tooling into ", lib, ": ",
          paste(still_missing, collapse = ", "), call. = FALSE)

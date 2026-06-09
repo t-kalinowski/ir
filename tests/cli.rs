@@ -91,6 +91,10 @@ fn renviron_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn r_string(path: &Path) -> String {
+    serde_json::to_string(&renviron_path(path)).unwrap()
+}
+
 fn assert_help_snapshot(name: &str, args: &[&str]) {
     let out = ir().args(args).output().unwrap();
     assert!(out.status.success(), "{args:?} should exit 0");
@@ -221,6 +225,41 @@ fn assert_command_success(mut command: Command, label: &str) {
         "{label} failed\n{}",
         output_text(&output)
     );
+}
+
+#[cfg(unix)]
+struct ResolverToolingPaths {
+    pak: PathBuf,
+    renv: PathBuf,
+    secretbase: PathBuf,
+}
+
+#[cfg(unix)]
+fn resolver_tooling_package_paths() -> ResolverToolingPaths {
+    let expr = concat!(
+        "cat(find.package('pak'), '\\n', ",
+        "find.package('renv'), '\\n', ",
+        "find.package('secretbase'), '\\n', sep = '')"
+    );
+    let output = Command::new(rscript()).args(["-e", expr]).output().unwrap();
+    assert_success(&output);
+
+    let stdout = stdout(&output);
+    let mut lines = stdout.lines().map(PathBuf::from);
+    ResolverToolingPaths {
+        pak: lines.next().unwrap(),
+        renv: lines.next().unwrap(),
+        secretbase: lines.next().unwrap(),
+    }
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
 
 fn python_executable() -> PathBuf {
@@ -1596,6 +1635,89 @@ fn render_quarto_script_fixture_renders_with_dependencies() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn resolver_tooling_ignores_ambient_user_library_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-ambient-tooling-cache");
+    let ambient_library = unique_dir("ir-ambient-tooling-user-library");
+    let package_dir = unique_dir("ir-ambient-tooling-packages");
+    let fake_load_marker = unique_path("ir-ambient-secretbase-loaded", "txt");
+    let profile = unique_path("ir-tooling-install-profile", "R");
+
+    let fake_secretbase = write_r_source_package(&package_dir, "secretbase", &[]);
+    fs::write(
+        fake_secretbase.join("R").join("ok.R"),
+        format!(
+            ".onLoad <- function(...) writeLines('loaded', {})\n",
+            r_string(&fake_load_marker)
+        ),
+    )
+    .unwrap();
+
+    let install_fake = format!(
+        "utils::install.packages({}, repos = NULL, type = 'source', lib = {})",
+        r_string(&fake_secretbase),
+        r_string(&ambient_library)
+    );
+    let mut install = Command::new(rscript());
+    install.args(["-e", &install_fake]);
+    assert_command_success(install, "install fake ambient secretbase");
+    let _ = fs::remove_file(&fake_load_marker);
+
+    let tooling = resolver_tooling_package_paths();
+    fs::write(
+        &profile,
+        format!(
+            r#"
+utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
+  paths <- c(pak = {}, renv = {}, secretbase = {})
+  dir.create(lib, recursive = TRUE, showWarnings = FALSE)
+  for (pkg in pkgs) {{
+    target <- file.path(lib, pkg)
+    unlink(target, recursive = TRUE, force = TRUE)
+    if (!file.symlink(paths[[pkg]], target))
+      stop("failed to link resolver tooling package: ", pkg, call. = FALSE)
+  }}
+}}, ns = "utils")
+"#,
+            r_string(&tooling.pak),
+            r_string(&tooling.renv),
+            r_string(&tooling.secretbase)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &ambient_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=ambient-tooling\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=ambient-tooling");
+    assert!(
+        !fake_load_marker.exists(),
+        "resolver should not load secretbase from ambient R_LIBS_USER"
+    );
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&fake_load_marker);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&ambient_library);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
 #[test]
 fn render_quarto_selects_requested_r_version() {
     let _guard = e2e_lock();
@@ -1622,12 +1744,6 @@ fn render_quarto_selects_requested_r_version() {
 
     let out = ir()
         .current_dir(&fixture_dir)
-        // The resolver inherits the environment, so an ambient R_LIBS_USER (CI's
-        // setup-r-dependencies exports one) would point the selected R at a
-        // library built for the *default* R, loading an ABI-mismatched
-        // secretbase. A real `--r-version` user has no R_LIBS_USER exported; drop
-        // it so the requested R uses its own toolchain.
-        .env_remove("R_LIBS_USER")
         .args(["render", "--isolated", "--r-version"])
         .arg(&target)
         .arg("r-version-select.qmd")
@@ -1678,10 +1794,6 @@ fn run_script_frontmatter_selects_r_version() {
     let script = fixture("run/r-version-frontmatter.R");
 
     let out = ir()
-        // See render_quarto_selects_requested_r_version: drop the ambient
-        // R_LIBS_USER so the frontmatter-selected R resolves against its own
-        // toolchain rather than the default R's (ABI-mismatched) library.
-        .env_remove("R_LIBS_USER")
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
@@ -1858,8 +1970,6 @@ fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
 #[cfg(unix)]
 #[test]
 fn tool_install_with_rscript_wrapper_records_primary_package_marker() {
-    use std::os::unix::fs::PermissionsExt;
-
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-wrapper-tool-install-cache");
     let bin_dir = unique_dir("ir-wrapper-tool-install-bin");
@@ -1869,9 +1979,7 @@ fn tool_install_with_rscript_wrapper_records_primary_package_marker() {
         "#!/bin/sh\nexec \"$IR_TEST_RSCRIPT_TARGET\" \"$@\"\n",
     )
     .unwrap();
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).unwrap();
+    make_executable(&wrapper);
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
