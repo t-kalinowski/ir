@@ -25,10 +25,6 @@ pub(crate) enum RunSource {
     Stdin,
 }
 
-pub(crate) struct RenderSource {
-    path: PathBuf,
-}
-
 impl RunSource {
     pub(crate) fn from_script_arg(script: String) -> Result<Self, Box<dyn Error>> {
         if script == "-" {
@@ -56,45 +52,8 @@ impl RunSource {
     }
 }
 
-impl RenderSource {
-    pub(crate) fn from_source_arg(source: String) -> Result<Self, Box<dyn Error>> {
-        let path = PathBuf::from(&source);
-        fs::metadata(&path).map_err(|e| format!("cannot read source `{source}`: {e}"))?;
-        Ok(Self { path })
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn script_spec(&self) -> Result<ScriptSpec, Box<dyn Error>> {
-        if quarto::is_quarto_document(&self.path) {
-            return read_quarto_document_spec(&self.path);
-        }
-        if quarto::is_r_script(&self.path) {
-            return read_quarto_script_spec(&self.path);
-        }
-        Ok(ScriptSpec::default())
-    }
-
-    pub(crate) fn reject_unsupported_rscript_args(
-        &self,
-        rscript_args: &[String],
-    ) -> Result<(), Box<dyn Error>> {
-        quarto::reject_comma_rscript_args(rscript_args)
-    }
-}
-
 fn read_r_script_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
     parse_r_script_frontmatter(&read_r_script_frontmatter_to_string(script)?)
-}
-
-fn read_quarto_document_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
-    parse_quarto_frontmatter(&quarto::read_to_string(script)?)
-}
-
-fn read_quarto_script_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
-    parse_quarto_frontmatter(&read_quarto_script_frontmatter_to_string(script)?)
 }
 
 fn read_r_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
@@ -125,48 +84,6 @@ fn read_r_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn 
     Ok(frontmatter)
 }
 
-fn read_quarto_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
-    let file = File::open(script)?;
-    let mut reader = BufReader::new(file);
-    let mut frontmatter = String::new();
-    let mut line = String::new();
-
-    let mut read_next_line = |line: &mut String| {
-        line.clear();
-        reader.read_line(line)
-    };
-
-    read_next_line(&mut line)?;
-    if line.starts_with("#!") {
-        read_next_line(&mut line)?;
-    }
-
-    let Some(first) = strip_quarto_script_comment(&line) else {
-        return Ok(frontmatter);
-    };
-    if first.trim_end() != "---" {
-        return Ok(frontmatter);
-    }
-    frontmatter.push_str(first);
-
-    while read_next_line(&mut line)? != 0 {
-        let Some(rest) = strip_quarto_script_comment(&line) else {
-            break;
-        };
-        frontmatter.push_str(rest);
-        if rest.trim_end() == "---" {
-            break;
-        }
-    }
-
-    Ok(frontmatter)
-}
-
-fn strip_quarto_script_comment(line: &str) -> Option<&str> {
-    line.strip_prefix("#'")
-        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
-}
-
 fn parse_r_script_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn Error>> {
     if frontmatter.trim().is_empty() {
         return Ok(ScriptSpec::default());
@@ -179,7 +96,7 @@ fn parse_r_script_frontmatter(frontmatter: &str) -> Result<ScriptSpec, Box<dyn E
     script_spec_from_yaml_mapping(&doc)
 }
 
-fn parse_quarto_frontmatter(document: &str) -> Result<ScriptSpec, Box<dyn Error>> {
+pub(crate) fn parse_quarto_frontmatter(document: &str) -> Result<ScriptSpec, Box<dyn Error>> {
     if document.trim().is_empty() {
         return Ok(ScriptSpec::default());
     }

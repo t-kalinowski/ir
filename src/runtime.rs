@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::quarto;
+use crate::quarto::{self, RenderSource};
 use crate::resolve_cache;
 use crate::rig;
-use crate::script::{RenderSource, RunSource, ScriptSpec};
+use crate::script::{RunSource, ScriptSpec};
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.

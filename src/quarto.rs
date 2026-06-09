@@ -1,10 +1,45 @@
 use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::io;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::script::{parse_quarto_frontmatter, ScriptSpec};
+
+pub(crate) struct RenderSource {
+    path: PathBuf,
+}
+
+impl RenderSource {
+    pub(crate) fn from_source_arg(source: String) -> Result<Self, Box<dyn Error>> {
+        let path = PathBuf::from(&source);
+        fs::metadata(&path).map_err(|e| format!("cannot read source `{source}`: {e}"))?;
+        Ok(Self { path })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn script_spec(&self) -> Result<ScriptSpec, Box<dyn Error>> {
+        if is_quarto_document(&self.path) {
+            return read_quarto_document_spec(&self.path);
+        }
+        if is_r_script(&self.path) {
+            return read_quarto_script_spec(&self.path);
+        }
+        Ok(ScriptSpec::default())
+    }
+
+    pub(crate) fn reject_unsupported_rscript_args(
+        &self,
+        rscript_args: &[String],
+    ) -> Result<(), Box<dyn Error>> {
+        reject_comma_rscript_args(rscript_args)
+    }
+}
 
 /// Phase 2 — render `doc` with `quarto render`, pointed at the selected R and
 /// the materialised library.
@@ -52,8 +87,15 @@ pub(crate) fn run(
     }
 }
 
-/// Read a Quarto document for YAML frontmatter parsing.
-pub(crate) fn read_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
+fn read_quarto_document_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
+    parse_quarto_frontmatter(&read_to_string(script)?)
+}
+
+fn read_quarto_script_spec(script: &Path) -> Result<ScriptSpec, Box<dyn Error>> {
+    parse_quarto_frontmatter(&read_quarto_script_frontmatter_to_string(script)?)
+}
+
+fn read_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     Ok(fs::read_to_string(script)?)
 }
 
@@ -70,7 +112,7 @@ pub(crate) fn is_quarto_document(script: &Path) -> bool {
 }
 
 /// True for R scripts that Quarto can render through the knitr script flow.
-pub(crate) fn is_r_script(script: &Path) -> bool {
+fn is_r_script(script: &Path) -> bool {
     matches!(
         script
             .extension()
@@ -83,7 +125,7 @@ pub(crate) fn is_r_script(script: &Path) -> bool {
 
 /// `QUARTO_KNITR_RSCRIPT_ARGS` is comma-separated with no escaping, so an
 /// Rscript option containing a comma cannot be forwarded faithfully.
-pub(crate) fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), Box<dyn Error>> {
+fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), Box<dyn Error>> {
     if let Some(arg) = rscript_args.iter().find(|arg| arg.contains(',')) {
         return Err(format!(
             "Rscript option `{arg}` contains a comma, which cannot be forwarded to \
@@ -93,6 +135,48 @@ pub(crate) fn reject_comma_rscript_args(rscript_args: &[String]) -> Result<(), B
         .into());
     }
     Ok(())
+}
+
+fn read_quarto_script_frontmatter_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
+    let file = File::open(script)?;
+    let mut reader = BufReader::new(file);
+    let mut frontmatter = String::new();
+    let mut line = String::new();
+
+    let mut read_next_line = |line: &mut String| {
+        line.clear();
+        reader.read_line(line)
+    };
+
+    read_next_line(&mut line)?;
+    if line.starts_with("#!") {
+        read_next_line(&mut line)?;
+    }
+
+    let Some(first) = strip_quarto_script_comment(&line) else {
+        return Ok(frontmatter);
+    };
+    if first.trim_end() != "---" {
+        return Ok(frontmatter);
+    }
+    frontmatter.push_str(first);
+
+    while read_next_line(&mut line)? != 0 {
+        let Some(rest) = strip_quarto_script_comment(&line) else {
+            break;
+        };
+        frontmatter.push_str(rest);
+        if rest.trim_end() == "---" {
+            break;
+        }
+    }
+
+    Ok(frontmatter)
+}
+
+fn strip_quarto_script_comment(line: &str) -> Option<&str> {
+    line.strip_prefix("#'")
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
 }
 
 /// The value to pass as `QUARTO_R`, or `None` to leave quarto's own R lookup in

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, Command as ClapCommand};
 
+use crate::quarto::RenderSource;
 use crate::runtime::nonempty_env;
-use crate::script::{RenderSource, RunSource};
+use crate::script::RunSource;
 
 pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
