@@ -52,6 +52,9 @@ jobs:
           # ref the run was dispatched from (github.sha).
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
       - uses: quarto-dev/quarto-actions/setup@v2
 
       - uses: r-lib/actions/setup-r@v2
@@ -61,24 +64,19 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: |
+            any::fansi
+            any::htmltools
             any::knitr
             any::rmarkdown
 
-      - name: Install released ir
+      - name: Build current ir
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p dist/bin
-          gh release download \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "ir-x86_64-unknown-linux-gnu.tar.gz" \
-            --dir dist
-          tar -xzf dist/ir-x86_64-unknown-linux-gnu.tar.gz -C dist/bin --strip-components=1
-          test -x dist/bin/ir
-          ./dist/bin/ir --help
-          echo "$PWD/dist/bin" >> "$GITHUB_PATH"
+          cargo build --release --locked
+          test -x target/release/ir
+          ./target/release/ir --help
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
 
       - uses: quarto-dev/quarto-actions/publish@v2
         with:

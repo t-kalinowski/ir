@@ -378,7 +378,14 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
 
     fs::write(
         &fake_ir,
-        "#!/bin/sh\nprintf '\\033[1;32mUsage:\\033[0m ir'\nfor arg in \"$@\"; do printf ' %s' \"$arg\"; done\nprintf '\\n'\n",
+        concat!(
+            "#!/bin/sh\n",
+            "printf '\\033[1;32mUsage:\\033[0m ir [COMMAND]\\n\\n'\n",
+            "printf '\\033[1;33mCommands:\\033[0m\\n'\n",
+            "printf '  render  Render a Quarto document or script\\n\\n'\n",
+            "printf '\\033[1;33mOptions:\\033[0m\\n'\n",
+            "printf '  \\033[1;32m-h\\033[0m, \\033[1;32m--help\\033[0m  Print help\\n'\n",
+        ),
     )
     .unwrap();
     let mut perms = fs::metadata(&fake_ir).unwrap().permissions();
@@ -416,12 +423,50 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     let html = fs::read_to_string(output_dir.join("reference.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered reference page: {e}"));
     assert!(html.contains("data-mode=\"dark\""), "{html}");
+    assert!(
+        html.contains("Render a Quarto document or script"),
+        "{html}"
+    );
+    assert!(html.contains("Options:"), "{html}");
     assert!(html.contains("color: #00BB00"), "{html}");
     assert!(html.contains("font-weight: bold"), "{html}");
     assert!(!html.contains("\u{1b}["), "{html}");
 
     let _ = fs::remove_dir_all(&output_dir);
     let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[test]
+fn docs_run_page_dark_mode_styles_console_blocks() {
+    let _guard = e2e_lock();
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let docs_dir = manifest_dir.join("docs");
+    let output_dir = unique_dir("ir-docs-run-output");
+
+    let output = Command::new("quarto")
+        .current_dir(&docs_dir)
+        .args(["render", "run.qmd", "--to", "html"])
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert_success(&output);
+
+    let html = fs::read_to_string(output_dir.join("run.html"))
+        .unwrap_or_else(|e| panic!("failed to read rendered run page: {e}"));
+    assert!(html.contains("$ ir run script.R"), "{html}");
+
+    assert!(html.contains("data-mode=\"dark\""), "{html}");
+
+    let styles = fs::read_to_string(output_dir.join("styles.css"))
+        .unwrap_or_else(|e| panic!("failed to read rendered styles.css: {e}"));
+    assert!(styles.contains("pre.console"), "{styles}");
+    assert!(
+        styles.contains("background-color: var(--ir-panel)"),
+        "{styles}"
+    );
+
+    let _ = fs::remove_dir_all(&output_dir);
 }
 
 #[test]

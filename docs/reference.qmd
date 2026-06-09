@@ -37,6 +37,19 @@ cli_help <- function(...) {
     )
   }
 
+  output_text <- paste(output, collapse = "\n")
+  if (
+    length(output) < 3L ||
+      !grepl("Usage:", output_text, fixed = TRUE) ||
+      !grepl("Options:", output_text, fixed = TRUE)
+  ) {
+    stop(
+      "`ir ", paste(args, collapse = " "),
+      "` produced incomplete help output; check the `ir` executable on PATH.",
+      call. = FALSE
+    )
+  }
+
   output <- htmltools::htmlEscape(output)
   output <- fansi::sgr_to_html(output, term.cap = "256")
   knitr::asis_output(paste0(
