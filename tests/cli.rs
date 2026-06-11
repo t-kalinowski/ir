@@ -347,6 +347,77 @@ fn rx_help_outputs_match_snapshots() {
 }
 
 #[test]
+fn cli_help_honors_clap_color_env() {
+    let out = ir()
+        .env_remove("NO_COLOR")
+        .env("CLICOLOR_FORCE", "1")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let colored_stdout = stdout(&out);
+    assert!(colored_stdout.contains("\u{1b}["), "{colored_stdout}");
+    assert!(
+        colored_stdout.contains("\u{1b}[94mUsage:"),
+        "{colored_stdout}"
+    );
+    assert!(colored_stdout.contains("\u{1b}[36mir"), "{colored_stdout}");
+    assert!(
+        colored_stdout.contains("\u{1b}[90m[COMMAND]"),
+        "{colored_stdout}"
+    );
+    assert!(!colored_stdout.contains("\u{1b}[32m"), "{colored_stdout}");
+    assert!(!colored_stdout.contains("\u{1b}[33m"), "{colored_stdout}");
+    assert!(!colored_stdout.contains("\u{1b}[4m"), "{colored_stdout}");
+
+    let out = ir()
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = stdout(&out);
+    assert!(!stdout.contains("\u{1b}["), "{stdout}");
+}
+
+#[test]
+fn help_section_headings_are_colored() {
+    let colored_examples = "\u{1b}[1m\u{1b}[94mExamples:\u{1b}[0m";
+    for args in [
+        &["--help"][..],
+        &["run", "--help"],
+        &["render", "--help"],
+        &["tool", "run", "--help"],
+        &["tool", "install", "--help"],
+    ] {
+        let out = ir()
+            .env_remove("NO_COLOR")
+            .env("CLICOLOR_FORCE", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        let stdout = stdout(&out);
+        assert!(stdout.contains(colored_examples), "{args:?}:\n{stdout}");
+    }
+
+    let out = ir()
+        .env_remove("NO_COLOR")
+        .env("CLICOLOR_FORCE", "1")
+        .args(["tool", "--help"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = stdout(&out);
+    assert!(
+        stdout.contains("\u{1b}[1m\u{1b}[94mTools:\u{1b}[0m"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn clap_reports_public_usage_errors() {
     let cases = [
         (vec!["frobnicate"], "unrecognized subcommand 'frobnicate'"),
