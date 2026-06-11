@@ -53,6 +53,14 @@ fn examples_help(body: &'static str) -> StyledStr {
     help
 }
 
+fn section_help(title: &'static str, body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}{title}:{header:#}");
+    help.push_str(body);
+    help
+}
+
 fn run_command() -> ClapCommand {
     ClapCommand::new("run")
         .about("Run a script or inline R expression")
@@ -160,14 +168,16 @@ fn tool_command() -> ClapCommand {
     ClapCommand::new("tool")
         .about("Run package executables")
         .arg_required_else_help(true)
-        .after_help(concat!(
-            "Tools:\n",
-            "  A tool is an executable provided by an R package with an Rscript or Rapp\n",
-            "  shebang.\n",
-            "  `ir tool run` resolves the package plus any --with dependencies into an\n",
-            "  isolated library, then runs the selected executable. The user R library is not\n",
-            "  used.\n",
-            "  `ir tool install` writes launchers that recreate the resolved tool runtime.",
+        .after_help(section_help(
+            "Tools",
+            concat!(
+                "  A tool is an executable provided by an R package with an Rscript or Rapp\n",
+                "  shebang.\n",
+                "  `ir tool run` resolves the package plus any --with dependencies into an\n",
+                "  isolated library, then runs the selected executable. The user R library is not\n",
+                "  used.\n",
+                "  `ir tool install` writes launchers that recreate the resolved tool runtime.",
+            ),
         ))
         .subcommand(tool_run_command())
         .subcommand(tool_rx_command())
