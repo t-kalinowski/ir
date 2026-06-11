@@ -1,19 +1,20 @@
 ---
-title: "Quarto Rendering"
+title: Quarto Rendering
 ---
 
-`ir render` renders Quarto documents and Quarto-formatted R scripts with `quarto render`. Packages live under an `ir:` key in the source YAML.
+`ir render` renders Quarto documents and Quarto-formatted R scripts with `quarto render`.
+Packages live under an `ir:` key in the source YAML.
 
 ```yaml
 ---
-title: "My report"
+title: My report
 ir:
   packages:
     - dplyr>=1.0
     - gt@1.0
   r-version: ">= 4.0"
   isolated: true
-  exclude-newer: "2024-01-15"
+  exclude-newer: 2024-01-15
 ---
 ```
 
@@ -42,7 +43,8 @@ $ ir render report.R
 
 The `ir.packages` value follows the same rules as script `packages`: use a YAML sequence where each entry is one package ref, or omit it, set it to `[]`, or set it to `null` for no dependencies.
 
-`ir` resolves the document packages into the same cached library model used for scripts, then launches `quarto render`. Arguments after the source path are passed to `quarto render`.
+`ir` resolves the document packages into the same cached library model used for scripts, then launches `quarto render`.
+Arguments after the source path are passed to `quarto render`.
 
 Use `--vanilla` before the source path to run Quarto's knitr R with `--vanilla`.
 
@@ -52,6 +54,7 @@ Set `IR_QUARTO` to use a specific Quarto executable.
 
 ## rmarkdown injection
 
-A Quarto render needs the `rmarkdown` package for the knitr engine. `ir` appends `rmarkdown` to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of `exclude-newer` when set).
+A Quarto render needs the `rmarkdown` package for the knitr engine.
+`ir` appends `rmarkdown` to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of `exclude-newer` when set).
 
 Declare `rmarkdown` yourself under `ir.packages` - directly (e.g. `rmarkdown@2.29`) or transitively, such as through `quarto` - to override the injected seed.

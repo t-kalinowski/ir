@@ -3,7 +3,7 @@ Install package executable launchers
 Usage: ir tool install [OPTIONS] <PKG_REF>
 
 Arguments:
-  <PKG_REF>  Package ref that resolves to the package exposing exec/ launchers
+  <PKG_REF>  Package ref that provides executables to install
 
 Options:
       --with <PKG>        Add a dependency for installed launchers; may be repeated
@@ -11,3 +11,8 @@ Options:
       --bin-dir <DIR>     Directory where launchers are written
       --force             Overwrite an existing launcher path
   -h, --help              Print help
+
+Examples:
+  ir tool install btw
+  ir tool install --bin-dir ~/.local/bin btw
+  ir tool install --with cli --bin-dir ~/.local/bin btw

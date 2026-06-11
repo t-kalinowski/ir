@@ -1,8 +1,9 @@
 ---
-title: "Scripts"
+title: Scripts
 ---
 
-`ir run` executes R scripts whose package metadata is embedded at the top of the file. The metadata block is YAML, with each line prefixed by `#| ` after an optional shebang.
+`ir run` executes R scripts whose package metadata is embedded at the top of the file.
+The metadata block is YAML, with each line prefixed by `#| ` after an optional shebang.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -37,7 +38,13 @@ The script frontmatter supports:
 - `isolated`: `true` disables the user library for the run.
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date.
 
-Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`. Source refs are resolved with pak and then passed through to renv, including GitHub, GitLab, Bitbucket, git, URL, and local package refs in forms both tools accept. GitHub packages should use package refs such as `github::owner/repo@ref` or `github::owner/repo/subdir@ref`, not browser URLs copied from GitHub. Local packages may be written as `local::path`, as a bare file-system path in pak-supported forms such as `./path`, or with a package prefix such as `mypkg=local::C:/path` for Windows absolute paths. `packages` must be a YAML sequence; each sequence entry is one package ref. Omit `packages`, use `packages: []`, or use `packages: null` when no package refs are needed. Unknown keys are ignored after YAML parsing, so future metadata such as `sys-reqs` can be present before `ir` supports it.
+Supported version specs include `pkg`, `pkg>=1.0`, and `pkg==1.2`.
+Source refs are resolved with pak and then passed through to renv, including GitHub, GitLab, Bitbucket, git, URL, and local package refs in forms both tools accept.
+GitHub packages should use package refs such as `github::owner/repo@ref` or `github::owner/repo/subdir@ref`, not browser URLs copied from GitHub.
+Local packages may be written as `local::path`, as a bare file-system path in pak-supported forms such as `./path`, or with a package prefix such as `mypkg=local::C:/path` for Windows absolute paths.
+`packages` must be a YAML sequence; each sequence entry is one package ref.
+Omit `packages`, use `packages: []`, or use `packages: null` when no package refs are needed.
+Unknown keys are ignored after YAML parsing, so future metadata such as `sys-reqs` can be present before `ir` supports it.
 
 ## Inline runs
 
@@ -49,15 +56,20 @@ $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --with 'dplyr>=1.1' --with tidyr -e 'library(dplyr); library(tidyr); 1'
 ```
 
-`--with` may be repeated and accepts comma-separated packages. With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared packages. Inline expressions and standard-input programs do not have frontmatter. Without `--with`, they run against an empty resolved library while user libraries remain visible unless `--isolated` is supplied.
+`--with` may be repeated and accepts comma-separated packages.
+With a script, command-line packages are merged with the script metadata; with `-e`, they are the only declared packages.
+Inline expressions and standard-input programs do not have frontmatter.
+Without `--with`, they run against an empty resolved library while user libraries remain visible unless `--isolated` is supplied.
 
 ## Isolation
 
-By default, `ir` prepends the resolved library to `.libPaths()` and leaves user libraries available as a fallback. Use `--isolated` to remove the user library for the run:
+By default, `ir` prepends the resolved library to `.libPaths()` and leaves user libraries available as a fallback.
+Use `--isolated` to remove the user library for the run:
 
 ```console
 $ ir run --isolated script.R
 $ ir run --isolated --with cli -e 'cli::cli_alert_success("hi")'
 ```
 
-`--isolated` sets `R_LIBS_USER=NULL`. Site and base/system libraries remain on the path.
+`--isolated` sets `R_LIBS_USER=NULL`.
+Site and base/system libraries remain on the path.

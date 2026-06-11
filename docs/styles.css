@@ -1,20 +1,32 @@
 :root {
-  --ir-accent: #2f6f5e;
-  --ir-ink: #1f2933;
   --ir-muted: #52616b;
   --ir-panel: #f6f8f7;
+  --ir-help-panel: #f5f8f7;
+  --ir-help-border: #d5dfdc;
+  --ir-ansi-green: #007f3b;
+  --ir-ansi-blue: #2f49a3;
+  --ir-ansi-yellow: #7c5f00;
+  --ir-ansi-gray: #52616b;
 }
 
-body {
-  color: var(--ir-ink);
-}
-
-a {
-  color: var(--ir-accent);
+body.quarto-dark {
+  --ir-muted: #aeb8be;
+  --ir-panel: #172026;
+  --ir-help-panel: #131c22;
+  --ir-help-border: #33424a;
+  --ir-ansi-green: #5fe084;
+  --ir-ansi-blue: #9eb6ff;
+  --ir-ansi-yellow: #ecd46b;
+  --ir-ansi-gray: #aeb8be;
 }
 
 .navbar-title {
   font-weight: 700;
+}
+
+body.quarto-dark .navbar {
+  background-color: #111a20;
+  box-shadow: inset 0 -1px 0 var(--bs-border-color);
 }
 
 .quarto-title-block .subtitle {
@@ -25,6 +37,49 @@ a {
 
 pre {
   border-radius: 6px;
+}
+
+pre.console,
+pre.ir-cli-help {
+  box-shadow: inset 0 0 0 1px var(--bs-border-color);
+  color: var(--bs-body-color);
+  padding: 1rem;
+}
+
+pre.console {
+  background-color: var(--ir-panel);
+}
+
+pre.ir-cli-help {
+  background-color: var(--ir-help-panel);
+  border-color: var(--ir-help-border);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-weight: 500;
+}
+
+pre.ir-cli-help span[style*="#00BB00"] {
+  color: var(--ir-ansi-green) !important;
+}
+
+pre.ir-cli-help span[style*="#5555FF"],
+pre.ir-cli-help span[style*="#00BBBB"] {
+  color: var(--ir-ansi-blue) !important;
+}
+
+pre.ir-cli-help span[style*="#BBBB00"] {
+  color: var(--ir-ansi-yellow) !important;
+}
+
+pre.ir-cli-help span[style*="#555555"] {
+  color: var(--ir-ansi-gray) !important;
+}
+
+pre.console code,
+pre.ir-cli-help code {
+  background-color: transparent;
+  color: inherit;
 }
 
 code {

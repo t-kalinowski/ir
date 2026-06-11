@@ -1,26 +1,80 @@
 use std::error::Error;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use clap::{Arg, ArgAction, Command as ClapCommand};
+use clap::builder::styling::{AnsiColor, Styles};
+use clap::builder::StyledStr;
+use clap::{Arg, ArgAction, ColorChoice, Command as ClapCommand};
 
 use crate::quarto::RenderSource;
 use crate::runtime::nonempty_env;
 use crate::script::RunSource;
 
+const HELP_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::BrightBlue.on_default().bold())
+    .usage(AnsiColor::BrightBlue.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::BrightBlack.on_default());
+
 pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Run self-describing R scripts")
+        .color(ColorChoice::Auto)
+        .styles(HELP_STYLES)
         .arg_required_else_help(true)
+        .after_help(examples_help(concat!(
+            "  ir run script.R\n",
+            "  ir render report.qmd\n",
+            "  ir tool run btw\n",
+            "  ir cache dir",
+        )))
         .subcommand(run_command())
         .subcommand(render_command())
         .subcommand(tool_command())
         .subcommand(cache_command())
 }
 
+fn examples_help(body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
+}
+
+fn section_help(title: &'static str, body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}{title}:{header:#}");
+    help.push_str(body);
+    help
+}
+
 fn run_command() -> ClapCommand {
     ClapCommand::new("run")
         .about("Run a script or inline R expression")
+        .after_help(examples_help(concat!(
+            "  ir run script.R\n",
+            "  ir run script.R input.csv --verbose\n",
+            "  ir run -e 'print(\"hello\")'\n\n",
+            "  ir run --with cli --vanilla script.R --input data.csv\n",
+            "      # --with is for ir; --vanilla is for Rscript.\n",
+            "      # --input data.csv is passed to script.R.\n\n",
+            "  ir run --with cli -e 'print(commandArgs(TRUE))' --input data.csv\n",
+            "      # --input data.csv is passed to commandArgs(TRUE).",
+        )))
         .arg(
             Arg::new("expr")
                 .short('e')
@@ -59,6 +113,15 @@ fn run_command() -> ClapCommand {
 fn render_command() -> ClapCommand {
     ClapCommand::new("render")
         .about("Render a Quarto document or script")
+        .after_help(examples_help(concat!(
+            "  ir render report.qmd\n",
+            "  ir render report.qmd --to html\n\n",
+            "  ir render --with ggplot2 report.qmd --to html\n",
+            "      # --with is for ir; --to html is passed to quarto render.\n\n",
+            "  ir render --vanilla slides.qmd --output slides.html\n",
+            "      # --vanilla runs knitr R with --vanilla.\n",
+            "      # --output slides.html is passed to quarto render.",
+        )))
         .arg(
             Arg::new("with")
                 .long("with")
@@ -106,6 +169,17 @@ fn tool_command() -> ClapCommand {
     ClapCommand::new("tool")
         .about("Run package executables")
         .arg_required_else_help(true)
+        .after_help(section_help(
+            "Tools",
+            concat!(
+                "  A tool is an executable provided by an R package with an Rscript or Rapp\n",
+                "  shebang.\n",
+                "  `ir tool run` resolves the package plus any --with dependencies into an\n",
+                "  isolated library, then runs the selected executable. The user R library is not\n",
+                "  used.\n",
+                "  `ir tool install` writes launchers that recreate the resolved tool runtime.",
+            ),
+        ))
         .subcommand(tool_run_command())
         .subcommand(tool_rx_command())
         .subcommand(tool_install_command())
@@ -114,7 +188,15 @@ fn tool_command() -> ClapCommand {
 fn tool_run_command() -> ClapCommand {
     tool_run_args(
         ClapCommand::new("run")
-            .about("Resolve a package and run an executable from its exec directory"),
+            .about("Run an executable provided by an R package")
+            .after_help(examples_help(concat!(
+                "  ir tool run btw\n",
+                "  ir tool run btw --help\n",
+                "      # btw is shorthand for --from btw btw.\n\n",
+                "  ir tool run --from btw --vanilla btw --input data.csv\n",
+                "      # --from is for ir; --vanilla is for Rscript.\n",
+                "      # --input data.csv is passed to the btw executable.",
+            ))),
     )
 }
 
@@ -137,7 +219,7 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
                 .long("from")
                 .value_name("PKG_REF")
                 .num_args(1)
-                .help("Resolve a package ref and run <command> from its exec/ directory"),
+                .help("Resolve a package ref and run <command> from that package"),
         )
         .arg(
             Arg::new("with")
@@ -169,6 +251,11 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
 fn tool_install_command() -> ClapCommand {
     ClapCommand::new("install")
         .about("Install package executable launchers")
+        .after_help(examples_help(concat!(
+            "  ir tool install btw\n",
+            "  ir tool install --bin-dir ~/.local/bin btw\n",
+            "  ir tool install --with cli --bin-dir ~/.local/bin btw",
+        )))
         .arg(
             Arg::new("with")
                 .long("with")
@@ -201,7 +288,7 @@ fn tool_install_command() -> ClapCommand {
             Arg::new("package-ref")
                 .value_name("PKG_REF")
                 .required(true)
-                .help("Package ref that resolves to the package exposing exec/ launchers"),
+                .help("Package ref that provides executables to install"),
         )
 }
 
@@ -278,8 +365,9 @@ pub(crate) struct ToolInstallArgs {
 /// `-e <expr>`, `--with <spec>`, `--r-version <spec>` and `--isolated` are
 /// `ir`-level flags handled here. Any other `-...` argument is an Rscript
 /// option, forwarded verbatim to the user-code phase. Scanning stops at the
-/// first non-option, which is the script path unless `-e` was given (in which
-/// case it, and everything after, are program args, as with Rscript).
+/// script path unless `-e` was given, in which case scanning stops after the
+/// last `-e <expr>` pair. Everything after the source boundary is passed to
+/// user code as program args.
 pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error>> {
     let mut rscript_args = Vec::new();
     let mut with_deps = Vec::new();
@@ -290,7 +378,11 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error
     let mut positional = None;
 
     while let Some(arg) = iter.next() {
-        if arg == "-e" || arg == "--expr" {
+        if !expressions.is_empty() && arg != "-e" && arg != "--expr" && !arg.starts_with("--expr=")
+        {
+            positional = Some(arg);
+            break;
+        } else if arg == "-e" || arg == "--expr" {
             let expr = iter
                 .next()
                 .ok_or("`-e` requires an expression (try `ir run -e '1 + 1'`)")?;

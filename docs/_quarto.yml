@@ -10,8 +10,10 @@ project:
     - reference.qmd
 
 website:
-  title: "ir"
-  description: "Run standalone R scripts and render Quarto sources from embedded package metadata."
+  title: ir
+  description: >-
+    Run standalone R scripts and render Quarto sources from embedded package
+    metadata.
   navbar:
     left:
       - href: index.qmd
@@ -32,7 +34,12 @@ website:
 format:
   html:
     theme:
-      - cosmo
-      - brand
+      light:
+        - cosmo
+        - brand
+      dark:
+        - cosmo
+        - brand
+        - dark.scss
     css: styles.css
     toc: true

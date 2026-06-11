@@ -1,5 +1,5 @@
 ---
-title: "Reference"
+title: Reference
 execute:
   echo: false
   warning: false
@@ -7,22 +7,49 @@ execute:
   comment: ""
 ---
 
-This page renders the current CLI help by running the `ir` executable on `PATH` during the Quarto render.
+This page shows the current CLI help for `ir`.
 
 ```{r}
+ir_bin <- Sys.getenv("IR_BIN", unset = "")
+if (!nzchar(ir_bin)) {
+  status <- system2("cargo", c("build", "--manifest-path", "../Cargo.toml"))
+  if (!identical(status, 0L)) {
+    stop("`cargo build` failed with status ", status, call. = FALSE)
+  }
+  ir_bin <- file.path("..", "target", "debug", "ir")
+}
+
 cli_help <- function(...) {
   args <- c(..., "--help")
-  output <- system2("ir", args, stdout = TRUE, stderr = TRUE)
+
+  output <- system2(
+    ir_bin,
+    args,
+    stdout = TRUE,
+    stderr = TRUE,
+    env = c("NO_COLOR=", "CLICOLOR_FORCE=1")
+  )
   status <- attr(output, "status")
 
   if (!is.null(status)) {
     stop(
-      "`ir ", paste(args, collapse = " "), "` failed with status ", status,
+      "`",
+      ir_bin,
+      " ",
+      paste(args, collapse = " "),
+      "` failed with status ",
+      status,
       call. = FALSE
     )
   }
 
-  cat(output, sep = "\n")
+  output <- htmltools::htmlEscape(output)
+  output <- fansi::sgr_to_html(output, term.cap = "256")
+  knitr::asis_output(paste0(
+    "<pre class=\"ir-cli-help\"><code>",
+    paste(output, collapse = "\n"),
+    "</code></pre>\n"
+  ))
 }
 ```
 

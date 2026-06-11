@@ -2,9 +2,8 @@
 
 `ir` runs self-describing R scripts and renders Quarto sources.
 
-Put the packages and R version next to the code, then run the file. `ir`
-resolves the requirements, prepares a cached package library, and starts R with
-that library ready to use.
+Put the packages and R version next to the code, then run the file.
+`ir` resolves the requirements, prepares a cached package library, and starts R with that library ready to use.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -30,20 +29,13 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 
 ## Why use it?
 
-- **The file explains itself.** Package requirements live in the script or document, not
-  in a separate setup note.
-- **Fast by design.** `ir` keeps package setup direct and reuses cached
-  resolutions and libraries when the same requirements are seen again.
-- **Reproducibility is explicit.** Use `r-version` to select an installed R and
-  `exclude-newer` to resolve packages as of a specific date.
-- **It works with normal R habits.** Forward `Rscript` options, render Quarto
-  documents, evaluate inline expressions, or use `--with` for one-off packages.
-- **Package tools are easy to try.** Run package executables with `rx`, or
-  install persistent launchers from `exec/` without setting up a project by hand.
+- **The file explains itself.** Package requirements live in the script or document, not in a separate setup note.
+- **Fast by design.** `ir` keeps package setup direct and reuses cached resolutions and libraries when the same requirements are seen again.
+- **Reproducibility is explicit.** Use `r-version` to select an installed R and `exclude-newer` to resolve packages as of a specific date.
+- **It works with normal R habits.** Forward `Rscript` options, render Quarto documents, evaluate inline expressions, or use `--with` for one-off packages.
+- **Package tools are easy to try.** Run package executables with `rx`, or install persistent launchers without setting up a project by hand.
 
-`ir` is designed to be small, fast, and predictable: resolve once, reuse cached
-libraries aggressively, and avoid making you manage a project directory for a
-one-file workflow.
+`ir` is designed to be small, fast, and predictable: resolve once, reuse cached libraries aggressively, and avoid making you manage a project directory for a one-file workflow.
 
 ## Common commands
 
@@ -73,9 +65,9 @@ Install on Windows PowerShell:
 > irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
 ```
 
-The installers download the latest release and install `ir` and `rx` into
-`~/.local/bin` on Unix or `$HOME\bin` on Windows. They tell you if that
-directory is not on `PATH`. Set `IR_INSTALL_DIR` to choose another directory.
+The installers download the latest release and install `ir` and `rx` into `~/.local/bin` on Unix or `$HOME\bin` on Windows.
+They tell you if that directory is not on `PATH`.
+Set `IR_INSTALL_DIR` to choose another directory.
 
 You can also build from source with Rust:
 
@@ -91,8 +83,7 @@ This builds `target/release/ir` and `target/release/rx`.
 - `rig` on `PATH` when using `r-version`.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 
-On first use, `ir` prepares its resolver tooling in its cache, so you do not
-need to pre-install pak or renv.
+On first use, `ir` prepares its resolver tooling in its cache, so you do not need to pre-install pak or renv.
 
 ## Learn more
 
@@ -102,5 +93,7 @@ For command details, configuration, and edge cases, see:
 - [Quarto rendering](https://t-kalinowski.github.io/ir/quarto.html)
 - [Package tools](https://t-kalinowski.github.io/ir/tools.html)
 - [Cache management](https://t-kalinowski.github.io/ir/cache.html)
-- [Install and configuration](https://t-kalinowski.github.io/ir/config.html)
+- [Install and configuration](
+    https://t-kalinowski.github.io/ir/config.html
+  )
 - [CLI reference](https://t-kalinowski.github.io/ir/reference.html)
