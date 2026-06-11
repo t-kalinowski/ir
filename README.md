@@ -39,7 +39,7 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 - **It works with normal R habits.** Forward `Rscript` options, render Quarto
   documents, evaluate inline expressions, or use `--with` for one-off packages.
 - **Package tools are easy to try.** Run package executables with `rx`, or
-  install persistent launchers from `exec/` without setting up a project by hand.
+  install persistent launchers without setting up a project by hand.
 
 `ir` is designed to be small, fast, and predictable: resolve once, reuse cached
 libraries aggressively, and avoid making you manage a project directory for a

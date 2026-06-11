@@ -3,9 +3,17 @@ Run package executables
 Usage: ir tool [COMMAND]
 
 Commands:
-  run      Resolve a package and run an executable from its exec directory
+  run      Run an executable provided by an R package
   install  Install package executable launchers
   help     Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help  Print help
+
+Tools:
+  A tool is an executable provided by an R package with an Rscript or Rapp
+  shebang.
+  `ir tool run` resolves the package plus any --with dependencies into an
+  isolated library, then runs the selected executable. The user R library is not
+  used.
+  `ir tool install` writes launchers that recreate the resolved tool runtime.
