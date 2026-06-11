@@ -13,6 +13,10 @@ Options:
   -h, --help              Print help
 
 Examples:
+  ir run script.R
+  ir run script.R input.csv --verbose
+  ir run -e 'print("hello")'
+
   ir run --with cli --vanilla script.R --input data.csv
       # --with is for ir; --vanilla is for Rscript.
       # --input data.csv is passed to script.R.

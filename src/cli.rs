@@ -21,7 +21,8 @@ pub(crate) fn root() -> ClapCommand {
         .after_help(examples_help(concat!(
             "  ir run script.R\n",
             "  ir render report.qmd\n",
-            "  ir tool run btw --help",
+            "  ir tool run btw\n",
+            "  ir cache dir",
         )))
         .subcommand(run_command())
         .subcommand(render_command())
@@ -49,10 +50,15 @@ fn help_header_style() -> clap::builder::styling::Style {
 }
 
 fn examples_help(body: &'static str) -> StyledStr {
+    section_help("Examples", body)
+}
+
+fn section_help(title: &'static str, body: &'static str) -> StyledStr {
     let style = help_header_style();
     StyledStr::from(format!(
-        "{}Examples:{}\n{}",
+        "{}{}:{}\n{}",
         style.render(),
+        title,
         style.render_reset(),
         body
     ))
@@ -63,6 +69,9 @@ fn run_command() -> ClapCommand {
         .about("Run a script or inline R expression")
         .override_usage("ir run [OPTIONS] [ARGS]...")
         .after_help(examples_help(concat!(
+            "  ir run script.R\n",
+            "  ir run script.R input.csv --verbose\n",
+            "  ir run -e 'print(\"hello\")'\n\n",
             "  ir run --with cli --vanilla script.R --input data.csv\n",
             "      # --with is for ir; --vanilla is for Rscript.\n",
             "      # --input data.csv is passed to script.R.\n\n",
@@ -108,6 +117,8 @@ fn render_command() -> ClapCommand {
     ClapCommand::new("render")
         .about("Render a Quarto document or script")
         .after_help(examples_help(concat!(
+            "  ir render report.qmd\n",
+            "  ir render report.qmd --to html\n\n",
             "  ir render --with ggplot2 report.qmd --to html\n",
             "      # --with is for ir; --to html is passed to quarto render.\n\n",
             "  ir render --vanilla slides.qmd --output slides.html\n",
@@ -161,6 +172,16 @@ fn tool_command() -> ClapCommand {
     ClapCommand::new("tool")
         .about("Run package executables")
         .arg_required_else_help(true)
+        .after_help(section_help(
+            "Tools",
+            concat!(
+                "  A tool is an executable provided by an R package and launched through Rscript.\n",
+                "  `ir tool run` resolves the package plus any --with dependencies into an\n",
+                "  isolated library, then runs the selected executable. The user R library is not\n",
+                "  used.\n",
+                "  `ir tool install` writes launchers that recreate the resolved tool runtime.",
+            ),
+        ))
         .subcommand(tool_run_command())
         .subcommand(tool_rx_command())
         .subcommand(tool_install_command())
@@ -169,8 +190,9 @@ fn tool_command() -> ClapCommand {
 fn tool_run_command() -> ClapCommand {
     tool_run_args(
         ClapCommand::new("run")
-            .about("Resolve a package and run an executable from its exec directory")
+            .about("Run an executable provided by an R package")
             .after_help(examples_help(concat!(
+                "  ir tool run btw\n",
                 "  ir tool run btw --help\n",
                 "      # btw is shorthand for --from btw btw.\n\n",
                 "  ir tool run --from btw --vanilla btw --input data.csv\n",
@@ -199,7 +221,7 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
                 .long("from")
                 .value_name("PKG_REF")
                 .num_args(1)
-                .help("Resolve a package ref and run <command> from its exec/ directory"),
+                .help("Resolve a package ref and run <command> from that package"),
         )
         .arg(
             Arg::new("with")
@@ -233,6 +255,7 @@ fn tool_install_command() -> ClapCommand {
         .about("Install package executable launchers")
         .after_help(examples_help(concat!(
             "  ir tool install btw\n",
+            "  ir tool install --bin-dir ~/.local/bin btw\n",
             "  ir tool install --with cli --bin-dir ~/.local/bin btw",
         )))
         .arg(
@@ -267,7 +290,7 @@ fn tool_install_command() -> ClapCommand {
             Arg::new("package-ref")
                 .value_name("PKG_REF")
                 .required(true)
-                .help("Package ref that resolves to the package exposing exec/ launchers"),
+                .help("Package ref that provides executables to install"),
         )
 }
 

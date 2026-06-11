@@ -14,6 +14,9 @@ Options:
   -h, --help              Print help
 
 Examples:
+  ir render report.qmd
+  ir render report.qmd --to html
+
   ir render --with ggplot2 report.qmd --to html
       # --with is for ir; --to html is passed to quarto render.
 
