@@ -273,7 +273,8 @@ fn ci_dependencies_are_available() {
         "pkgs <- c(",
         "'pak', 'renv', 'secretbase', 'cli', 'glue', 'jsonlite', ",
         "'dplyr', 'tidyr', 'reticulate', 'knitr', 'rmarkdown', 'quarto', ",
-        "'btw', 'Rapp', 'docopt', 'pkgsearch', 'prettyunits'); ",
+        "'btw', 'Rapp', 'docopt', 'pkgsearch', 'prettyunits', 'fansi', ",
+        "'htmltools'); ",
         "missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; ",
         "if (length(missing)) { ",
         "stop('missing R packages: ', paste(missing, collapse = ', '), call. = FALSE) ",
@@ -415,6 +416,152 @@ fn help_section_headings_are_colored() {
         stdout.contains("\u{1b}[1m\u{1b}[94mTools:\u{1b}[0m"),
         "{stdout}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn docs_website_has_dark_mode_and_colored_reference_output() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = e2e_lock();
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let docs_dir = manifest_dir.join("docs");
+    let output_dir = unique_dir("ir-docs-reference-output");
+    let bin_dir = unique_dir("ir-docs-reference-bin");
+    let fake_cargo = bin_dir.join("cargo");
+    let stale_ir = bin_dir.join("ir");
+    let cargo_marker = output_dir.join("cargo-called");
+
+    fs::write(
+        &fake_cargo,
+        concat!(
+            "#!/bin/sh\n",
+            "touch \"$IR_CARGO_MARKER\"\n",
+            "exec \"$REAL_CARGO\" \"$@\"\n",
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&fake_cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_cargo, perms).unwrap();
+
+    fs::write(
+        &stale_ir,
+        concat!(
+            "#!/bin/sh\n",
+            "echo \"error: unrecognized subcommand 'render'\" >&2\n",
+            "exit 2\n",
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&stale_ir).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&stale_ir, perms).unwrap();
+
+    let config = fs::read_to_string(docs_dir.join("_quarto.yml")).unwrap();
+    assert!(config.contains("light:"), "{config}");
+    assert!(config.contains("dark:"), "{config}");
+    assert!(config.contains("dark:\n        - cosmo"), "{config}");
+    assert!(config.contains("- dark.scss"), "{config}");
+    assert!(!config.contains("- darkly"), "{config}");
+
+    let styles = fs::read_to_string(docs_dir.join("styles.css")).unwrap();
+    assert!(styles.contains("quarto-dark"), "{styles}");
+    assert!(
+        styles.contains("pre.ir-cli-help span[style*=\"#5555FF\"]"),
+        "{styles}"
+    );
+    assert!(
+        styles.contains("pre.ir-cli-help span[style*=\"#00BBBB\"]"),
+        "{styles}"
+    );
+    assert!(
+        styles.contains("pre.ir-cli-help span[style*=\"#555555\"]"),
+        "{styles}"
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new("quarto")
+        .current_dir(&docs_dir)
+        .env("PATH", path)
+        .env_remove("IR_BIN")
+        .env(
+            "REAL_CARGO",
+            std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+        )
+        .env("IR_CARGO_MARKER", &cargo_marker)
+        .args(["render", "reference.qmd", "--to", "html"])
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert!(
+        cargo_marker.exists(),
+        "reference render should build the current ir binary"
+    );
+
+    let html = fs::read_to_string(output_dir.join("reference.html"))
+        .unwrap_or_else(|e| panic!("failed to read rendered reference page: {e}"));
+    assert!(html.contains("data-mode=\"dark\""), "{html}");
+    assert!(
+        html.contains("Render a Quarto document or script"),
+        "{html}"
+    );
+    assert!(html.contains("Options:"), "{html}");
+    assert!(html.contains("color: #5555FF"), "{html}");
+    assert!(html.contains("color: #00BBBB"), "{html}");
+    assert!(html.contains("color: #555555"), "{html}");
+    assert!(html.contains("font-weight: bold"), "{html}");
+    assert!(!html.contains("\u{1b}["), "{html}");
+
+    let _ = fs::remove_dir_all(&output_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[test]
+fn docs_run_page_dark_mode_styles_console_blocks() {
+    let _guard = e2e_lock();
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let docs_dir = manifest_dir.join("docs");
+    let output_dir = unique_dir("ir-docs-run-output");
+
+    let output = Command::new("quarto")
+        .current_dir(&docs_dir)
+        .args(["render", "run.qmd", "--to", "html"])
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert_success(&output);
+
+    let html = fs::read_to_string(output_dir.join("run.html"))
+        .unwrap_or_else(|e| panic!("failed to read rendered run page: {e}"));
+    assert!(html.contains("$ ir run script.R"), "{html}");
+
+    assert!(html.contains("data-mode=\"dark\""), "{html}");
+
+    let styles = fs::read_to_string(output_dir.join("styles.css"))
+        .unwrap_or_else(|e| panic!("failed to read rendered styles.css: {e}"));
+    assert!(styles.contains("body.quarto-dark .navbar"), "{styles}");
+    assert!(styles.contains("pre.console"), "{styles}");
+    assert!(
+        styles.contains("background-color: var(--ir-panel)"),
+        "{styles}"
+    );
+    assert!(
+        styles.contains("background-color: var(--ir-help-panel)"),
+        "{styles}"
+    );
+
+    let _ = fs::remove_dir_all(&output_dir);
 }
 
 #[test]

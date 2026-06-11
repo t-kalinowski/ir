@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::builder::StyledStr;
-use clap::{Arg, ArgAction, Command as ClapCommand};
+use clap::{Arg, ArgAction, ColorChoice, Command as ClapCommand};
 
 use crate::quarto::RenderSource;
 use crate::runtime::nonempty_env;
@@ -20,6 +20,7 @@ pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Run self-describing R scripts")
+        .color(ColorChoice::Auto)
         .styles(HELP_STYLES)
         .arg_required_else_help(true)
         .after_help(examples_help(concat!(
