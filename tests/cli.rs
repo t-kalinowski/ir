@@ -351,6 +351,7 @@ fn cli_help_honors_clicolor_force() {
     let out = ir()
         .env_remove("NO_COLOR")
         .env_remove("CLICOLOR")
+        .env_remove("FORCE_COLOR")
         .env("CLICOLOR_FORCE", "1")
         .arg("--help")
         .output()
@@ -368,26 +369,19 @@ fn cli_help_honors_clicolor_force() {
 }
 
 #[test]
-fn examples_help_headings_are_colored() {
-    let colored_examples = "\u{1b}[1m\u{1b}[32mExamples:\u{1b}[0m";
-    for args in [
-        &["--help"][..],
-        &["run", "--help"],
-        &["render", "--help"],
-        &["tool", "run", "--help"],
-        &["tool", "install", "--help"],
-    ] {
-        let out = ir()
-            .env_remove("NO_COLOR")
-            .env_remove("CLICOLOR")
-            .env("CLICOLOR_FORCE", "1")
-            .args(args)
-            .output()
-            .unwrap();
-        assert_success(&out);
-        let stdout = stdout(&out);
-        assert!(stdout.contains(colored_examples), "{args:?}:\n{stdout}");
-    }
+fn cli_help_is_plain_when_output_is_captured() {
+    let out = ir()
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("FORCE_COLOR")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let stdout = stdout(&out);
+    assert!(!stdout.contains("\u{1b}["), "{stdout}");
 }
 
 #[test]
