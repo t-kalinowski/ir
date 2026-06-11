@@ -39,10 +39,14 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-0a6b7249c26820e032cb0bd839ff02b1.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-158031087360bce0ff56dc785ce39e06.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-9aa68caa1778ee5759e263c3b2f4abf3.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -75,7 +79,169 @@ ul.task-list li input[type="checkbox"] {
 <link rel="stylesheet" href="styles.css">
 </head>
 
-<body class="nav-fixed quarto-light">
+<body class="nav-fixed quarto-light"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = false;
+    const darkModeDefault = authorPrefersDark;
+      document.querySelector('link#quarto-text-highlighting-styles.quarto-color-scheme-extra').rel = 'disabled-stylesheet';
+      document.querySelector('link#quarto-bootstrap.quarto-color-scheme-extra').rel = 'disabled-stylesheet';
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top">
@@ -113,12 +279,17 @@ ul.task-list li input[type="checkbox"] {
 <span class="menu-text">Cache</span></a>
   </li>  
   <li class="nav-item">
+    <a class="nav-link" href="./config.html"> 
+<span class="menu-text">Config</span></a>
+  </li>  
+  <li class="nav-item">
     <a class="nav-link active" href="./reference.html" aria-current="page"> 
 <span class="menu-text">Reference</span></a>
   </li>  
 </ul>
           </div> <!-- /navcollapse -->
             <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
 </div>
       </div> <!-- /container-fluid -->
     </nav>
@@ -134,6 +305,7 @@ ul.task-list li input[type="checkbox"] {
   <ul>
   <li><a href="#ir" id="toc-ir" class="nav-link active" data-scroll-target="#ir"><code>ir</code></a></li>
   <li><a href="#ir-run" id="toc-ir-run" class="nav-link" data-scroll-target="#ir-run"><code>ir run</code></a></li>
+  <li><a href="#ir-render" id="toc-ir-render" class="nav-link" data-scroll-target="#ir-render"><code>ir render</code></a></li>
   <li><a href="#ir-tool" id="toc-ir-tool" class="nav-link" data-scroll-target="#ir-tool"><code>ir tool</code></a></li>
   <li><a href="#ir-tool-run" id="toc-ir-tool-run" class="nav-link" data-scroll-target="#ir-tool-run"><code>ir tool run</code></a></li>
   <li><a href="#ir-tool-install" id="toc-ir-tool-install" class="nav-link" data-scroll-target="#ir-tool-install"><code>ir tool install</code></a></li>
@@ -145,6 +317,7 @@ ul.task-list li input[type="checkbox"] {
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
+
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
@@ -165,146 +338,228 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p>This page renders the current CLI help by running the <code>ir</code> executable on <code>PATH</code> during the Quarto render.</p>
+<p>This page shows the current CLI help for <code>ir</code>.</p>
 <section id="ir" class="level2">
 <h2 class="anchored" data-anchor-id="ir"><code>ir</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Run self-describing R scripts
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Run self-describing R scripts
 
-Usage: ir [COMMAND]
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir</span> <span style="color: #555555;">[COMMAND]</span>
 
-Commands:
-  run    Run a script or inline R expression
-  tool   Run package executables
-  cache  Manage ir's cache
-  help   Print this message or the help of the given subcommand(s)
+<span style="color: #5555FF; font-weight: bold;">Commands:</span>
+  <span style="color: #00BBBB; font-weight: bold;">run</span>     Run a script or inline R expression
+  <span style="color: #00BBBB; font-weight: bold;">render</span>  Render a Quarto document or script
+  <span style="color: #00BBBB; font-weight: bold;">tool</span>    Run package executables
+  <span style="color: #00BBBB; font-weight: bold;">cache</span>   Manage ir's cache
+  <span style="color: #00BBBB; font-weight: bold;">help</span>    Print this message or the help of the given subcommand(s)
 
-Options:
-  -h, --help     Print help
-  -V, --version  Print version</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>     Print help
+  <span style="color: #00BBBB; font-weight: bold;">-V</span>, <span style="color: #00BBBB; font-weight: bold;">--version</span>  Print version
+
+<span style="color: #5555FF; font-weight: bold;">Examples:</span>
+  ir run script.R
+  ir render report.qmd
+  ir tool run btw
+  ir cache dir</code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-run" class="level2">
 <h2 class="anchored" data-anchor-id="ir-run"><code>ir run</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Run a script or inline R expression
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Run a script or inline R expression
 
-Usage: ir run [OPTIONS] [ARGS]...
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir run</span> <span style="color: #555555;">[OPTIONS]</span> <span style="color: #555555;">[ARGS]...</span>
 
-Arguments:
-  [ARGS]...  Rscript options, script path, and script arguments
+<span style="color: #5555FF; font-weight: bold;">Arguments:</span>
+  <span style="color: #555555;">[ARGS]...</span>  Rscript options, script path, and script arguments
 
-Options:
-  -e, --expr &lt;EXPR&gt;       Evaluate an inline R expression instead of a script file
-      --with &lt;PKG&gt;        Add a dependency for this run; may be repeated
-      --r-version &lt;SPEC&gt;  Select the R version for this run with rig
-      --isolated          Disable the user library for this run
-  -h, --help              Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+  <span style="color: #00BBBB; font-weight: bold;">-e</span>, <span style="color: #00BBBB; font-weight: bold;">--expr</span><span style="color: #555555;"> &lt;EXPR&gt;</span>       Evaluate an inline R expression instead of a script file
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for this run; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for this run with rig
+      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>          Disable the user library for this run
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+
+<span style="color: #5555FF; font-weight: bold;">Examples:</span>
+  ir run script.R
+  ir run script.R input.csv --verbose
+  ir run -e 'print("hello")'
+
+  ir run --with cli --vanilla script.R --input data.csv
+<span style="color: #555555;">      # --with is for ir; --vanilla is for Rscript.</span>
+<span style="color: #555555;">      # --input data.csv is passed to script.R.</span>
+
+  ir run --with cli -e 'print(commandArgs(TRUE))' --input data.csv
+<span style="color: #555555;">      # --input data.csv is passed to commandArgs(TRUE).</span></code></pre>
+
+</div>
+</div>
+</section>
+<section id="ir-render" class="level2">
+<h2 class="anchored" data-anchor-id="ir-render"><code>ir render</code></h2>
+<div class="cell">
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Render a Quarto document or script
+
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir render</span> <span style="color: #555555;">[OPTIONS]</span> <span style="color: #555555;">&lt;SOURCE&gt;</span> <span style="color: #555555;">[QUARTO_ARGS]...</span>
+
+<span style="color: #5555FF; font-weight: bold;">Arguments:</span>
+  <span style="color: #555555;">&lt;SOURCE&gt;</span>          Quarto document or script to render
+  <span style="color: #555555;">[QUARTO_ARGS]...</span>  Arguments passed to `quarto render`
+
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for this render; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for this render with rig
+      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>          Disable the user library for this render
+      <span style="color: #00BBBB; font-weight: bold;">--vanilla</span>           Run Quarto's knitr R with --vanilla
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+
+<span style="color: #5555FF; font-weight: bold;">Examples:</span>
+  ir render report.qmd
+  ir render report.qmd --to html
+
+  ir render --with ggplot2 report.qmd --to html
+<span style="color: #555555;">      # --with is for ir; --to html is passed to quarto render.</span>
+
+  ir render --vanilla slides.qmd --output slides.html
+<span style="color: #555555;">      # --vanilla runs knitr R with --vanilla.</span>
+<span style="color: #555555;">      # --output slides.html is passed to quarto render.</span></code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-tool" class="level2">
 <h2 class="anchored" data-anchor-id="ir-tool"><code>ir tool</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Run package executables
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Run package executables
 
-Usage: ir tool [COMMAND]
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir tool</span> <span style="color: #555555;">[COMMAND]</span>
 
-Commands:
-  run      Resolve a package and run an executable from its exec directory
-  install  Install package executable launchers
-  help     Print this message or the help of the given subcommand(s)
+<span style="color: #5555FF; font-weight: bold;">Commands:</span>
+  <span style="color: #00BBBB; font-weight: bold;">run</span>      Run an executable provided by an R package
+  <span style="color: #00BBBB; font-weight: bold;">install</span>  Install package executable launchers
+  <span style="color: #00BBBB; font-weight: bold;">help</span>     Print this message or the help of the given subcommand(s)
 
-Options:
-  -h, --help  Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>  Print help
+
+<span style="color: #5555FF; font-weight: bold;">Tools:</span>
+  A tool is an executable provided by an R package with an Rscript or Rapp
+  shebang.
+  `ir tool run` resolves the package plus any --with dependencies into an
+  isolated library, then runs the selected executable. The user R library is not
+  used.
+  `ir tool install` writes launchers that recreate the resolved tool runtime.</code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-tool-run" class="level2">
 <h2 class="anchored" data-anchor-id="ir-tool-run"><code>ir tool run</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Resolve a package and run an executable from its exec directory
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Run an executable provided by an R package
 
-Usage: ir tool run [OPTIONS] [ARGS]...
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir tool run</span> <span style="color: #555555;">[OPTIONS]</span> <span style="color: #555555;">[ARGS]...</span>
 
-Arguments:
-  [ARGS]...  Rscript options, package ref or command, and tool arguments
+<span style="color: #5555FF; font-weight: bold;">Arguments:</span>
+  <span style="color: #555555;">[ARGS]...</span>  Rscript options, package ref or command, and tool arguments
 
-Options:
-      --from &lt;PKG_REF&gt;    Resolve a package ref and run &lt;command&gt; from its exec/ directory
-      --with &lt;PKG&gt;        Add a dependency for this tool run; may be repeated
-      --r-version &lt;SPEC&gt;  Select the R version for this tool run with rig
-  -h, --help              Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+      <span style="color: #00BBBB; font-weight: bold;">--from</span><span style="color: #555555;"> &lt;PKG_REF&gt;</span>    Resolve a package ref and run &lt;command&gt; from that package
+  <span style="color: #00BBBB; font-weight: bold;">-w</span>, <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for this tool run; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for this tool run with rig
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+
+<span style="color: #5555FF; font-weight: bold;">Examples:</span>
+  ir tool run btw
+  ir tool run btw --help
+<span style="color: #555555;">      # btw is shorthand for --from btw btw.</span>
+
+  ir tool run --from btw --vanilla btw --input data.csv
+<span style="color: #555555;">      # --from is for ir; --vanilla is for Rscript.</span>
+<span style="color: #555555;">      # --input data.csv is passed to the btw executable.</span></code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-tool-install" class="level2">
 <h2 class="anchored" data-anchor-id="ir-tool-install"><code>ir tool install</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Install package executable launchers
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Install package executable launchers
 
-Usage: ir tool install [OPTIONS] &lt;PKG_REF&gt;
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir tool install</span> <span style="color: #555555;">[OPTIONS]</span> <span style="color: #555555;">&lt;PKG_REF&gt;</span>
 
-Arguments:
-  &lt;PKG_REF&gt;  Package ref that resolves to the package exposing exec/ launchers
+<span style="color: #5555FF; font-weight: bold;">Arguments:</span>
+  <span style="color: #555555;">&lt;PKG_REF&gt;</span>  Package ref that provides executables to install
 
-Options:
-      --with &lt;PKG&gt;        Add a dependency for installed launchers; may be repeated
-      --r-version &lt;SPEC&gt;  Select the R version for installed launchers with rig
-      --bin-dir &lt;DIR&gt;     Directory where launchers are written
-      --force             Overwrite an existing launcher path
-  -h, --help              Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for installed launchers; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for installed launchers with rig
+      <span style="color: #00BBBB; font-weight: bold;">--bin-dir</span><span style="color: #555555;"> &lt;DIR&gt;</span>     Directory where launchers are written
+      <span style="color: #00BBBB; font-weight: bold;">--force</span>             Overwrite an existing launcher path
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+
+<span style="color: #5555FF; font-weight: bold;">Examples:</span>
+  ir tool install btw
+  ir tool install --bin-dir ~/.local/bin btw
+  ir tool install --with cli --bin-dir ~/.local/bin btw</code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-cache" class="level2">
 <h2 class="anchored" data-anchor-id="ir-cache"><code>ir cache</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Manage ir's cache
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Manage ir's cache
 
-Usage: ir cache [COMMAND]
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir cache</span> <span style="color: #555555;">[COMMAND]</span>
 
-Commands:
-  clean  Clear the cache, removing all entries
-  dir    Show the cache directory
-  help   Print this message or the help of the given subcommand(s)
+<span style="color: #5555FF; font-weight: bold;">Commands:</span>
+  <span style="color: #00BBBB; font-weight: bold;">clean</span>  Clear the cache, removing all entries
+  <span style="color: #00BBBB; font-weight: bold;">dir</span>    Show the cache directory
+  <span style="color: #00BBBB; font-weight: bold;">help</span>   Print this message or the help of the given subcommand(s)
 
-Options:
-  -h, --help  Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>  Print help</code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-cache-dir" class="level2">
 <h2 class="anchored" data-anchor-id="ir-cache-dir"><code>ir cache dir</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Show the cache directory
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Show the cache directory
 
-Usage: ir cache dir
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir cache dir</span>
 
-Options:
-  -h, --help  Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>  Print help</code></pre>
+
 </div>
 </div>
 </section>
 <section id="ir-cache-clean" class="level2">
 <h2 class="anchored" data-anchor-id="ir-cache-clean"><code>ir cache clean</code></h2>
 <div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>Clear the cache, removing all entries
+<div class="cell-output-display">
+<pre class="ir-cli-help"><code>Clear the cache, removing all entries
 
-Usage: ir cache clean [OPTIONS]
+<span style="color: #5555FF; font-weight: bold;">Usage:</span> <span style="color: #00BBBB; font-weight: bold;">ir cache clean</span> <span style="color: #555555;">[OPTIONS]</span>
 
-Options:
-      --force  Force removal of the cache
-  -h, --help   Print help</code></pre>
+<span style="color: #5555FF; font-weight: bold;">Options:</span>
+      <span style="color: #00BBBB; font-weight: bold;">--force</span>  Accepted for compatibility; same as `ir cache clean`
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>   Print help</code></pre>
+
 </div>
 </div>
 
@@ -314,6 +569,19 @@ Options:
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
   window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
     const icon = "";
     const anchorJS = new window.AnchorJS();
     anchorJS.options = {
@@ -385,7 +653,7 @@ Options:
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/t-kalinowski\.github\.io\/ir\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }

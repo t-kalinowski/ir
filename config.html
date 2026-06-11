@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Quarto Rendering – ir</title>
+<title>Install and Configuration – ir</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -22,41 +22,6 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
-}
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -302,7 +267,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Scripts</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link active" href="./quarto.html" aria-current="page"> 
+    <a class="nav-link" href="./quarto.html"> 
 <span class="menu-text">Quarto</span></a>
   </li>  
   <li class="nav-item">
@@ -314,7 +279,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Cache</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./config.html"> 
+    <a class="nav-link active" href="./config.html" aria-current="page"> 
 <span class="menu-text">Config</span></a>
   </li>  
   <li class="nav-item">
@@ -338,7 +303,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#rmarkdown-injection" id="toc-rmarkdown-injection" class="nav-link active" data-scroll-target="#rmarkdown-injection">rmarkdown injection</a></li>
+  <li><a href="#requirements" id="toc-requirements" class="nav-link active" data-scroll-target="#requirements">Requirements</a></li>
+  <li><a href="#install" id="toc-install" class="nav-link" data-scroll-target="#install">Install</a></li>
+  <li><a href="#environment" id="toc-environment" class="nav-link" data-scroll-target="#environment">Environment</a></li>
   </ul>
 </nav>
     </div>
@@ -348,7 +315,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Quarto Rendering</h1>
+<h1 class="title">Install and Configuration</h1>
 </div>
 
 
@@ -365,38 +332,94 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><code>ir render</code> renders Quarto documents and Quarto-formatted R scripts with <code>quarto render</code>. Packages live under an <code>ir:</code> key in the source YAML.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">title</span><span class="kw">:</span><span class="at"> My report</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">ir</span><span class="kw">:</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">packages</span><span class="kw">:</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> dplyr&gt;=1.0</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> gt@1.0</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">r-version</span><span class="kw">:</span><span class="at"> </span><span class="st">"&gt;= 4.0"</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">isolated</span><span class="kw">:</span><span class="at"> </span><span class="ch">true</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">exclude-newer</span><span class="kw">:</span><span class="at"> 2024-01-15</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Render the document with the <code>render</code> subcommand:</p>
-<pre class="console"><code>$ ir render report.qmd
-$ ir render report.qmd --to pdf
-$ ir render --vanilla report.qmd</code></pre>
-<p>Quarto R scripts use Quarto’s knitr script header syntax:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#' ---</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">#' title: "My report"</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">#' ir:</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">#'   packages:</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="co">#'     - dplyr&gt;=1.0</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">#' ---</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<pre class="console"><code>$ ir render report.R</code></pre>
-<p>The <code>ir.packages</code> value follows the same rules as script <code>packages</code>: use a YAML sequence where each entry is one package ref, or omit it, set it to <code>[]</code>, or set it to <code>null</code> for no dependencies.</p>
-<p><code>ir</code> resolves the document packages into the same cached library model used for scripts, then launches <code>quarto render</code>. Arguments after the source path are passed to <code>quarto render</code>.</p>
-<p>Use <code>--vanilla</code> before the source path to run Quarto’s knitr R with <code>--vanilla</code>.</p>
-<p>When an R version is selected by frontmatter or <code>--r-version</code>, <code>ir</code> pins Quarto’s knitr R to that selection.</p>
-<p>Set <code>IR_QUARTO</code> to use a specific Quarto executable.</p>
-<section id="rmarkdown-injection" class="level2">
-<h2 class="anchored" data-anchor-id="rmarkdown-injection">rmarkdown injection</h2>
-<p>A Quarto render needs the <code>rmarkdown</code> package for the knitr engine. <code>ir</code> appends <code>rmarkdown</code> to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of <code>exclude-newer</code> when set).</p>
-<p>Declare <code>rmarkdown</code> yourself under <code>ir.packages</code> - directly (e.g.&nbsp;<code>rmarkdown@2.29</code>) or transitively, such as through <code>quarto</code> - to override the injected seed.</p>
+<section id="requirements" class="level2">
+<h2 class="anchored" data-anchor-id="requirements">Requirements</h2>
+<ul>
+<li><code>R</code> / <code>Rscript</code> on <code>PATH</code>, a rig default R install, or <code>IR_RSCRIPT</code> when <code>r-version</code> is not set.</li>
+<li><code>rig</code> on <code>PATH</code> when <code>r-version</code> is set.</li>
+<li><code>quarto</code> on <code>PATH</code>, or <code>IR_QUARTO</code>, when rendering <code>.qmd</code>, <code>.Rmd</code>, or R script files.</li>
+<li><code>ir</code> installs its own resolver tooling (<code>pak</code>, <code>renv</code>, <code>secretbase</code>) on first use into a dedicated library under the cache directory, so you do not need to pre-install them. Copies already on the R library path are reused instead of installing a private one.</li>
+<li>A Rust toolchain only when building from source.</li>
+</ul>
+</section>
+<section id="install" class="level2">
+<h2 class="anchored" data-anchor-id="install">Install</h2>
+<p>Install a pre-built binary on Linux or macOS:</p>
+<pre class="console"><code>$ curl -fsSL https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.sh | sh</code></pre>
+<p>Install on Windows PowerShell:</p>
+<pre class="console"><code>&gt; irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex</code></pre>
+<p>The installers download the latest release archive and install <code>ir</code> and <code>rx</code> into <code>~/.local/bin</code> on Unix or <code>$HOME\bin</code> on Windows. Set <code>IR_INSTALL_DIR</code> to choose another directory.</p>
+</section>
+<section id="environment" class="level2">
+<h2 class="anchored" data-anchor-id="environment">Environment</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Variable</th>
+<th>Used by</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>IR_CACHE_DIR</code></td>
+<td>all commands</td>
+<td>Rust-owned per-user cache root</td>
+</tr>
+<tr class="even">
+<td><code>IR_LATEST_RESOLUTION_MAX_AGE_SECONDS</code></td>
+<td>latest resolution cache</td>
+<td><code>86400</code> seconds</td>
+</tr>
+<tr class="odd">
+<td><code>IR_RSCRIPT</code></td>
+<td>runs without <code>r-version</code></td>
+<td>rig’s default R install, then <code>Rscript</code> on <code>PATH</code></td>
+</tr>
+<tr class="even">
+<td><code>IR_QUARTO</code></td>
+<td>Quarto rendering</td>
+<td><code>quarto</code> on <code>PATH</code></td>
+</tr>
+<tr class="odd">
+<td><code>IR_TOOL_BIN_DIR</code></td>
+<td><code>ir tool install</code></td>
+<td>first launcher-directory override</td>
+</tr>
+<tr class="even">
+<td><code>RAPP_BIN_DIR</code></td>
+<td><code>ir tool install</code></td>
+<td>second launcher-directory override</td>
+</tr>
+<tr class="odd">
+<td><code>XDG_BIN_HOME</code></td>
+<td><code>ir tool install</code> on Unix</td>
+<td>third launcher-directory override</td>
+</tr>
+<tr class="even">
+<td><code>XDG_DATA_HOME</code></td>
+<td><code>ir tool install</code> on Unix</td>
+<td><code>&lt;parent of XDG_DATA_HOME&gt;/bin</code></td>
+</tr>
+<tr class="odd">
+<td><code>LOCALAPPDATA</code></td>
+<td><code>ir tool install</code> on Windows</td>
+<td><code>%LOCALAPPDATA%\Programs\R\ir\bin</code></td>
+</tr>
+<tr class="even">
+<td><code>USERPROFILE</code></td>
+<td><code>ir tool install</code> on Windows</td>
+<td>fallback under <code>%USERPROFILE%\AppData</code></td>
+</tr>
+</tbody>
+</table>
+<p>The default cache directory is computed before launching R. <code>IR_CACHE_DIR</code> is authoritative; otherwise <code>ir</code> uses the process <code>R_USER_CACHE_DIR</code>, process <code>XDG_CACHE_HOME</code>, or a platform default and appends <code>R/ir</code>. The selected path is passed to the resolver R session, so R startup files do not redirect the <code>ir</code> cache.</p>
+<p><code>IR_RSCRIPT</code> is ignored when <code>r-version</code> is set, because version selection is resolved through <code>rig</code>. <code>--bin-dir &lt;dir&gt;</code> overrides the launcher-directory environment variables for <code>ir tool install</code>.</p>
 
 
 </section>
