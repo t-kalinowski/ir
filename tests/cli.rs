@@ -348,22 +348,39 @@ fn rx_help_outputs_match_snapshots() {
 }
 
 #[test]
-fn cli_help_honors_clicolor_force() {
+fn cli_help_honors_clap_color_env() {
     let out = ir()
+        .env_remove("NO_COLOR")
         .env("CLICOLOR_FORCE", "1")
         .arg("--help")
         .output()
         .unwrap();
     assert_success(&out);
 
+    let colored_stdout = stdout(&out);
+    assert!(colored_stdout.contains("\u{1b}["), "{colored_stdout}");
+    assert!(
+        colored_stdout.contains("\u{1b}[94mUsage:"),
+        "{colored_stdout}"
+    );
+    assert!(colored_stdout.contains("\u{1b}[36mir"), "{colored_stdout}");
+    assert!(
+        colored_stdout.contains("\u{1b}[90m[COMMAND]"),
+        "{colored_stdout}"
+    );
+    assert!(!colored_stdout.contains("\u{1b}[32m"), "{colored_stdout}");
+    assert!(!colored_stdout.contains("\u{1b}[33m"), "{colored_stdout}");
+    assert!(!colored_stdout.contains("\u{1b}[4m"), "{colored_stdout}");
+
+    let out = ir()
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_success(&out);
     let stdout = stdout(&out);
-    assert!(stdout.contains("\u{1b}["), "{stdout}");
-    assert!(stdout.contains("\u{1b}[94mUsage:"), "{stdout}");
-    assert!(stdout.contains("\u{1b}[36mir"), "{stdout}");
-    assert!(stdout.contains("\u{1b}[90m[COMMAND]"), "{stdout}");
-    assert!(!stdout.contains("\u{1b}[32m"), "{stdout}");
-    assert!(!stdout.contains("\u{1b}[33m"), "{stdout}");
-    assert!(!stdout.contains("\u{1b}[4m"), "{stdout}");
+    assert!(!stdout.contains("\u{1b}["), "{stdout}");
 }
 
 #[test]
@@ -376,7 +393,12 @@ fn examples_help_headings_are_colored() {
         &["tool", "run", "--help"],
         &["tool", "install", "--help"],
     ] {
-        let out = ir().env("CLICOLOR_FORCE", "1").args(args).output().unwrap();
+        let out = ir()
+            .env_remove("NO_COLOR")
+            .env("CLICOLOR_FORCE", "1")
+            .args(args)
+            .output()
+            .unwrap();
         assert_success(&out);
         let stdout = stdout(&out);
         assert!(stdout.contains(colored_examples), "{args:?}:\n{stdout}");

@@ -1,6 +1,4 @@
-use std::env;
 use std::error::Error;
-use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -22,7 +20,7 @@ pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Run self-describing R scripts")
-        .color(color_choice())
+        .color(ColorChoice::Auto)
         .styles(HELP_STYLES)
         .arg_required_else_help(true)
         .after_help(examples_help(concat!(
@@ -35,13 +33,6 @@ pub(crate) fn root() -> ClapCommand {
         .subcommand(render_command())
         .subcommand(tool_command())
         .subcommand(cache_command())
-}
-
-fn color_choice() -> ColorChoice {
-    match env::var_os("CLICOLOR_FORCE") {
-        Some(value) if !value.is_empty() && value != OsString::from("0") => ColorChoice::Always,
-        _ => ColorChoice::Auto,
-    }
 }
 
 fn examples_help(body: &'static str) -> StyledStr {

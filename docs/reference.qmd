@@ -21,15 +21,13 @@ if (!nzchar(ir_bin)) {
 
 cli_help <- function(...) {
   args <- c(..., "--help")
-  old_options <- options(cli.num_colors = 256L)
-  on.exit(options(old_options), add = TRUE)
 
   output <- system2(
     ir_bin,
     args,
     stdout = TRUE,
     stderr = TRUE,
-    env = c("CLICOLOR_FORCE=1", "CLICOLOR=1")
+    env = c("NO_COLOR=", "CLICOLOR_FORCE=1")
   )
   status <- attr(output, "status")
 
