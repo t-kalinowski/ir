@@ -11,7 +11,7 @@ use crate::script::RunSource;
 const HELP_STYLES: Styles = Styles::styled()
     .header(AnsiColor::BrightBlue.on_default().bold())
     .usage(AnsiColor::BrightBlue.on_default().bold())
-    .literal(AnsiColor::BrightRed.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
     .placeholder(AnsiColor::BrightBlack.on_default());
 
 pub(crate) fn root() -> ClapCommand {
