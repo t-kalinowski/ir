@@ -10,37 +10,17 @@ execute:
 This page renders the current CLI help by running the built `ir` executable during the Quarto render.
 
 ```{r}
-ir_executable <- function() {
-  env_bin <- Sys.getenv("IR_BIN", unset = NA_character_)
-  if (!is.na(env_bin) && nzchar(env_bin)) {
-    if (file.exists(env_bin) && file.access(env_bin, 1) == 0) {
-      return(normalizePath(env_bin, mustWork = TRUE))
-    }
-    stop("`IR_BIN` does not point to an executable file: ", env_bin, call. = FALSE)
+ir_bin <- Sys.getenv("IR_BIN", unset = "")
+if (!nzchar(ir_bin)) {
+  status <- system2("cargo", c("build", "--manifest-path", "../Cargo.toml"))
+  if (!identical(status, 0L)) {
+    stop("`cargo build` failed with status ", status, call. = FALSE)
   }
-
-  local_builds <- file.path("..", "target", c("debug", "release"), "ir")
-  local_builds <- local_builds[file.exists(local_builds) & file.access(local_builds, 1) == 0]
-  if (length(local_builds) > 0L) {
-    return(normalizePath(local_builds[[1]], mustWork = TRUE))
-  }
-
-  stop(
-    "`IR_BIN` is not set and no local `ir` build was found. ",
-    "Run `cargo build` or set `IR_BIN` to the executable to document.",
-    call. = FALSE
-  )
+  ir_bin <- file.path("..", "target", "debug", "ir")
 }
 
 cli_help <- function(...) {
-  stopifnot(
-    requireNamespace("fansi", quietly = TRUE),
-    requireNamespace("htmltools", quietly = TRUE),
-    requireNamespace("knitr", quietly = TRUE)
-  )
-
   args <- c(..., "--help")
-  ir_bin <- ir_executable()
   old_options <- options(cli.num_colors = 256L)
   on.exit(options(old_options), add = TRUE)
 
@@ -56,18 +36,6 @@ cli_help <- function(...) {
   if (!is.null(status)) {
     stop(
       "`", ir_bin, " ", paste(args, collapse = " "), "` failed with status ", status,
-      call. = FALSE
-    )
-  }
-
-  output_text <- paste(output, collapse = "\n")
-  if (
-    length(output) < 3L ||
-      !grepl("Usage:", output_text, fixed = TRUE) ||
-      !grepl("Options:", output_text, fixed = TRUE)
-  ) {
-    stop(
-      "`", ir_bin, " ", paste(args, collapse = " "), "` produced incomplete help output.",
       call. = FALSE
     )
   }

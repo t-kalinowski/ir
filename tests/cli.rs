@@ -393,25 +393,22 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     let docs_dir = manifest_dir.join("docs");
     let output_dir = unique_dir("ir-docs-reference-output");
     let bin_dir = unique_dir("ir-docs-reference-bin");
-    let stale_bin_dir = unique_dir("ir-docs-reference-stale-bin");
-    let fake_ir = bin_dir.join("ir");
-    let stale_ir = stale_bin_dir.join("ir");
+    let fake_cargo = bin_dir.join("cargo");
+    let stale_ir = bin_dir.join("ir");
+    let cargo_marker = output_dir.join("cargo-called");
 
     fs::write(
-        &fake_ir,
+        &fake_cargo,
         concat!(
             "#!/bin/sh\n",
-            "printf '\\033[1;32mUsage:\\033[0m \\033[1;94mir\\033[0m \\033[94m[COMMAND]\\033[0m\\n\\n'\n",
-            "printf '\\033[1;32mCommands:\\033[0m\\n'\n",
-            "printf '  \\033[1;94mrender\\033[0m  Render a Quarto document or script\\n\\n'\n",
-            "printf '\\033[1;32mOptions:\\033[0m\\n'\n",
-            "printf '  \\033[1;94m-h\\033[0m, \\033[1;94m--help\\033[0m  Print help\\n'\n",
+            "touch \"$IR_CARGO_MARKER\"\n",
+            "exec \"$REAL_CARGO\" \"$@\"\n",
         ),
     )
     .unwrap();
-    let mut perms = fs::metadata(&fake_ir).unwrap().permissions();
+    let mut perms = fs::metadata(&fake_cargo).unwrap().permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&fake_ir, perms).unwrap();
+    fs::set_permissions(&fake_cargo, perms).unwrap();
 
     fs::write(
         &stale_ir,
@@ -446,7 +443,7 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     );
 
     let path = std::env::join_paths(
-        std::iter::once(stale_bin_dir.as_os_str().to_owned()).chain(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
                 .map(|path| path.into_os_string()),
         ),
@@ -456,13 +453,22 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     let output = Command::new("quarto")
         .current_dir(&docs_dir)
         .env("PATH", path)
-        .env("IR_BIN", &fake_ir)
+        .env_remove("IR_BIN")
+        .env(
+            "REAL_CARGO",
+            std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+        )
+        .env("IR_CARGO_MARKER", &cargo_marker)
         .args(["render", "reference.qmd", "--to", "html"])
         .arg("--output-dir")
         .arg(&output_dir)
         .output()
         .unwrap();
     assert_success(&output);
+    assert!(
+        cargo_marker.exists(),
+        "reference render should build the current ir binary"
+    );
 
     let html = fs::read_to_string(output_dir.join("reference.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered reference page: {e}"));
@@ -479,7 +485,6 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
 
     let _ = fs::remove_dir_all(&output_dir);
     let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&stale_bin_dir);
 }
 
 #[test]
