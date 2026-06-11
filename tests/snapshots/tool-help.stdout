@@ -11,7 +11,8 @@ Options:
   -h, --help  Print help
 
 Tools:
-  A tool is an executable provided by an R package and launched through Rscript.
+  A tool is an executable provided by an R package with an Rscript or Rapp
+  shebang.
   `ir tool run` resolves the package plus any --with dependencies into an
   isolated library, then runs the selected executable. The user R library is not
   used.
