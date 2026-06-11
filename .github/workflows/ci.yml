@@ -43,6 +43,8 @@ jobs:
             any::dplyr
             any::tidyr
             any::reticulate
+            any::fansi
+            any::htmltools
             any::knitr
             any::rmarkdown
             any::quarto

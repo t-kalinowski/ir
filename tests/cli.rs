@@ -141,6 +141,26 @@ fn unique_dir(prefix: &str) -> PathBuf {
     dir
 }
 
+fn unique_dir_in(parent: &Path, prefix: &str) -> (PathBuf, OsString) {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let id = UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
+    let name = OsString::from(format!("{prefix}-{}-{nanos}-{id}", std::process::id()));
+    let dir = parent.join(&name);
+    fs::create_dir_all(&dir).unwrap();
+    (dir, name)
+}
+
+fn pin_quarto_r(command: &mut Command) {
+    let rscript = rscript();
+    let looks_like_path = rscript.to_string_lossy().contains(['/', '\\']);
+    if looks_like_path || Path::new(&rscript).exists() {
+        command.env("QUARTO_R", rscript);
+    }
+}
+
 fn current_utc_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -426,7 +446,7 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     let _guard = e2e_lock();
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let docs_dir = manifest_dir.join("docs");
-    let output_dir = unique_dir("ir-docs-reference-output");
+    let (output_dir, output_dir_name) = unique_dir_in(&docs_dir, "ir-docs-reference-output");
     let bin_dir = unique_dir("ir-docs-reference-bin");
     let fake_cargo = bin_dir.join("cargo");
     let stale_ir = bin_dir.join("ir");
@@ -488,7 +508,8 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
     )
     .unwrap();
 
-    let output = Command::new("quarto")
+    let mut quarto = Command::new("quarto");
+    quarto
         .current_dir(&docs_dir)
         .env("PATH", path)
         .env_remove("IR_BIN")
@@ -499,9 +520,9 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
         .env("IR_CARGO_MARKER", &cargo_marker)
         .args(["render", "reference.qmd", "--to", "html"])
         .arg("--output-dir")
-        .arg(&output_dir)
-        .output()
-        .unwrap();
+        .arg(&output_dir_name);
+    pin_quarto_r(&mut quarto);
+    let output = quarto.output().unwrap();
     assert_success(&output);
     assert!(
         cargo_marker.exists(),
@@ -531,15 +552,16 @@ fn docs_run_page_dark_mode_styles_console_blocks() {
     let _guard = e2e_lock();
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let docs_dir = manifest_dir.join("docs");
-    let output_dir = unique_dir("ir-docs-run-output");
+    let (output_dir, output_dir_name) = unique_dir_in(&docs_dir, "ir-docs-run-output");
 
-    let output = Command::new("quarto")
+    let mut quarto = Command::new("quarto");
+    quarto
         .current_dir(&docs_dir)
         .args(["render", "run.qmd", "--to", "html"])
         .arg("--output-dir")
-        .arg(&output_dir)
-        .output()
-        .unwrap();
+        .arg(&output_dir_name);
+    pin_quarto_r(&mut quarto);
+    let output = quarto.output().unwrap();
     assert_success(&output);
 
     let html = fs::read_to_string(output_dir.join("run.html"))
