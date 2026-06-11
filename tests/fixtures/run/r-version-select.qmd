@@ -1,19 +1,24 @@
 ---
-title: "ir r-version selection fixture"
+title: ir r-version selection fixture
 format: html
 ir:
   packages:
     - jsonlite
     - knitr
     - rmarkdown
-  exclude-newer: "2026-06-01"
+  exclude-newer: 2026-06-01
 ---
 
 ```{r}
 library(jsonlite)
-lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+lib <- strsplit(
+  Sys.getenv("R_LIBS"),
+  .Platform$path.sep,
+  fixed = TRUE
+)[[1]][[1]]
 expected <- normalizePath(file.path(lib, "jsonlite"), mustWork = TRUE)
-jsonlite_in_cache <- normalizePath(path.package("jsonlite"), mustWork = TRUE) == expected
+jsonlite_in_cache <- normalizePath(path.package("jsonlite"), mustWork = TRUE) ==
+  expected
 
 cat("ir.fixture=r-version\n")
 cat("version.r_version=[", as.character(getRversion()), "]\n", sep = "")

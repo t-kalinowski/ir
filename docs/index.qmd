@@ -1,9 +1,12 @@
 ---
-title: "ir"
-subtitle: "Self-describing R scripts, cached package libraries, and reproducible command-line runs."
+title: ir
+subtitle: >-
+  Self-describing R scripts, cached package libraries, and reproducible
+  command-line runs.
 ---
 
-`ir` runs standalone R scripts and renders Quarto sources that declare their runtime requirements in the file itself. It resolves those requirements into cached package libraries and runs the program with the selected R.
+`ir` runs standalone R scripts and renders Quarto sources that declare their runtime requirements in the file itself.
+It resolves those requirements into cached package libraries and runs the program with the selected R.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -12,7 +15,7 @@ subtitle: "Self-describing R scripts, cached package libraries, and reproducible
 #|   - tidyr
 #| r-version: ">= 4.0"
 #| isolated: true
-#| exclude-newer: "2024-01-15"
+#| exclude-newer: 2024-01-15
 
 library(dplyr)
 library(tidyr)

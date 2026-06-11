@@ -1,5 +1,5 @@
 ---
-title: "ir fixture report"
+title: ir fixture report
 format: html
 ir:
   packages:
@@ -10,8 +10,14 @@ ir:
 
 ```{r}
 pkgs <- c("dplyr", "tidyr", "glue")
-suppressPackageStartupMessages(invisible(lapply(pkgs, library, character.only = TRUE)))
-lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
+suppressPackageStartupMessages(invisible(
+  lapply(pkgs, library, character.only = TRUE)
+))
+lib <- strsplit(
+  Sys.getenv("R_LIBS"),
+  .Platform$path.sep,
+  fixed = TRUE
+)[[1L]][[1L]]
 expected <- normalizePath(file.path(lib, pkgs), mustWork = TRUE)
 pkg_in_cache <- normalizePath(path.package(pkgs), mustWork = TRUE) == expected
 

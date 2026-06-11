@@ -1,8 +1,8 @@
 #!/usr/bin/env -S ir run
-#| r-version: "4.4.3"
+#| r-version: 4.4.3
 #| packages:
 #|   - jsonlite
-#| exclude-newer: "2026-06-01"
+#| exclude-newer: 2026-06-01
 
 library(jsonlite)
 lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
