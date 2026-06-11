@@ -12,7 +12,7 @@ const HELP_STYLES: Styles = Styles::styled()
     .header(AnsiColor::BrightBlue.on_default().bold())
     .usage(AnsiColor::BrightBlue.on_default().bold())
     .literal(AnsiColor::BrightRed.on_default().bold())
-    .placeholder(AnsiColor::Cyan.on_default());
+    .placeholder(AnsiColor::BrightBlack.on_default());
 
 pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
