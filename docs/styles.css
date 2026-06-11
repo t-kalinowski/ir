@@ -6,6 +6,7 @@
   --ir-ansi-green: #007f3b;
   --ir-ansi-blue: #2f49a3;
   --ir-ansi-yellow: #7c5f00;
+  --ir-ansi-gray: #52616b;
 }
 
 body.quarto-dark {
@@ -16,6 +17,7 @@ body.quarto-dark {
   --ir-ansi-green: #5fe084;
   --ir-ansi-blue: #9eb6ff;
   --ir-ansi-yellow: #ecd46b;
+  --ir-ansi-gray: #aeb8be;
 }
 
 .navbar-title {
@@ -68,6 +70,10 @@ pre.ir-cli-help span[style*="#00BBBB"] {
 
 pre.ir-cli-help span[style*="#BBBB00"] {
   color: var(--ir-ansi-yellow) !important;
+}
+
+pre.ir-cli-help span[style*="#555555"] {
+  color: var(--ir-ansi-gray) !important;
 }
 
 pre.console code,

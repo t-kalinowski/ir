@@ -358,17 +358,17 @@ fn cli_help_honors_clicolor_force() {
 
     let stdout = stdout(&out);
     assert!(stdout.contains("\u{1b}["), "{stdout}");
-    assert!(stdout.contains("\u{1b}[32mUsage:"), "{stdout}");
-    assert!(stdout.contains("\u{1b}[94mir"), "{stdout}");
-    assert!(stdout.contains("\u{1b}[94m[COMMAND]"), "{stdout}");
-    assert!(!stdout.contains("\u{1b}[36m"), "{stdout}");
+    assert!(stdout.contains("\u{1b}[94mUsage:"), "{stdout}");
+    assert!(stdout.contains("\u{1b}[36mir"), "{stdout}");
+    assert!(stdout.contains("\u{1b}[90m[COMMAND]"), "{stdout}");
+    assert!(!stdout.contains("\u{1b}[32m"), "{stdout}");
     assert!(!stdout.contains("\u{1b}[33m"), "{stdout}");
     assert!(!stdout.contains("\u{1b}[4m"), "{stdout}");
 }
 
 #[test]
 fn examples_help_headings_are_colored() {
-    let colored_examples = "\u{1b}[1m\u{1b}[32mExamples:\u{1b}[0m";
+    let colored_examples = "\u{1b}[1m\u{1b}[94mExamples:\u{1b}[0m";
     for args in [
         &["--help"][..],
         &["run", "--help"],
@@ -432,13 +432,16 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
 
     let styles = fs::read_to_string(docs_dir.join("styles.css")).unwrap();
     assert!(styles.contains("quarto-dark"), "{styles}");
-    assert!(styles.contains("--ir-ansi-green"), "{styles}");
     assert!(
-        styles.contains("pre.ir-cli-help span[style*=\"#00BB00\"]"),
+        styles.contains("pre.ir-cli-help span[style*=\"#5555FF\"]"),
         "{styles}"
     );
     assert!(
-        styles.contains("pre.ir-cli-help span[style*=\"#5555FF\"]"),
+        styles.contains("pre.ir-cli-help span[style*=\"#00BBBB\"]"),
+        "{styles}"
+    );
+    assert!(
+        styles.contains("pre.ir-cli-help span[style*=\"#555555\"]"),
         "{styles}"
     );
 
@@ -478,8 +481,9 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
         "{html}"
     );
     assert!(html.contains("Options:"), "{html}");
-    assert!(html.contains("color: #00BB00"), "{html}");
     assert!(html.contains("color: #5555FF"), "{html}");
+    assert!(html.contains("color: #00BBBB"), "{html}");
+    assert!(html.contains("color: #555555"), "{html}");
     assert!(html.contains("font-weight: bold"), "{html}");
     assert!(!html.contains("\u{1b}["), "{html}");
 

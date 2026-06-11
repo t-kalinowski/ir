@@ -1,6 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use clap::builder::styling::{AnsiColor, Styles};
@@ -11,12 +12,18 @@ use crate::quarto::RenderSource;
 use crate::runtime::nonempty_env;
 use crate::script::RunSource;
 
+const HELP_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::BrightBlue.on_default().bold())
+    .usage(AnsiColor::BrightBlue.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::BrightBlack.on_default());
+
 pub(crate) fn root() -> ClapCommand {
     ClapCommand::new("ir")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Run self-describing R scripts")
         .color(color_choice())
-        .styles(help_styles())
+        .styles(HELP_STYLES)
         .arg_required_else_help(true)
         .after_help(examples_help(concat!(
             "  ir run script.R\n",
@@ -37,31 +44,31 @@ fn color_choice() -> ColorChoice {
     }
 }
 
-fn help_styles() -> Styles {
-    Styles::styled()
-        .header(help_header_style())
-        .usage(help_header_style())
-        .literal(AnsiColor::BrightBlue.on_default().bold())
-        .placeholder(AnsiColor::BrightBlue.on_default())
-}
-
-fn help_header_style() -> clap::builder::styling::Style {
-    AnsiColor::Green.on_default().bold()
-}
-
 fn examples_help(body: &'static str) -> StyledStr {
-    section_help("Examples", body)
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
 }
 
 fn section_help(title: &'static str, body: &'static str) -> StyledStr {
-    let style = help_header_style();
-    StyledStr::from(format!(
-        "{}{}:{}\n{}",
-        style.render(),
-        title,
-        style.render_reset(),
-        body
-    ))
+    let header = HELP_STYLES.get_header();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}{title}:{header:#}");
+    help.push_str(body);
+    help
 }
 
 fn run_command() -> ClapCommand {
