@@ -2296,6 +2296,8 @@ fn tool_install_rejects_invalid_metadata_launcher_names() {
     for (package_name, launcher_name) in [
         ("irtoolbadname", "bad?name"),
         ("irtoolpercentname", "foo%PATH%"),
+        ("irtooldotname", "."),
+        ("irtooldotdotname", ".."),
     ] {
         let cache_dir = unique_dir("ir-tool-invalid-launcher-cache");
         let bin_dir = unique_dir("ir-tool-invalid-launcher-bin");
