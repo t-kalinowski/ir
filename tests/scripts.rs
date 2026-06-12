@@ -111,6 +111,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
+    assert!(workflow.contains("Keep the GitHub setup actions above"));
     assert!(!workflow.contains("Install rig (Linux)"));
     assert!(!workflow.contains("Install rig (macOS)"));
 }
