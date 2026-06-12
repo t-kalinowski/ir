@@ -56,4 +56,4 @@ The selected path is passed to the resolver R session, so R startup files do not
 `IR_RSCRIPT` is ignored when `r-version` is set, because version selection is resolved through `rig`.
 `--bin-dir <dir>` overrides the launcher-directory environment variables for `ir tool install`.
 On macOS, `ir tool install` adds the default `~/.local/bin` directory to the zsh profile when needed.
-On Windows, it adds the resolved launcher directory to the user `Path`.
+On Windows, it adds the default or environment-selected launcher directory to the user `Path`.

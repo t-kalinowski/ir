@@ -2459,6 +2459,8 @@ fn tool_install_adds_default_macos_bin_dir_to_zprofile_once() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-install-macos-path-cache");
     let home = unique_dir("ir-tool-install-macos-path-home");
+    let default_bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&default_bin_dir).unwrap();
     let package_dir = unique_dir("ir-tool-install-macos-path-packages");
     let package = write_r_source_package(&package_dir, "irmacpath", &[]);
     let exec_dir = package.join("exec");
@@ -2496,7 +2498,7 @@ cat("mac.path.fixture=TRUE\n")
         output_text(&out)
     );
     assert_stdout_contains(&out, "Installed");
-    assert!(launcher_path(&home.join(".local").join("bin"), "hello").exists());
+    assert!(launcher_path(&default_bin_dir, "hello").exists());
     assert!(
         !tree_contains_dir_named(&cache_dir, "Rapp"),
         "PATH setup should not add a hidden Rapp dependency"
@@ -2543,6 +2545,56 @@ cat("mac.path.fixture=TRUE\n")
 
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_custom_bin_dir_skips_default_macos_path_setup() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-custom-path-cache");
+    let home = unique_dir("ir-tool-install-custom-path-home");
+    let bin_dir = unique_path("ir-tool-install-custom-path-bin", "");
+    let package_dir = unique_dir("ir-tool-install-custom-path-packages");
+    let package = write_r_source_package(&package_dir, "irmaccustompath", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.custom.path.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed");
+    assert!(launcher_path(&bin_dir, "hello").exists());
+    assert!(!home.join(".local").join("bin").exists());
+    assert!(!home.join(".zprofile").exists());
+    assert!(!stderr(&out).contains("PATH"));
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&package_dir);
 }
 

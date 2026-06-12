@@ -60,14 +60,13 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
         .into());
     }
 
-    let setup_launcher_dir_on_path = !install.bin_dir.exists();
     fs::create_dir_all(&install.bin_dir).map_err(|e| {
         format!(
             "failed to create launcher directory `{}`: {e}",
             install.bin_dir.display()
         )
     })?;
-    if setup_launcher_dir_on_path {
+    if install.setup_bin_dir_on_path {
         ensure_launcher_dir_on_path(&install.bin_dir)?;
     }
 
@@ -557,13 +556,18 @@ fn ensure_launcher_dir_on_path(bin_dir: &Path) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let default_bin_dir = macos_default_launcher_dir()?;
+    if !same_existing_path(bin_dir, &default_bin_dir) {
+        return Ok(());
+    }
+
     let bin_dir = fs::canonicalize(bin_dir).map_err(|e| {
         format!(
             "cannot resolve launcher directory `{}`: {e}",
             bin_dir.display()
         )
     })?;
-    if bin_dir != macos_default_launcher_dir()? || path_has_dir(&bin_dir) {
+    if path_has_dir(&bin_dir) {
         return Ok(());
     }
 
@@ -571,10 +575,6 @@ fn ensure_launcher_dir_on_path(bin_dir: &Path) -> Result<(), Box<dyn Error>> {
     let display = macos_zprofile_display(&zprofile);
     let lines = macos_path_lines();
     if profile_has_lines(&zprofile, lines)? {
-        eprintln!(
-            "~/.local/bin PATH setup is already present in {display}, but ~/.local/bin is still not on PATH."
-        );
-        eprintln!("Restart your shell, or run:\n\n  source {display}");
         return Ok(());
     }
 
@@ -591,9 +591,18 @@ fn ensure_launcher_dir_on_path(bin_dir: &Path) -> Result<(), Box<dyn Error>> {
 #[cfg(target_os = "macos")]
 fn macos_default_launcher_dir() -> Result<PathBuf, Box<dyn Error>> {
     let home = nonempty_env("HOME").ok_or("cannot determine home directory for PATH setup")?;
-    Ok(fs::canonicalize(
-        PathBuf::from(home).join(".local").join("bin"),
-    )?)
+    Ok(PathBuf::from(home).join(".local").join("bin"))
+}
+
+#[cfg(target_os = "macos")]
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 #[cfg(target_os = "macos")]
