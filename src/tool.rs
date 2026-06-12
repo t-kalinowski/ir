@@ -6,11 +6,11 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use saphyr::Yaml;
+
 use crate::cli::{is_package_executable_name, ToolInstallArgs, ToolRunArgs};
-use crate::runtime::{
-    resolve_library, resolve_library_and_primary_package, rscript_for_spec, spawn_error,
-};
-use crate::spec::RuntimeSpec;
+use crate::runtime::{resolve_library_and_primary_package, rscript_for_spec, spawn_error};
+use crate::spec::{load_first_yaml_document, RuntimeSpec};
 
 pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     let mut deps = vec![run.target.package_ref.clone()];
@@ -24,20 +24,14 @@ pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     }
 
     let rscript = rscript_for_spec(&spec)?;
-    let library = resolve_library(&rscript, &spec)?
-        .ok_or("dependency resolver did not return a library path")?;
-    let executable = find_package_executable(
-        &library,
-        run.target.package_name.as_deref(),
-        &run.target.executable,
-    )?;
+    let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
+    let executable = find_package_executable(&library, &package_name, &run.target.executable)?;
     let code = run_package_executable(
         &rscript,
         &library,
         &executable,
         &run.rscript_args,
         &run.tool_args,
-        &run.target.executable,
     )?;
     std::process::exit(code);
 }
@@ -111,67 +105,57 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
 
 fn find_package_executable(
     library: &Path,
-    package: Option<&str>,
+    package: &str,
     executable: &str,
-) -> Result<PathBuf, Box<dyn Error>> {
-    if let Some(package) = package {
-        let exec_dir = library.join(package).join("exec");
-        return find_package_executable_in_dir(&exec_dir, executable).ok_or_else(|| {
-            if !exec_dir.is_dir() {
-                format!(
-                    "package `{package}` does not have an exec directory in `{}`",
-                    library.display()
-                )
-                .into()
-            } else {
-                format!(
-                    "could not find executable `{executable}` or `{executable}.R` in `{}`",
-                    exec_dir.display()
-                )
-                .into()
-            }
-        });
-    }
-
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(library)
-        .map_err(|e| format!("cannot read resolved library `{}`: {e}", library.display()))?
-    {
-        let exec_dir = entry?.path().join("exec");
-        if let Some(path) = find_package_executable_in_dir(&exec_dir, executable) {
-            candidates.push(path);
+) -> Result<PackageExecutable, Box<dyn Error>> {
+    let exec_dir = library.join(package).join("exec");
+    find_package_executable_in_dir(&exec_dir, executable)?.ok_or_else(|| {
+        if !exec_dir.is_dir() {
+            format!(
+                "package `{package}` does not have an exec directory in `{}`",
+                library.display()
+            )
+            .into()
+        } else {
+            format!(
+                "could not find executable `{executable}` or `{executable}.R` in `{}`",
+                exec_dir.display()
+            )
+            .into()
         }
-    }
-    candidates.sort();
-
-    match candidates.len() {
-        1 => Ok(candidates.remove(0)),
-        0 => Err(format!(
-            "could not find executable `{executable}` or `{executable}.R` in any package under `{}`",
-            library.display()
-        )
-        .into()),
-        _ => Err(format!(
-            "found multiple executables named `{executable}` in `{}`; use a package ref whose installed package name can be inferred",
-            library.display()
-        )
-        .into()),
-    }
+    })
 }
 
-fn find_package_executable_in_dir(exec_dir: &Path, executable: &str) -> Option<PathBuf> {
-    let candidates = [
-        exec_dir.join(executable),
-        exec_dir.join(format!("{executable}.R")),
-    ];
+fn find_package_executable_in_dir(
+    exec_dir: &Path,
+    executable: &str,
+) -> Result<Option<PackageExecutable>, Box<dyn Error>> {
+    if !exec_dir.is_dir() {
+        return Ok(None);
+    }
 
-    candidates.into_iter().find(|candidate| candidate.is_file())
+    let mut matches: Vec<_> = package_executables_in_dir(exec_dir)?
+        .into_iter()
+        .filter(|candidate| candidate.name == executable)
+        .collect();
+
+    matches.sort_by(|a, b| a.path.cmp(&b.path));
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.remove(0))),
+        _ => Err(format!(
+            "multiple package executables map to launcher `{executable}` in `{}`",
+            exec_dir.display()
+        )
+        .into()),
+    }
 }
 
 struct PackageExecutable {
     name: String,
     path: PathBuf,
     launcher: PackageLauncher,
+    rscript_args: Vec<String>,
 }
 
 fn discover_package_executables(
@@ -187,53 +171,112 @@ fn discover_package_executables(
         .into());
     }
 
+    let mut executables = package_executables_in_dir(&exec_dir)?;
+    reject_duplicate_launcher_names(&executables, &exec_dir)?;
+
+    executables.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(executables)
+}
+
+fn package_executables_in_dir(exec_dir: &Path) -> Result<Vec<PackageExecutable>, Box<dyn Error>> {
     let mut executables = Vec::new();
-    for entry in fs::read_dir(&exec_dir)
+    for entry in fs::read_dir(exec_dir)
         .map_err(|e| format!("cannot read exec directory `{}`: {e}", exec_dir.display()))?
     {
         let path = entry?.path();
         if !path.is_file() {
             continue;
         }
-        let Some(launcher) = package_executable_launcher_kind(&path)? else {
+        let Some(executable) = package_executable_from_discovered_path(&path)? else {
             continue;
         };
-        let name = package_executable_launcher_name(&path)?;
-        if executables
+        executables.push(executable);
+    }
+    Ok(executables)
+}
+
+fn reject_duplicate_launcher_names(
+    executables: &[PackageExecutable],
+    exec_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    for (index, executable) in executables.iter().enumerate() {
+        if executables[..index]
             .iter()
-            .any(|executable: &PackageExecutable| executable.name == name)
+            .any(|known| known.name == executable.name)
         {
             return Err(format!(
-                "multiple package executables map to launcher `{name}` in `{}`",
+                "multiple package executables map to launcher `{}` in `{}`",
+                executable.name,
                 exec_dir.display()
             )
             .into());
         }
-        executables.push(PackageExecutable {
-            name,
-            path,
-            launcher,
-        });
     }
-
-    executables.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(executables)
+    Ok(())
 }
 
-fn package_executable_launcher_name(path: &Path) -> Result<String, Box<dyn Error>> {
-    let name = if path
+fn package_executable_from_discovered_path(
+    path: &Path,
+) -> Result<Option<PackageExecutable>, Box<dyn Error>> {
+    let Some(launcher) = package_executable_launcher_kind(path)? else {
+        return Ok(None);
+    };
+    package_executable_from_path_and_launcher(path, launcher).map(Some)
+}
+
+fn package_executable_from_path_and_launcher(
+    path: &Path,
+    launcher: PackageLauncher,
+) -> Result<PackageExecutable, Box<dyn Error>> {
+    let package = package_executable_package(path)?;
+    let metadata = package_launcher_metadata(path, &package, launcher)?;
+    let name = package_executable_launcher_name(path, metadata.name)?;
+    Ok(PackageExecutable {
+        name,
+        path: path.to_path_buf(),
+        launcher,
+        rscript_args: metadata.rscript_args,
+    })
+}
+
+fn package_executable_package(path: &Path) -> Result<String, Box<dyn Error>> {
+    let package = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            format!(
+                "package executable `{}` is not under a package exec directory",
+                path.display()
+            )
+        })?;
+    Ok(package.to_string())
+}
+
+fn package_executable_launcher_name(
+    path: &Path,
+    metadata_name: Option<String>,
+) -> Result<String, Box<dyn Error>> {
+    let name = if let Some(name) = metadata_name {
+        name
+    } else if path
         .extension()
         .and_then(OsStr::to_str)
         .is_some_and(|ext| ext.eq_ignore_ascii_case("R"))
     {
         path.file_stem()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| format!("package executable `{}` is not valid UTF-8", path.display()))?
+            .to_string()
     } else {
         path.file_name()
-    }
-    .and_then(OsStr::to_str)
-    .ok_or_else(|| format!("package executable `{}` is not valid UTF-8", path.display()))?;
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| format!("package executable `{}` is not valid UTF-8", path.display()))?
+            .to_string()
+    };
 
-    if !is_package_executable_name(name) {
+    if !is_package_executable_name(&name) {
         return Err(format!(
             "package executable `{}` maps to unsupported launcher name `{name}`",
             path.display()
@@ -241,7 +284,260 @@ fn package_executable_launcher_name(path: &Path) -> Result<String, Box<dyn Error
         .into());
     }
 
-    Ok(name.to_string())
+    Ok(name)
+}
+
+struct PackageLauncherMetadata {
+    name: Option<String>,
+    rscript_args: Vec<String>,
+}
+
+fn package_launcher_metadata(
+    path: &Path,
+    package: &str,
+    package_launcher: PackageLauncher,
+) -> Result<PackageLauncherMetadata, Box<dyn Error>> {
+    let frontmatter = read_rapp_frontmatter_to_string(path)?;
+    if frontmatter.trim().is_empty() {
+        return package_launcher_metadata_from_mapping(None, None, path, package, package_launcher);
+    }
+
+    let Some(doc) = load_first_yaml_document(&frontmatter, "launcher frontmatter")? else {
+        return package_launcher_metadata_from_mapping(None, None, path, package, package_launcher);
+    };
+    if doc.is_null() {
+        return package_launcher_metadata_from_mapping(None, None, path, package, package_launcher);
+    }
+    if !doc.is_mapping() {
+        return Err(format!(
+            "launcher frontmatter in `{}` must be a YAML mapping",
+            path.display()
+        )
+        .into());
+    }
+
+    let launcher = launcher_frontmatter_mapping(&doc, path)?;
+    let top_level_name = launcher_optional_string(&doc, "name", path)?;
+    package_launcher_metadata_from_mapping(
+        launcher,
+        top_level_name,
+        path,
+        package,
+        package_launcher,
+    )
+}
+
+fn package_launcher_metadata_from_mapping(
+    launcher: Option<&Yaml<'_>>,
+    top_level_name: Option<String>,
+    path: &Path,
+    package: &str,
+    package_launcher: PackageLauncher,
+) -> Result<PackageLauncherMetadata, Box<dyn Error>> {
+    let name = match launcher {
+        Some(launcher) => launcher_optional_string(launcher, "name", path)?.or(top_level_name),
+        None => top_level_name,
+    };
+    let rscript_args = match package_launcher {
+        PackageLauncher::Rapp => launcher_rscript_args(launcher, path, package, true)?,
+        PackageLauncher::Rscript if launcher.is_some() => {
+            launcher_rscript_args(launcher, path, package, false)?
+        }
+        PackageLauncher::Rscript => Vec::new(),
+    };
+
+    Ok(PackageLauncherMetadata { name, rscript_args })
+}
+
+fn launcher_frontmatter_mapping<'a, 'input>(
+    doc: &'a Yaml<'input>,
+    path: &Path,
+) -> Result<Option<&'a Yaml<'input>>, Box<dyn Error>> {
+    let Some(launcher) = doc.as_mapping_get("launcher") else {
+        return Ok(None);
+    };
+    if launcher.is_null() {
+        return Ok(None);
+    }
+    if !launcher.is_mapping() {
+        return Err(format!(
+            "launcher frontmatter `launcher` in `{}` must be a YAML mapping",
+            path.display()
+        )
+        .into());
+    }
+    Ok(Some(launcher))
+}
+
+fn read_rapp_frontmatter_to_string(path: &Path) -> Result<String, Box<dyn Error>> {
+    let file = File::open(path)
+        .map_err(|e| format!("cannot read package executable `{}`: {e}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut frontmatter = String::new();
+    let mut line = String::new();
+
+    reader.read_line(&mut line)?;
+    if line.starts_with("#!") {
+        line.clear();
+        reader.read_line(&mut line)?;
+    }
+
+    while let Some(rest) = rapp_hashpipe_content(&line) {
+        frontmatter.push_str(rest);
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+    }
+
+    Ok(frontmatter)
+}
+
+fn rapp_hashpipe_content(line: &str) -> Option<&str> {
+    line.trim_start().strip_prefix("#| ")
+}
+
+fn launcher_rscript_args(
+    launcher: Option<&Yaml<'_>>,
+    path: &Path,
+    package: &str,
+    use_package_default_packages: bool,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut args = Vec::new();
+    if let Some(launcher) = launcher {
+        for (key, arg) in [
+            ("vanilla", "--vanilla"),
+            ("no-environ", "--no-environ"),
+            ("no-site-file", "--no-site-file"),
+            ("no-init-file", "--no-init-file"),
+            ("restore", "--restore"),
+            ("save", "--save"),
+            ("verbose", "--verbose"),
+        ] {
+            if launcher_optional_bool(launcher, key, path)? {
+                args.push(arg.to_string());
+            }
+        }
+    }
+
+    if let Some(default_packages) =
+        launcher_default_packages(launcher, path, package, use_package_default_packages)?
+    {
+        args.push(format!("--default-packages={default_packages}"));
+    }
+
+    Ok(args)
+}
+
+fn launcher_optional_string(
+    mapping: &Yaml<'_>,
+    key: &str,
+    path: &Path,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(value) = launcher_mapping_get(mapping, key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(value) = value.as_str() else {
+        return Err(format!(
+            "launcher frontmatter `{key}` in `{}` must be a string",
+            path.display()
+        )
+        .into());
+    };
+    Ok(Some(value.trim().to_string()))
+}
+
+fn launcher_optional_bool(
+    mapping: &Yaml<'_>,
+    key: &str,
+    path: &Path,
+) -> Result<bool, Box<dyn Error>> {
+    let Some(value) = launcher_mapping_get(mapping, key) else {
+        return Ok(false);
+    };
+    if value.is_null() {
+        return Ok(false);
+    }
+
+    value.as_bool().ok_or_else(|| {
+        format!(
+            "launcher frontmatter `{key}` in `{}` must be a boolean",
+            path.display()
+        )
+        .into()
+    })
+}
+
+fn launcher_default_packages(
+    mapping: Option<&Yaml<'_>>,
+    path: &Path,
+    package: &str,
+    use_package_default_packages: bool,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(mapping) = mapping else {
+        return Ok(use_package_default_packages.then(|| format!("base,{package}")));
+    };
+    let Some(value) = launcher_mapping_get(mapping, "default-packages") else {
+        return Ok(use_package_default_packages.then(|| format!("base,{package}")));
+    };
+    if value.is_null() {
+        return Ok(Some("NULL".to_string()));
+    }
+    if let Some(value) = value.as_str() {
+        return nonempty_launcher_string(value, "default-packages", path).map(Some);
+    }
+
+    let Some(values) = value.as_vec() else {
+        return Err(format!(
+            "launcher frontmatter `default-packages` in `{}` must be a string or sequence",
+            path.display()
+        )
+        .into());
+    };
+
+    let mut packages = Vec::new();
+    for value in values {
+        let Some(value) = value.as_str() else {
+            return Err(format!(
+                "launcher frontmatter `default-packages` entries in `{}` must be strings",
+                path.display()
+            )
+            .into());
+        };
+        packages.push(nonempty_launcher_string(value, "default-packages", path)?);
+    }
+    Ok(Some(packages.join(",")))
+}
+
+fn nonempty_launcher_string(value: &str, key: &str, path: &Path) -> Result<String, Box<dyn Error>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!(
+            "launcher frontmatter `{key}` in `{}` must not contain empty strings",
+            path.display()
+        )
+        .into());
+    }
+    Ok(value.to_string())
+}
+
+fn launcher_mapping_get<'a, 'input>(
+    mapping: &'a Yaml<'input>,
+    key: &str,
+) -> Option<&'a Yaml<'input>> {
+    if let Some(value) = mapping.as_mapping_get(key) {
+        return Some(value);
+    }
+    let normalized = key.replace('-', "_");
+    if normalized == key {
+        None
+    } else {
+        mapping.as_mapping_get(normalized.as_str())
+    }
 }
 
 fn resolved_runtime_path_prefix(
@@ -280,26 +576,25 @@ fn resolved_runtime_path(library: &Path, rscript: &OsStr) -> Result<OsString, Bo
 fn run_package_executable(
     rscript: &OsStr,
     library: &Path,
-    executable: &Path,
+    executable: &PackageExecutable,
     rscript_args: &[String],
     args: &[String],
-    launcher_name: &str,
 ) -> Result<i32, Box<dyn Error>> {
-    let launcher = package_executable_launcher(executable)?;
     let mut cmd = Command::new(rscript);
+    cmd.args(&executable.rscript_args);
     cmd.args(rscript_args);
-    match launcher {
+    match executable.launcher {
         PackageLauncher::Rscript => {
-            cmd.arg(executable);
+            cmd.arg(&executable.path);
         }
         PackageLauncher::Rapp => {
-            cmd.arg("-e").arg("Rapp::run()").arg(executable);
+            cmd.arg("-e").arg("Rapp::run()").arg(&executable.path);
         }
     }
     cmd.args(args)
         .env("R_LIBS", library)
         .env("R_LIBS_USER", "NULL")
-        .env("RAPP_LAUNCHER_NAME", launcher_name)
+        .env("RAPP_LAUNCHER_NAME", &executable.name)
         .env("PATH", resolved_runtime_path(library, rscript)?);
 
     #[cfg(unix)]
@@ -321,41 +616,31 @@ enum PackageLauncher {
     Rapp,
 }
 
-fn package_executable_launcher(executable: &Path) -> Result<PackageLauncher, Box<dyn Error>> {
-    package_executable_launcher_kind(executable)?.ok_or_else(|| {
-        format!(
-            "package executable `{}` must use a Rscript or Rapp shebang",
-            executable.display()
-        )
-        .into()
-    })
-}
-
 fn package_executable_launcher_kind(
     executable: &Path,
 ) -> Result<Option<PackageLauncher>, Box<dyn Error>> {
     let file = File::open(executable)
         .map_err(|e| format!("cannot read executable `{}`: {e}", executable.display()))?;
     let mut reader = BufReader::new(file);
-    let mut shebang = String::new();
-    reader.read_line(&mut shebang)?;
+    let mut shebang = Vec::new();
+    reader.read_until(b'\n', &mut shebang)?;
 
-    if !shebang.starts_with("#!") {
+    if !shebang.starts_with(b"#!") {
         return Ok(None);
     }
 
-    if shebang_mentions(&shebang, "Rapp") {
+    if shebang_mentions(&shebang, b"Rapp") {
         Ok(Some(PackageLauncher::Rapp))
-    } else if shebang_mentions(&shebang, "Rscript") {
+    } else if shebang_mentions(&shebang, b"Rscript") {
         Ok(Some(PackageLauncher::Rscript))
     } else {
         Ok(None)
     }
 }
 
-fn shebang_mentions(shebang: &str, name: &str) -> bool {
+fn shebang_mentions(shebang: &[u8], name: &[u8]) -> bool {
     shebang
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .split(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
         .any(|word| word == name)
 }
 
@@ -441,6 +726,7 @@ fn installed_launcher_contents(
     }
 
     let mut cmd = vec!["exec".to_string(), sh_quote_os(rscript)];
+    cmd.extend(executable.rscript_args.iter().map(|arg| sh_quote_str(arg)));
     match executable.launcher {
         PackageLauncher::Rscript => {
             cmd.push(sh_quote_path(&executable.path)?);
@@ -466,6 +752,7 @@ fn installed_launcher_contents(
     recovery_command: &str,
 ) -> Result<String, Box<dyn Error>> {
     let mut cmd = vec![cmd_quote_os(rscript)];
+    cmd.extend(executable.rscript_args.iter().map(|arg| cmd_quote_str(arg)));
     match executable.launcher {
         PackageLauncher::Rscript => {
             cmd.push(cmd_quote_path(&executable.path)?);

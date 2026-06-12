@@ -1781,10 +1781,10 @@ fn render_quarto_fixture_with_transitive_rmarkdown_renders() {
     let html = fs::read_to_string(fixture_dir.join("report-transitive.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd-transitive"), "{html}");
-    // Both the declared `quarto` and the transitively-pulled rmarkdown must be
+    // Both the declared `bookdown` and the transitively-pulled rmarkdown must be
     // materialised into the resolved run library, with rmarkdown's version read
     // from that library's DESCRIPTION.
-    assert!(html.contains("transitive.quarto_in_cache=true"), "{html}");
+    assert!(html.contains("transitive.bookdown_in_cache=true"), "{html}");
     assert!(
         html.contains("transitive.rmarkdown_in_cache=true"),
         "{html}"
@@ -2409,6 +2409,412 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
 
     let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[test]
+fn tool_run_and_install_use_launcher_metadata() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-launcher-metadata-cache");
+    let bin_dir = unique_dir("ir-tool-launcher-metadata-bin");
+    let package_dir = unique_dir("ir-tool-launcher-metadata-packages");
+    let package = write_r_source_package(&package_dir, "irtoolmeta", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("default-name.R"),
+        r#"#!/usr/bin/env Rscript
+#| name: ignored-top-level
+#| launcher:
+#|   name: custom-tool
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("utils.attached=", tolower("package:utils" %in% search()), "\n", sep = "")
+cat("package.function.exists=", tolower(exists("ok")), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("old-name.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: new-name
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=renamed\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("actual-old.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: old-name
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=actual\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("top-level.R"),
+        r#"#!/usr/bin/env Rscript
+#| name: top-level-tool
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=top-level\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "custom-tool"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=custom-tool");
+    assert_stdout_contains(&out, "utils.attached=true");
+    assert_stdout_contains(&out, "package.function.exists=false");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "old-name"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=old-name");
+    assert_stdout_contains(&out, "selected=actual");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "top-level-tool"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=top-level-tool");
+    assert_stdout_contains(&out, "selected=top-level");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "custom-tool");
+    assert_stdout_contains(&out, "new-name");
+    assert_stdout_contains(&out, "old-name");
+    assert_stdout_contains(&out, "top-level-tool");
+    assert!(
+        !launcher_path(&bin_dir, "default-name").exists(),
+        "launcher should use package launcher metadata"
+    );
+
+    let out = Command::new(launcher_path(&bin_dir, "custom-tool"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=custom-tool");
+    assert_stdout_contains(&out, "utils.attached=true");
+    assert_stdout_contains(&out, "package.function.exists=false");
+
+    let out = Command::new(launcher_path(&bin_dir, "top-level-tool"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=top-level-tool");
+    assert_stdout_contains(&out, "selected=top-level");
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_rejects_duplicate_launcher_metadata_names() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-duplicate-launcher-cache");
+    let package_dir = unique_dir("ir-tool-duplicate-launcher-packages");
+    let package = write_r_source_package(&package_dir, "irtooldupe", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("foo.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=basename\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("renamed.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: foo
+cat("selected=metadata\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "foo"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "duplicate launchers should fail\n{}",
+        output_text(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("multiple package executables map to launcher `foo`"),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_ignores_non_r_direct_file_for_metadata_name() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-non-r-direct-cache");
+    let package_dir = unique_dir("ir-tool-non-r-direct-packages");
+    let package = write_r_source_package(&package_dir, "irtoolnonr", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(exec_dir.join("picked"), "not an R launcher\n").unwrap();
+    fs::write(
+        exec_dir.join("metadata.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: picked
+cat("selected=metadata\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "picked"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=metadata");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_skips_binary_exec_files() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-binary-exec-cache");
+    let package_dir = unique_dir("ir-tool-binary-exec-packages");
+    let package = write_r_source_package(&package_dir, "irtoolbinary", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(exec_dir.join("helper.bin"), [0xff, 0xfe, b'\n']).unwrap();
+    fs::write(
+        exec_dir.join("valid-tool.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=valid\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "valid-tool"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=valid");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_install_rejects_invalid_metadata_launcher_names() {
+    let _guard = e2e_lock();
+    for (package_name, launcher_name) in [
+        ("irtoolbadname", "bad?name"),
+        ("irtoolpercentname", "foo%PATH%"),
+        ("irtooldotname", "."),
+        ("irtooldotdotname", ".."),
+    ] {
+        let cache_dir = unique_dir("ir-tool-invalid-launcher-cache");
+        let bin_dir = unique_dir("ir-tool-invalid-launcher-bin");
+        let package_dir = unique_dir("ir-tool-invalid-launcher-packages");
+        let package = write_r_source_package(&package_dir, package_name, &[]);
+        let exec_dir = package.join("exec");
+        fs::create_dir_all(&exec_dir).unwrap();
+        fs::write(
+            exec_dir.join("invalid.R"),
+            format!(
+                r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: {launcher_name}
+cat("not reached\n")
+"#
+            ),
+        )
+        .unwrap();
+        let package_ref = format!("local::{}", renviron_path(&package));
+
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["tool", "install", "--bin-dir"])
+            .arg(&bin_dir)
+            .arg(&package_ref)
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "invalid launcher names should fail\n{}",
+            output_text(&out)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains(&format!("unsupported launcher name `{launcher_name}`")),
+            "{}",
+            output_text(&out)
+        );
+
+        let _ = fs::remove_dir_all(&bin_dir);
+        let _ = fs::remove_dir_all(&cache_dir);
+        let _ = fs::remove_dir_all(&package_dir);
+    }
+}
+
+#[test]
+fn tool_run_limits_metadata_lookup_to_primary_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-primary-package-cache");
+    let package_dir = unique_dir("ir-tool-primary-package-packages");
+    let dep = write_r_source_package(&package_dir, "irtooldep", &[]);
+    let dep_exec_dir = dep.join("exec");
+    fs::create_dir_all(&dep_exec_dir).unwrap();
+    fs::write(
+        dep_exec_dir.join("dep-tool.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: picked
+cat("selected=dependency\n")
+"#,
+    )
+    .unwrap();
+
+    let package = write_r_source_package(
+        &package_dir,
+        "irtoolprimary",
+        &[
+            "Imports: irtooldep".to_string(),
+            format!("Remotes: irtooldep=local::{}", renviron_path(&dep)),
+        ],
+    );
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("picked.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=primary\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "picked"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=primary");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_and_install_apply_package_default_packages() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-default-packages-cache");
+    let bin_dir = unique_dir("ir-tool-default-packages-bin");
+    let package_dir = unique_dir("ir-tool-default-packages-packages");
+    let package = write_r_source_package(
+        &package_dir,
+        "irtooldefaults",
+        &["Imports: Rapp".to_string()],
+    );
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("no-launcher.R"),
+        r#"#!/usr/bin/env Rapp
+#| name: no-launcher-app
+
+cat("package.function=", ok(), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("null-default.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   default-packages: null
+cat("base.attached=", tolower("package:base" %in% search()), "\n", sep = "")
+cat("stats.attached=", tolower("package:stats" %in% search()), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "no-launcher-app"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "package.function=TRUE");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "null-default"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "base.attached=true");
+    assert_stdout_contains(&out, "stats.attached=false");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let out = Command::new(launcher_path(&bin_dir, "no-launcher-app"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "package.function=TRUE");
+
+    let out = Command::new(launcher_path(&bin_dir, "null-default"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "base.attached=true");
+    assert_stdout_contains(&out, "stats.attached=false");
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
 }
 
 #[cfg(unix)]

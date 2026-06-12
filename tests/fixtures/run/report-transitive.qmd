@@ -3,16 +3,16 @@ title: ir fixture transitive rmarkdown
 format: html
 ir:
   packages:
-    - quarto
+    - bookdown
 ---
 
 ```{r}
-# The `quarto` package Imports rmarkdown, so the resolver finds rmarkdown
+# The `bookdown` package Imports rmarkdown, so the resolver finds rmarkdown
 # already in the resolved set and does not inject its own seed. Attach both and
 # confirm each loads from ir's resolved run library: the normalised
 # path.package location (renv symlink resolved) must equal the normalised run
 # library entry, proving the loaded package is that copy, not a system one.
-pkgs <- c("quarto", "rmarkdown")
+pkgs <- c("bookdown", "rmarkdown")
 suppressPackageStartupMessages(invisible(lapply(
   pkgs,
   library,
@@ -29,7 +29,12 @@ in_cache <- function(pkg) {
 }
 
 cat("ir.fixture=qmd-transitive\n")
-cat("transitive.quarto_in_cache=", tolower(in_cache("quarto")), "\n", sep = "")
+cat(
+  "transitive.bookdown_in_cache=",
+  tolower(in_cache("bookdown")),
+  "\n",
+  sep = ""
+)
 cat(
   "transitive.rmarkdown_in_cache=",
   tolower(in_cache("rmarkdown")),
