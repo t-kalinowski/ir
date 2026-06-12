@@ -77,17 +77,95 @@ ir_tooling_packages <- function() c("pak", "renv", "secretbase")
 ir_tooling_repos <- function()
   c(CRAN = "https://packagemanager.posit.co/cran/latest")
 
-# Tooling packages not loadable from the current library paths. Uses
-# requireNamespace so a user who already has pak/renv/secretbase anywhere on
-# their search path pays nothing.
-ir_missing_tooling <- function(packages = ir_tooling_packages())
-  Filter(function(p) !requireNamespace(p, quietly = TRUE), packages)
-
 # Path to the tooling library, keyed by R version and platform so compiled
 # packages match the running R, mirroring renv's cache layout.
 ir_tooling_lib <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "tooling",
             paste0(getRversion(), "-", R.version$platform))
+
+# Tooling packages not already usable by the resolver. Prefer the private
+# tooling library, but accept ambient packages unless they come from R_LIBS_USER
+# and were built under a different R minor version.
+ir_missing_tooling <- function(packages = ir_tooling_packages(),
+                               lib = ir_tooling_lib()) {
+  r_libs_user <- Sys.getenv("R_LIBS_USER")
+  user_libs <- character()
+  if (nzchar(r_libs_user)) {
+    user_libs <- strsplit(r_libs_user, .Platform$path.sep, fixed = TRUE)[[1L]]
+    user_libs <- user_libs[nzchar(user_libs)]
+    user_libs <- normalizePath(user_libs, winslash = "/", mustWork = FALSE)
+  }
+
+  current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
+  missing <- character()
+  bad_user_libs <- character()
+  package_r_minor <- function(path) {
+    metadata <- file.path(path, "Meta", "package.rds")
+    info <- if (file.exists(metadata)) {
+      tryCatch(readRDS(metadata), error = function(e) NULL)
+    } else {
+      NULL
+    }
+
+    built_r <- if (is.null(info)) character() else as.character(info$Built$R)
+    if (length(built_r))
+      built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
+    built_r
+  }
+
+  if (length(user_libs)) {
+    user_secretbase <- find.package("secretbase", lib.loc = user_libs,
+                                    quiet = TRUE)
+    if (length(user_secretbase)) {
+      pkg_lib <- normalizePath(dirname(user_secretbase[[1L]]), winslash = "/",
+                               mustWork = FALSE)
+      if (!identical(package_r_minor(user_secretbase[[1L]]), current_r))
+        bad_user_libs <- c(bad_user_libs, pkg_lib)
+    }
+  }
+
+  for (pkg in packages) {
+    private_path <- find.package(pkg, lib.loc = lib, quiet = TRUE)
+    if (length(private_path)) next
+
+    path <- find.package(pkg, quiet = TRUE)
+    if (!length(path)) {
+      missing <- c(missing, pkg)
+      next
+    }
+
+    pkg_lib <- normalizePath(dirname(path[[1L]]), winslash = "/",
+                             mustWork = FALSE)
+    if (pkg_lib %in% user_libs) {
+      if (pkg_lib %in% bad_user_libs) {
+        missing <- c(missing, pkg)
+        next
+      }
+
+      if (!identical(package_r_minor(path[[1L]]), current_r)) {
+        bad_user_libs <- c(bad_user_libs, pkg_lib)
+        missing <- c(missing, pkg)
+        next
+      }
+    }
+  }
+
+  if (length(bad_user_libs)) {
+    bad_user_libs <- unique(bad_user_libs)
+    current_libs <- .libPaths()
+    current_libs_normalized <- normalizePath(current_libs, winslash = "/",
+                                             mustWork = FALSE)
+    .libPaths(current_libs[!current_libs_normalized %in% bad_user_libs])
+
+    user_libs <- user_libs[!user_libs %in% bad_user_libs]
+    if (length(user_libs))
+      Sys.setenv(R_LIBS_USER = paste(user_libs, collapse = .Platform$path.sep))
+    else
+      Sys.setenv(R_LIBS_USER = "NULL")
+  }
+
+  missing
+}
 
 # Ensure pak/renv/secretbase are available. Any that are missing are installed
 # into the tooling library, which is then put first on the search path.
@@ -97,12 +175,12 @@ ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
   dir.create(lib, recursive = TRUE, showWarnings = FALSE)
   .libPaths(c(lib, .libPaths()))
 
-  missing <- ir_missing_tooling()
+  missing <- ir_missing_tooling(lib = lib)
   if (!length(missing)) return(invisible())
 
   utils::install.packages(missing, lib = lib, repos = repos)
 
-  still_missing <- ir_missing_tooling()
+  still_missing <- ir_missing_tooling(lib = lib)
   if (length(still_missing))
     stop("could not install resolver tooling into ", lib, ": ",
          paste(still_missing, collapse = ", "), call. = FALSE)
