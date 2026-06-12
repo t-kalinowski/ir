@@ -83,13 +83,55 @@ ir_tooling_lib <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "tooling",
             paste0(getRversion(), "-", R.version$platform))
 
-# Tooling packages not installed in ir's private tooling library. Do not probe
-# with requireNamespace() over the full search path: an inherited user library
-# may hold ABI-incompatible tooling for another R version.
+# Tooling packages not already usable by the resolver. Prefer the private
+# tooling library, but accept ambient packages unless they come from R_LIBS_USER
+# and were built under a different R minor version.
 ir_missing_tooling <- function(packages = ir_tooling_packages(),
-                               lib = ir_tooling_lib())
-  Filter(function(p) !length(find.package(p, lib.loc = lib, quiet = TRUE)),
-         packages)
+                               lib = ir_tooling_lib()) {
+  r_libs_user <- Sys.getenv("R_LIBS_USER")
+  user_libs <- character()
+  if (nzchar(r_libs_user)) {
+    user_libs <- strsplit(r_libs_user, .Platform$path.sep, fixed = TRUE)[[1L]]
+    user_libs <- user_libs[nzchar(user_libs)]
+    user_libs <- normalizePath(user_libs, winslash = "/", mustWork = FALSE)
+  }
+
+  current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
+  missing <- character()
+
+  for (pkg in packages) {
+    private_path <- find.package(pkg, lib.loc = lib, quiet = TRUE)
+    if (length(private_path)) next
+
+    path <- find.package(pkg, quiet = TRUE)
+    if (!length(path)) {
+      missing <- c(missing, pkg)
+      next
+    }
+
+    pkg_lib <- normalizePath(dirname(path[[1L]]), winslash = "/",
+                             mustWork = FALSE)
+    if (pkg_lib %in% user_libs) {
+      metadata <- file.path(path[[1L]], "Meta", "package.rds")
+      info <- if (file.exists(metadata)) {
+        tryCatch(readRDS(metadata), error = function(e) NULL)
+      } else {
+        NULL
+      }
+
+      built_r <- if (is.null(info)) character() else as.character(info$Built$R)
+      if (length(built_r)) {
+        built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
+      }
+      if (!length(built_r) || !identical(built_r, current_r)) {
+        missing <- c(missing, pkg)
+        next
+      }
+    }
+  }
+
+  missing
+}
 
 # Ensure pak/renv/secretbase are available. Any that are missing are installed
 # into the tooling library, which is then put first on the search path.
