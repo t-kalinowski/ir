@@ -98,6 +98,7 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
 
   current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
   missing <- character()
+  bad_user_libs <- character()
 
   for (pkg in packages) {
     private_path <- find.package(pkg, lib.loc = lib, quiet = TRUE)
@@ -112,6 +113,11 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
     pkg_lib <- normalizePath(dirname(path[[1L]]), winslash = "/",
                              mustWork = FALSE)
     if (pkg_lib %in% user_libs) {
+      if (pkg_lib %in% bad_user_libs) {
+        missing <- c(missing, pkg)
+        next
+      }
+
       metadata <- file.path(path[[1L]], "Meta", "package.rds")
       info <- if (file.exists(metadata)) {
         tryCatch(readRDS(metadata), error = function(e) NULL)
@@ -124,10 +130,25 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
         built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
       }
       if (!length(built_r) || !identical(built_r, current_r)) {
+        bad_user_libs <- c(bad_user_libs, pkg_lib)
         missing <- c(missing, pkg)
         next
       }
     }
+  }
+
+  if (length(bad_user_libs)) {
+    bad_user_libs <- unique(bad_user_libs)
+    current_libs <- .libPaths()
+    current_libs_normalized <- normalizePath(current_libs, winslash = "/",
+                                             mustWork = FALSE)
+    .libPaths(current_libs[!current_libs_normalized %in% bad_user_libs])
+
+    user_libs <- user_libs[!user_libs %in% bad_user_libs]
+    if (length(user_libs))
+      Sys.setenv(R_LIBS_USER = paste(user_libs, collapse = .Platform$path.sep))
+    else
+      Sys.setenv(R_LIBS_USER = "NULL")
   }
 
   missing

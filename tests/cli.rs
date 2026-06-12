@@ -2019,7 +2019,8 @@ fn resolver_tooling_ignores_wrong_r_minor_user_library_package() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-ambient-tooling-cache");
     let ambient_library = unique_dir("ir-ambient-tooling-user-library");
-    let fake_load_marker = unique_path("ir-ambient-secretbase-loaded", "txt");
+    let fake_secretbase_load_marker = unique_path("ir-ambient-secretbase-loaded", "txt");
+    let fake_pillar_load_marker = unique_path("ir-ambient-pillar-loaded", "txt");
     let profile = unique_path("ir-tooling-install-profile", "R");
 
     fs::write(
@@ -2091,11 +2092,23 @@ ir_test_write_pkg(
   built = ir_test_wrong_r
 )
 ir_test_write_pkg(
+  Sys.getenv("R_LIBS_USER"),
+  "pillar",
+  "export(pillar_shaft)",
+  paste(
+    paste0(".onLoad <- function(...) writeLines('loaded', ", deparse({}), ")"),
+    "pillar_shaft <- function(x, ...) x",
+    sep = "\n"
+  ),
+  built = ir_test_wrong_r
+)
+ir_test_write_pkg(
   ir_test_private_lib,
   "pak",
   "export(pkg_deps)",
   paste(
     "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {{",
+    "  invisible(requireNamespace('pillar', quietly = TRUE))",
     "  refs <- as.character(refs)",
     "  data.frame(",
     "    status = rep('OK', length(refs)),",
@@ -2142,7 +2155,8 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
   }}
 }}, ns = "utils")
 "#,
-            r_string(&fake_load_marker)
+            r_string(&fake_secretbase_load_marker),
+            r_string(&fake_pillar_load_marker)
         ),
     )
     .unwrap();
@@ -2166,12 +2180,17 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=ambient-tooling");
     assert!(
-        !fake_load_marker.exists(),
+        !fake_secretbase_load_marker.exists(),
         "resolver should not load secretbase from ambient R_LIBS_USER"
+    );
+    assert!(
+        !fake_pillar_load_marker.exists(),
+        "resolver should remove wrong-R-minor R_LIBS_USER before pak loads auxiliary packages"
     );
 
     let _ = fs::remove_file(&profile);
-    let _ = fs::remove_file(&fake_load_marker);
+    let _ = fs::remove_file(&fake_secretbase_load_marker);
+    let _ = fs::remove_file(&fake_pillar_load_marker);
     let _ = fs::remove_dir_all(&ambient_library);
     let _ = fs::remove_dir_all(&cache_dir);
 }
