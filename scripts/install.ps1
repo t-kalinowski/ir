@@ -26,6 +26,8 @@ function Get-PathEntries([string]$PathValue) {
 }
 
 function Normalize-PathEntry([string]$PathEntry) {
+    $PathEntry = [Environment]::ExpandEnvironmentVariables($PathEntry)
+
     try {
         $PathEntry = (Resolve-Path -LiteralPath $PathEntry -ErrorAction Stop).ProviderPath
     } catch {

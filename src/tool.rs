@@ -79,9 +79,6 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
             .into());
         }
     }
-    if install.setup_bin_dir_on_path {
-        ensure_launcher_dir_on_path(&install.bin_dir)?;
-    }
 
     let mut installed = Vec::new();
     for executable in executables {
@@ -97,6 +94,9 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
             .map_err(|e| format!("failed to write launcher `{}`: {e}", target.display()))?;
         make_executable(&target)?;
         installed.push(executable.name);
+    }
+    if install.setup_bin_dir_on_path {
+        ensure_launcher_dir_on_path(&install.bin_dir)?;
     }
 
     println!(
@@ -679,6 +679,7 @@ fn ensure_launcher_dir_on_path(bin_dir: &Path) -> Result<(), Box<dyn Error>> {
 $ErrorActionPreference = "Stop"
 $InstallDir = $env:IR_NEW_PATH_ENTRY
 function Normalize-PathEntry([string]$PathEntry) {
+  $PathEntry = [Environment]::ExpandEnvironmentVariables($PathEntry)
   try { $PathEntry = (Resolve-Path -LiteralPath $PathEntry -ErrorAction Stop).ProviderPath } catch {}
   try { $PathEntry = [System.IO.Path]::GetFullPath($PathEntry) } catch {}
   return $PathEntry.TrimEnd('\').ToLowerInvariant()

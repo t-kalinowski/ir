@@ -636,9 +636,19 @@ fn install_scripts_configure_default_path_entries() {
     let ps1 = fs::read_to_string(manifest_dir.join("scripts/install.ps1")).unwrap();
     assert!(ps1.contains("Ensure-InstallDirOnPath"), "{ps1}");
     assert!(ps1.contains("IR_NO_MODIFY_PATH"), "{ps1}");
+    assert!(
+        ps1.contains("[Environment]::ExpandEnvironmentVariables($PathEntry)"),
+        "{ps1}"
+    );
     assert!(ps1.contains("Set-ItemProperty -Type ExpandString"), "{ps1}");
     assert!(ps1.contains("32767"), "{ps1}");
     assert!(ps1.contains("added $installDir to user PATH"), "{ps1}");
+
+    let tool_rs = fs::read_to_string(manifest_dir.join("src/tool.rs")).unwrap();
+    assert!(
+        tool_rs.contains("[Environment]::ExpandEnvironmentVariables($PathEntry)"),
+        "{tool_rs}"
+    );
 }
 
 #[test]
@@ -2646,6 +2656,63 @@ cat("mac.path.collision.fixture=TRUE\n")
         text.contains("already exists; pass --force to overwrite it"),
         "{text}"
     );
+    assert!(
+        !home.join(".zprofile").exists(),
+        "failed install should not write .zprofile\n{text}"
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_write_failure_does_not_modify_zprofile() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-write-failure-cache");
+    let home = unique_dir("ir-tool-install-write-failure-home");
+    let default_bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&default_bin_dir).unwrap();
+    let original_permissions = fs::metadata(&default_bin_dir).unwrap().permissions();
+    fs::set_permissions(&default_bin_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let package_dir = unique_dir("ir-tool-install-write-failure-packages");
+    let package = write_r_source_package(&package_dir, "irmacpathwritefailure", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.path.write.failure.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install"])
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    fs::set_permissions(&default_bin_dir, original_permissions).unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(text.contains("failed to write launcher"), "{text}");
     assert!(
         !home.join(".zprofile").exists(),
         "failed install should not write .zprofile\n{text}"
