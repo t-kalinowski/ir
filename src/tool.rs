@@ -175,7 +175,10 @@ fn find_package_executable_in_dir(
 
     for candidate in candidates {
         if candidate.is_file() {
-            return package_executable_from_path(&candidate).map(Some);
+            let candidate = package_executable_from_path(&candidate)?;
+            if candidate.name == executable {
+                return Ok(Some(candidate));
+            }
         }
     }
 
@@ -274,7 +277,8 @@ fn package_executable_from_path_and_launcher(
     path: &Path,
     launcher: PackageLauncher,
 ) -> Result<PackageExecutable, Box<dyn Error>> {
-    let metadata = package_launcher_metadata(path)?;
+    let package = package_executable_package(path)?;
+    let metadata = package_launcher_metadata(path, &package)?;
     let name = package_executable_launcher_name(path, metadata.name)?;
     Ok(PackageExecutable {
         name,
@@ -282,6 +286,21 @@ fn package_executable_from_path_and_launcher(
         launcher,
         rscript_args: metadata.rscript_args,
     })
+}
+
+fn package_executable_package(path: &Path) -> Result<String, Box<dyn Error>> {
+    let package = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            format!(
+                "package executable `{}` is not under a package exec directory",
+                path.display()
+            )
+        })?;
+    Ok(package.to_string())
 }
 
 fn package_executable_launcher_name(
@@ -323,7 +342,10 @@ struct PackageLauncherMetadata {
     rscript_args: Vec<String>,
 }
 
-fn package_launcher_metadata(path: &Path) -> Result<PackageLauncherMetadata, Box<dyn Error>> {
+fn package_launcher_metadata(
+    path: &Path,
+    package: &str,
+) -> Result<PackageLauncherMetadata, Box<dyn Error>> {
     let frontmatter = read_rapp_frontmatter_to_string(path)?;
     if frontmatter.trim().is_empty() {
         return Ok(PackageLauncherMetadata::default());
@@ -344,16 +366,12 @@ fn package_launcher_metadata(path: &Path) -> Result<PackageLauncherMetadata, Box
     }
 
     let launcher = launcher_frontmatter_mapping(&doc, path)?;
-    let launcher_name = match launcher {
+    let name = match launcher {
         Some(launcher) => launcher_optional_string(launcher, "name", path)?,
         None => None,
     };
-    let name = match launcher_name {
-        Some(name) => Some(name),
-        None => launcher_optional_string(&doc, "name", path)?,
-    };
     let rscript_args = match launcher {
-        Some(launcher) => launcher_rscript_args(launcher, path)?,
+        Some(launcher) => launcher_rscript_args(launcher, path, package)?,
         None => Vec::new(),
     };
 
@@ -408,7 +426,11 @@ fn rapp_hashpipe_content(line: &str) -> Option<&str> {
     line.trim_start().strip_prefix("#| ")
 }
 
-fn launcher_rscript_args(launcher: &Yaml<'_>, path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+fn launcher_rscript_args(
+    launcher: &Yaml<'_>,
+    path: &Path,
+    package: &str,
+) -> Result<Vec<String>, Box<dyn Error>> {
     let mut args = Vec::new();
     for (key, arg) in [
         ("vanilla", "--vanilla"),
@@ -424,7 +446,7 @@ fn launcher_rscript_args(launcher: &Yaml<'_>, path: &Path) -> Result<Vec<String>
         }
     }
 
-    let default_packages = launcher_default_packages(launcher, path)?;
+    let default_packages = launcher_default_packages(launcher, path, package)?;
     if !default_packages.is_empty() {
         args.push(format!("--default-packages={}", default_packages.join(",")));
     }
@@ -478,9 +500,10 @@ fn launcher_optional_bool(
 fn launcher_default_packages(
     mapping: &Yaml<'_>,
     path: &Path,
+    package: &str,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let Some(value) = launcher_mapping_get(mapping, "default-packages") else {
-        return Ok(Vec::new());
+        return Ok(vec!["base".to_string(), package.to_string()]);
     };
     if value.is_null() {
         return Ok(Vec::new());

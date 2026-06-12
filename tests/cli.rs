@@ -2078,9 +2078,37 @@ fn tool_run_and_install_use_launcher_metadata() {
         r#"#!/usr/bin/env Rscript
 #| launcher:
 #|   name: custom-tool
-#|   default-packages: [base, irtoolmeta]
 cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
 cat("package.function=", ok(), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("old-name.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: new-name
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=renamed\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("actual-old.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: old-name
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=actual\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("top-level.R"),
+        r#"#!/usr/bin/env Rscript
+#| name: Friendly Tool
+cat("launcher.name=", Sys.getenv("RAPP_LAUNCHER_NAME"), "\n", sep = "")
+cat("selected=top-level\n")
 "#,
     )
     .unwrap();
@@ -2097,6 +2125,24 @@ cat("package.function=", ok(), "\n", sep = "")
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "old-name"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=old-name");
+    assert_stdout_contains(&out, "selected=actual");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "top-level"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=top-level");
+    assert_stdout_contains(&out, "selected=top-level");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["tool", "install", "--bin-dir"])
         .arg(&bin_dir)
         .arg(&package_ref)
@@ -2104,6 +2150,9 @@ cat("package.function=", ok(), "\n", sep = "")
         .unwrap();
     assert_success(&out);
     assert_stdout_contains(&out, "custom-tool");
+    assert_stdout_contains(&out, "new-name");
+    assert_stdout_contains(&out, "old-name");
+    assert_stdout_contains(&out, "top-level");
     assert!(
         !launcher_path(&bin_dir, "default-name").exists(),
         "launcher should use package launcher metadata"
@@ -2115,6 +2164,13 @@ cat("package.function=", ok(), "\n", sep = "")
     assert_success(&out);
     assert_stdout_contains(&out, "launcher.name=custom-tool");
     assert_stdout_contains(&out, "package.function=TRUE");
+
+    let out = Command::new(launcher_path(&bin_dir, "top-level"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "launcher.name=top-level");
+    assert_stdout_contains(&out, "selected=top-level");
 
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&cache_dir);
