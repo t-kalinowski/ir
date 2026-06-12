@@ -1768,10 +1768,10 @@ fn render_quarto_fixture_with_transitive_rmarkdown_renders() {
     let html = fs::read_to_string(fixture_dir.join("report-transitive.html"))
         .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
     assert!(html.contains("ir.fixture=qmd-transitive"), "{html}");
-    // Both the declared `quarto` and the transitively-pulled rmarkdown must be
+    // Both the declared `bookdown` and the transitively-pulled rmarkdown must be
     // materialised into the resolved run library, with rmarkdown's version read
     // from that library's DESCRIPTION.
-    assert!(html.contains("transitive.quarto_in_cache=true"), "{html}");
+    assert!(html.contains("transitive.bookdown_in_cache=true"), "{html}");
     assert!(
         html.contains("transitive.rmarkdown_in_cache=true"),
         "{html}"
