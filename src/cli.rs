@@ -526,7 +526,10 @@ pub(crate) fn is_package_executable_name(name: &str) -> bool {
         && !name.chars().any(|c| {
             c.is_control()
                 || c.is_whitespace()
-                || matches!(c, '/' | '\\' | ':' | '"' | '<' | '>' | '|' | '?' | '*')
+                || matches!(
+                    c,
+                    '/' | '\\' | ':' | '"' | '<' | '>' | '|' | '?' | '*' | '%'
+                )
         })
 }
 

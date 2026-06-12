@@ -2291,46 +2291,54 @@ cat("selected=valid\n")
 }
 
 #[test]
-fn tool_install_rejects_invalid_metadata_launcher_name() {
+fn tool_install_rejects_invalid_metadata_launcher_names() {
     let _guard = e2e_lock();
-    let cache_dir = unique_dir("ir-tool-invalid-launcher-cache");
-    let bin_dir = unique_dir("ir-tool-invalid-launcher-bin");
-    let package_dir = unique_dir("ir-tool-invalid-launcher-packages");
-    let package = write_r_source_package(&package_dir, "irtoolbadname", &[]);
-    let exec_dir = package.join("exec");
-    fs::create_dir_all(&exec_dir).unwrap();
-    fs::write(
-        exec_dir.join("invalid.R"),
-        r#"#!/usr/bin/env Rscript
+    for (package_name, launcher_name) in [
+        ("irtoolbadname", "bad?name"),
+        ("irtoolpercentname", "foo%PATH%"),
+    ] {
+        let cache_dir = unique_dir("ir-tool-invalid-launcher-cache");
+        let bin_dir = unique_dir("ir-tool-invalid-launcher-bin");
+        let package_dir = unique_dir("ir-tool-invalid-launcher-packages");
+        let package = write_r_source_package(&package_dir, package_name, &[]);
+        let exec_dir = package.join("exec");
+        fs::create_dir_all(&exec_dir).unwrap();
+        fs::write(
+            exec_dir.join("invalid.R"),
+            format!(
+                r#"#!/usr/bin/env Rscript
 #| launcher:
-#|   name: bad?name
+#|   name: {launcher_name}
 cat("not reached\n")
-"#,
-    )
-    .unwrap();
-    let package_ref = format!("local::{}", renviron_path(&package));
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .args(["tool", "install", "--bin-dir"])
-        .arg(&bin_dir)
-        .arg(&package_ref)
-        .output()
+"#
+            ),
+        )
         .unwrap();
-    assert!(
-        !out.status.success(),
-        "invalid launcher names should fail\n{}",
-        output_text(&out)
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("unsupported launcher name `bad?name`"),
-        "{}",
-        output_text(&out)
-    );
+        let package_ref = format!("local::{}", renviron_path(&package));
 
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&package_dir);
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["tool", "install", "--bin-dir"])
+            .arg(&bin_dir)
+            .arg(&package_ref)
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "invalid launcher names should fail\n{}",
+            output_text(&out)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains(&format!("unsupported launcher name `{launcher_name}`")),
+            "{}",
+            output_text(&out)
+        );
+
+        let _ = fs::remove_dir_all(&bin_dir);
+        let _ = fs::remove_dir_all(&cache_dir);
+        let _ = fs::remove_dir_all(&package_dir);
+    }
 }
 
 #[test]
