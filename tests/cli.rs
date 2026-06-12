@@ -2257,6 +2257,36 @@ cat("selected=metadata\n")
 }
 
 #[test]
+fn tool_run_skips_binary_exec_files() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-binary-exec-cache");
+    let package_dir = unique_dir("ir-tool-binary-exec-packages");
+    let package = write_r_source_package(&package_dir, "irtoolbinary", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(exec_dir.join("helper.bin"), [0xff, 0xfe, b'\n']).unwrap();
+    fs::write(
+        exec_dir.join("valid-tool.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=valid\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "valid-tool"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=valid");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
 fn tool_run_limits_metadata_lookup_to_primary_package() {
     let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-primary-package-cache");

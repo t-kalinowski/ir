@@ -608,25 +608,25 @@ fn package_executable_launcher_kind(
     let file = File::open(executable)
         .map_err(|e| format!("cannot read executable `{}`: {e}", executable.display()))?;
     let mut reader = BufReader::new(file);
-    let mut shebang = String::new();
-    reader.read_line(&mut shebang)?;
+    let mut shebang = Vec::new();
+    reader.read_until(b'\n', &mut shebang)?;
 
-    if !shebang.starts_with("#!") {
+    if !shebang.starts_with(b"#!") {
         return Ok(None);
     }
 
-    if shebang_mentions(&shebang, "Rapp") {
+    if shebang_mentions(&shebang, b"Rapp") {
         Ok(Some(PackageLauncher::Rapp))
-    } else if shebang_mentions(&shebang, "Rscript") {
+    } else if shebang_mentions(&shebang, b"Rscript") {
         Ok(Some(PackageLauncher::Rscript))
     } else {
         Ok(None)
     }
 }
 
-fn shebang_mentions(shebang: &str, name: &str) -> bool {
+fn shebang_mentions(shebang: &[u8], name: &[u8]) -> bool {
     shebang
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .split(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
         .any(|word| word == name)
 }
 
