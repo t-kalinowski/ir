@@ -57,7 +57,7 @@ function Test-AnyTool {
 }
 
 function Get-PythonTool {
-    foreach ($name in @("python", "python3", "py")) {
+    foreach ($name in @("python", "python3")) {
         if (Test-Tool $name) {
             return $name
         }
@@ -86,6 +86,7 @@ function Add-KnownInstallPaths {
     Add-PathIfExists (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps")
     Add-PathIfExists (Join-Path $env:LOCALAPPDATA "Programs\Quarto\bin")
     Add-PathIfExists (Join-Path $env:ProgramFiles "Quarto\bin")
+    Add-PathIfExists (Join-Path $env:ProgramFiles "R\bin")
     Add-PathIfExists (Join-Path $env:ProgramFiles "R\rig\bin")
     Add-PathIfExists (Join-Path $env:LOCALAPPDATA "Programs\R\rig\bin")
 }
@@ -129,7 +130,7 @@ if ($DryRun -or (Test-Tool "rustup")) {
     Invoke-Step "rustup" @("default", "stable")
 }
 
-if (-not (Test-AnyTool @("python", "python3", "py"))) {
+if (-not (Test-AnyTool @("python", "python3"))) {
     Install-WingetPackage "Python.Python.3.13"
     Add-KnownInstallPaths
 }

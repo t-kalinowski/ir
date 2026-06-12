@@ -256,13 +256,40 @@ install_r_versions() {
   fi
 }
 
+rig_name_for_version() {
+  version="$1"
+  require_command python3
+  rig list --json | python3 -c '
+import json
+import sys
+
+version = sys.argv[1]
+text = "\n".join(
+    line for line in sys.stdin.read().splitlines()
+    if not line.startswith("[INFO]")
+)
+for install in json.loads(text):
+    if install.get("version") == version:
+        print(install["name"])
+        break
+else:
+    raise SystemExit(f"R {version} is not installed by rig")
+' "$version"
+}
+
 verify_install() {
   run cargo --version
   run rustc --version
   run python3 --version
   run rig --version
   run Rscript --version
-  run rig run -r "$TEST_R_VERSION" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run rig list --json
+    test_r_name="<rig-name-for-${TEST_R_VERSION}>"
+  else
+    test_r_name="$(rig_name_for_version "$TEST_R_VERSION")"
+  fi
+  run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
   run quarto --version
 }
 

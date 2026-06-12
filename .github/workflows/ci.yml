@@ -83,20 +83,6 @@ jobs:
             --skip r-release
           echo "IR_TEST_R_VERSION=4.4.3" >> "$GITHUB_ENV"
 
-      # `ir` resolves `--r-version` by version, but rig's own `run -r` matches the
-      # install name (e.g. `4.4-arm64` on macOS), so look the name up. The run
-      # library is built by `ir` with pak, so the second R only needs the
-      # resolver toolchain (pak ships with rig).
-      - name: Warm resolver tooling for the non-default R
-        if: runner.os != 'Windows'
-        run: |
-          name=$(rig list --json | jq -r '[.[] | select(.version == "4.4.3")][0].name')
-          # setup-r-dependencies exports R_LIBS_USER pointing at the default R's
-          # package cache. Install the resolver toolchain without it so these
-          # compiled packages land in 4.4.3's own library and match its ABI; the
-          # version-selection test likewise drops R_LIBS_USER when it runs `ir`.
-          env -u R_LIBS_USER rig run -r "$name" -e 'pak::pkg_install(c("pak", "renv", "secretbase"))'
-
       - run: cargo build --verbose
       - run: cargo test --verbose
         env:

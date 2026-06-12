@@ -28,6 +28,7 @@ fn assert_stdout_contains(output: &Output, expected: &str) {
     );
 }
 
+#[cfg(unix)]
 fn dev_deps_sh_plan(platform: &str) -> Output {
     Command::new("sh")
         .current_dir(repo_root())
@@ -41,6 +42,7 @@ fn dev_deps_sh_plan(platform: &str) -> Output {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn dev_deps_sh_plan_with_args(args: &[&str]) -> Output {
     Command::new("sh")
         .current_dir(repo_root())
@@ -50,6 +52,7 @@ fn dev_deps_sh_plan_with_args(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn install_dev_deps_sh_prints_linux_plan() {
     let out = dev_deps_sh_plan("linux-deb");
@@ -61,9 +64,16 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "quarto-linux-");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig list --json");
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
+        "{}",
+        output_text(&out)
+    );
 }
 
+#[cfg(unix)]
 #[test]
 fn install_dev_deps_sh_prints_macos_plan() {
     let out = dev_deps_sh_plan("macos");
@@ -76,8 +86,15 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "brew install --cask quarto");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig list --json");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
+        "{}",
+        output_text(&out)
+    );
 }
 
+#[cfg(unix)]
 #[test]
 fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
     let out = dev_deps_sh_plan_with_args(&[
@@ -97,6 +114,7 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
     assert_success(&out);
     assert_stdout_contains(&out, "https://rig.r-pkg.org/deb/rig.gpg");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig list --json");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("https://sh.rustup.rs"), "{stdout}");
     assert!(!stdout.contains("python3 python3-venv"), "{stdout}");
@@ -114,6 +132,8 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Keep the GitHub setup actions above"));
     assert!(!workflow.contains("Install rig (Linux)"));
     assert!(!workflow.contains("Install rig (macOS)"));
+    assert!(!workflow.contains("Warm resolver tooling for the non-default R"));
+    assert!(!workflow.contains("pak::pkg_install(c(\"pak\", \"renv\", \"secretbase\"))"));
 }
 
 #[cfg(windows)]
@@ -155,5 +175,8 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("Rustlang.Rustup"));
     assert!(script.contains("posit.rig"));
     assert!(script.contains("Posit.Quarto"));
+    assert!(script.contains(r#"Test-AnyTool @("python", "python3")"#));
+    assert!(!script.contains(r#"@("python", "python3", "py")"#));
+    assert!(script.contains("R\\bin"));
     assert!(script.contains("IR_TEST_R_VERSION=4.4.3"));
 }
