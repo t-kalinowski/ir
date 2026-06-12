@@ -99,6 +99,30 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
   current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
   missing <- character()
   bad_user_libs <- character()
+  package_r_minor <- function(path) {
+    metadata <- file.path(path, "Meta", "package.rds")
+    info <- if (file.exists(metadata)) {
+      tryCatch(readRDS(metadata), error = function(e) NULL)
+    } else {
+      NULL
+    }
+
+    built_r <- if (is.null(info)) character() else as.character(info$Built$R)
+    if (length(built_r))
+      built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
+    built_r
+  }
+
+  if (length(user_libs)) {
+    user_secretbase <- find.package("secretbase", lib.loc = user_libs,
+                                    quiet = TRUE)
+    if (length(user_secretbase)) {
+      pkg_lib <- normalizePath(dirname(user_secretbase[[1L]]), winslash = "/",
+                               mustWork = FALSE)
+      if (!identical(package_r_minor(user_secretbase[[1L]]), current_r))
+        bad_user_libs <- c(bad_user_libs, pkg_lib)
+    }
+  }
 
   for (pkg in packages) {
     private_path <- find.package(pkg, lib.loc = lib, quiet = TRUE)
@@ -118,18 +142,7 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
         next
       }
 
-      metadata <- file.path(path[[1L]], "Meta", "package.rds")
-      info <- if (file.exists(metadata)) {
-        tryCatch(readRDS(metadata), error = function(e) NULL)
-      } else {
-        NULL
-      }
-
-      built_r <- if (is.null(info)) character() else as.character(info$Built$R)
-      if (length(built_r)) {
-        built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
-      }
-      if (!length(built_r) || !identical(built_r, current_r)) {
+      if (!identical(package_r_minor(path[[1L]]), current_r)) {
         bad_user_libs <- c(bad_user_libs, pkg_lib)
         missing <- c(missing, pkg)
         next

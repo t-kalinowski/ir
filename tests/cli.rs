@@ -2161,7 +2161,7 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     )
     .unwrap();
 
-    let out = ir()
+    let first = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_LIBS_USER", &ambient_library)
         .env("R_PROFILE_USER", &profile)
@@ -2177,8 +2177,8 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
         .output()
         .unwrap();
 
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=ambient-tooling");
+    assert_success(&first);
+    assert_stdout_contains(&first, "ir.fixture=ambient-tooling");
     assert!(
         !fake_secretbase_load_marker.exists(),
         "resolver should not load secretbase from ambient R_LIBS_USER"
@@ -2186,6 +2186,29 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     assert!(
         !fake_pillar_load_marker.exists(),
         "resolver should remove wrong-R-minor R_LIBS_USER before pak loads auxiliary packages"
+    );
+
+    let second = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &ambient_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "glue",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=ambient-tooling-warm\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&second);
+    assert_stdout_contains(&second, "ir.fixture=ambient-tooling-warm");
+    assert!(
+        !fake_pillar_load_marker.exists(),
+        "resolver should prune wrong-R-minor R_LIBS_USER even when private tooling is warm"
     );
 
     let _ = fs::remove_file(&profile);
