@@ -320,7 +320,6 @@ fn raw_args_arg(help: &'static str) -> Arg {
 
 pub(crate) struct PackageExecTarget {
     pub(crate) package_ref: String,
-    pub(crate) package_name: Option<String>,
     pub(crate) executable: String,
 }
 
@@ -614,7 +613,6 @@ pub(crate) fn parse_tool_run_args(
             return Err("`--from` requires a command name, not a path".into());
         }
         PackageExecTarget {
-            package_name: infer_self_named_executable(&package_ref),
             package_ref,
             executable,
         }
@@ -629,7 +627,6 @@ pub(crate) fn parse_tool_run_args(
             .ok_or("self-named package tools require an inferable package name; use `--from <pkg-ref> <command>`")?;
         PackageExecTarget {
             package_ref,
-            package_name: Some(executable.clone()),
             executable,
         }
     };

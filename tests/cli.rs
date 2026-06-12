@@ -2177,6 +2177,210 @@ cat("selected=top-level\n")
     let _ = fs::remove_dir_all(&package_dir);
 }
 
+#[test]
+fn tool_run_rejects_duplicate_launcher_metadata_names() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-duplicate-launcher-cache");
+    let package_dir = unique_dir("ir-tool-duplicate-launcher-packages");
+    let package = write_r_source_package(&package_dir, "irtooldupe", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("foo.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=basename\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("renamed.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: foo
+cat("selected=metadata\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "foo"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "duplicate launchers should fail\n{}",
+        output_text(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("multiple package executables map to launcher `foo`"),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_ignores_non_r_direct_file_for_metadata_name() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-non-r-direct-cache");
+    let package_dir = unique_dir("ir-tool-non-r-direct-packages");
+    let package = write_r_source_package(&package_dir, "irtoolnonr", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(exec_dir.join("picked"), "not an R launcher\n").unwrap();
+    fs::write(
+        exec_dir.join("metadata.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: picked
+cat("selected=metadata\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "picked"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=metadata");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_limits_metadata_lookup_to_primary_package() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-primary-package-cache");
+    let package_dir = unique_dir("ir-tool-primary-package-packages");
+    let dep = write_r_source_package(&package_dir, "irtooldep", &[]);
+    let dep_exec_dir = dep.join("exec");
+    fs::create_dir_all(&dep_exec_dir).unwrap();
+    fs::write(
+        dep_exec_dir.join("dep-tool.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   name: picked
+cat("selected=dependency\n")
+"#,
+    )
+    .unwrap();
+
+    let package = write_r_source_package(
+        &package_dir,
+        "irtoolprimary",
+        &[
+            "Imports: irtooldep".to_string(),
+            format!("Remotes: irtooldep=local::{}", renviron_path(&dep)),
+        ],
+    );
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("picked.R"),
+        r#"#!/usr/bin/env Rscript
+cat("selected=primary\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "picked"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=primary");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[test]
+fn tool_run_and_install_apply_package_default_packages() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-default-packages-cache");
+    let bin_dir = unique_dir("ir-tool-default-packages-bin");
+    let package_dir = unique_dir("ir-tool-default-packages-packages");
+    let package = write_r_source_package(
+        &package_dir,
+        "irtooldefaults",
+        &["Imports: Rapp".to_string()],
+    );
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("no-launcher.R"),
+        r#"#!/usr/bin/env Rapp
+cat("package.function=", ok(), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        exec_dir.join("null-default.R"),
+        r#"#!/usr/bin/env Rscript
+#| launcher:
+#|   default-packages: null
+cat("base.attached=", tolower("package:base" %in% search()), "\n", sep = "")
+cat("stats.attached=", tolower("package:stats" %in% search()), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "no-launcher"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "package.function=TRUE");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "run", "--from", &package_ref, "null-default"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "base.attached=true");
+    assert_stdout_contains(&out, "stats.attached=false");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let out = Command::new(launcher_path(&bin_dir, "no-launcher"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "package.function=TRUE");
+
+    let out = Command::new(launcher_path(&bin_dir, "null-default"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "base.attached=true");
+    assert_stdout_contains(&out, "stats.attached=false");
+
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
