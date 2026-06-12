@@ -354,6 +354,7 @@ pub(crate) struct ToolInstallArgs {
     pub(crate) with_deps: Vec<String>,
     pub(crate) r_requirement: Option<String>,
     pub(crate) bin_dir: PathBuf,
+    pub(crate) setup_bin_dir_on_path: bool,
     pub(crate) force: bool,
 }
 
@@ -701,11 +702,13 @@ pub(crate) fn parse_tool_install_args(
         );
     }
 
+    let setup_bin_dir_on_path = bin_dir.is_none();
     Ok(ToolInstallArgs {
         package_ref: package_arg,
         with_deps,
         r_requirement,
         bin_dir: bin_dir.unwrap_or(tool_install_bin_dir()?),
+        setup_bin_dir_on_path,
         force,
     })
 }

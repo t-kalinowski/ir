@@ -145,6 +145,20 @@ fn unique_dir(prefix: &str) -> PathBuf {
     dir
 }
 
+#[cfg(target_os = "macos")]
+fn tree_contains_dir_named(root: &Path, name: &str) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.is_dir()
+            && (path.file_name() == Some(std::ffi::OsStr::new(name))
+                || tree_contains_dir_named(&path, name))
+    })
+}
+
 fn unique_dir_in(parent: &Path, prefix: &str) -> (PathBuf, OsString) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -225,6 +239,11 @@ fn assert_success(output: &Output) {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+}
+
+#[cfg(target_os = "macos")]
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n")
 }
 
 fn assert_stdout_contains(output: &Output, needle: &str) {
@@ -597,6 +616,39 @@ fn docs_run_page_dark_mode_styles_console_blocks() {
     );
 
     let _ = fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn install_scripts_configure_default_path_entries() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let sh = fs::read_to_string(manifest_dir.join("scripts/install.sh")).unwrap();
+    assert!(sh.contains("ensure_install_dir_on_path"), "{sh}");
+    assert!(sh.contains("IR_NO_MODIFY_PATH"), "{sh}");
+    assert!(sh.contains("ZDOTDIR"), "{sh}");
+    assert!(sh.contains("Added ~/.local/bin to PATH in"), "{sh}");
+    assert!(sh.contains("profile_display"), "{sh}");
+    assert!(
+        sh.contains("add ${INSTALL_DIR} to your PATH to run ${commands}"),
+        "{sh}"
+    );
+
+    let ps1 = fs::read_to_string(manifest_dir.join("scripts/install.ps1")).unwrap();
+    assert!(ps1.contains("Ensure-InstallDirOnPath"), "{ps1}");
+    assert!(ps1.contains("IR_NO_MODIFY_PATH"), "{ps1}");
+    assert!(
+        ps1.contains("[Environment]::ExpandEnvironmentVariables($PathEntry)"),
+        "{ps1}"
+    );
+    assert!(ps1.contains("Set-ItemProperty -Type ExpandString"), "{ps1}");
+    assert!(ps1.contains("32767"), "{ps1}");
+    assert!(ps1.contains("added $installDir to user PATH"), "{ps1}");
+
+    let tool_rs = fs::read_to_string(manifest_dir.join("src/tool.rs")).unwrap();
+    assert!(
+        tool_rs.contains("[Environment]::ExpandEnvironmentVariables($PathEntry)"),
+        "{tool_rs}"
+    );
 }
 
 #[test]
@@ -2409,6 +2461,266 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
 
     let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_adds_default_macos_bin_dir_to_zprofile_once() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-macos-path-cache");
+    let home = unique_dir("ir-tool-install-macos-path-home");
+    let default_bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&default_bin_dir).unwrap();
+    let package_dir = unique_dir("ir-tool-install-macos-path-packages");
+    let package = write_r_source_package(&package_dir, "irmacpath", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.path.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install"])
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let first_stderr = stderr(&out);
+    assert!(
+        first_stderr.contains("Added ~/.local/bin to PATH in ~/.zprofile"),
+        "{}",
+        output_text(&out)
+    );
+    assert_stdout_contains(&out, "Installed");
+    assert!(launcher_path(&default_bin_dir, "hello").exists());
+    assert!(
+        !tree_contains_dir_named(&cache_dir, "Rapp"),
+        "PATH setup should not add a hidden Rapp dependency"
+    );
+
+    let zprofile = fs::read_to_string(home.join(".zprofile")).unwrap();
+    assert_eq!(
+        zprofile,
+        concat!(
+            "\n",
+            "case \":$PATH:\" in\n",
+            "  *:\"$HOME/.local/bin\":*) ;;\n",
+            "  *) export PATH=\"$HOME/.local/bin:$PATH\" ;;\n",
+            "esac\n"
+        )
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install", "--force"])
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed");
+    let second_stderr = stderr(&out);
+    assert!(
+        !second_stderr.contains("PATH"),
+        "reinstall should not rerun PATH setup:\n{second_stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join(".zprofile")).unwrap(),
+        zprofile
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_custom_bin_dir_skips_default_macos_path_setup() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-custom-path-cache");
+    let home = unique_dir("ir-tool-install-custom-path-home");
+    let bin_dir = unique_path("ir-tool-install-custom-path-bin", "");
+    let package_dir = unique_dir("ir-tool-install-custom-path-packages");
+    let package = write_r_source_package(&package_dir, "irmaccustompath", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.custom.path.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed");
+    assert!(launcher_path(&bin_dir, "hello").exists());
+    assert!(!home.join(".local").join("bin").exists());
+    assert!(!home.join(".zprofile").exists());
+    assert!(!stderr(&out).contains("PATH"));
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_existing_launcher_does_not_modify_zprofile() {
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-collision-path-cache");
+    let home = unique_dir("ir-tool-install-collision-path-home");
+    let default_bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&default_bin_dir).unwrap();
+    fs::write(
+        launcher_path(&default_bin_dir, "hello"),
+        "existing launcher\n",
+    )
+    .unwrap();
+    let package_dir = unique_dir("ir-tool-install-collision-path-packages");
+    let package = write_r_source_package(&package_dir, "irmacpathcollision", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.path.collision.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install"])
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains("already exists; pass --force to overwrite it"),
+        "{text}"
+    );
+    assert!(
+        !home.join(".zprofile").exists(),
+        "failed install should not write .zprofile\n{text}"
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&package_dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tool_install_write_failure_does_not_modify_zprofile() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let _guard = e2e_lock();
+    let cache_dir = unique_dir("ir-tool-install-write-failure-cache");
+    let home = unique_dir("ir-tool-install-write-failure-home");
+    let default_bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&default_bin_dir).unwrap();
+    let original_permissions = fs::metadata(&default_bin_dir).unwrap().permissions();
+    fs::set_permissions(&default_bin_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let package_dir = unique_dir("ir-tool-install-write-failure-packages");
+    let package = write_r_source_package(&package_dir, "irmacpathwritefailure", &[]);
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        r#"#!/usr/bin/env Rscript
+cat("mac.path.write.failure.fixture=TRUE\n")
+"#,
+    )
+    .unwrap();
+    let package_ref = format!("local::{}", renviron_path(&package));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("ZDOTDIR")
+        .env_remove("IR_TOOL_BIN_DIR")
+        .env_remove("RAPP_BIN_DIR")
+        .env_remove("XDG_BIN_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("IR_NO_MODIFY_PATH")
+        .args(["tool", "install"])
+        .arg(&package_ref)
+        .output()
+        .unwrap();
+
+    fs::set_permissions(&default_bin_dir, original_permissions).unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(text.contains("failed to write launcher"), "{text}");
+    assert!(
+        !home.join(".zprofile").exists(),
+        "failed install should not write .zprofile\n{text}"
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&package_dir);
 }
 
 #[test]
