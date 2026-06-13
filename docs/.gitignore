@@ -1,3 +1,4 @@
 /.quarto/
 /_site/
+/ir-docs-*-output*/
 **/*.quarto_ipynb

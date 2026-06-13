@@ -13,6 +13,7 @@ SKIP_RUST=0
 SKIP_PYTHON=0
 SKIP_QUARTO=0
 SKIP_R_RELEASE=0
+SKIP_TEST_R=0
 
 usage() {
   cat <<EOF
@@ -24,7 +25,7 @@ Use scripts/install-dev-deps.ps1 on Windows.
 Options:
   --dry-run           Print the commands without running them.
   --platform PLATFORM Print or run the plan for a supported platform.
-  --skip COMPONENT    Skip installing rust, python, quarto, or r-release.
+  --skip COMPONENT    Skip installing rust, python, quarto, r-release, or test-r.
   -h, --help          Show this help.
 EOF
 }
@@ -81,6 +82,9 @@ skip_component() {
       ;;
     r-release)
       SKIP_R_RELEASE=1
+      ;;
+    test-r)
+      SKIP_TEST_R=1
       ;;
     *)
       die "unsupported skip component: $1"
@@ -250,9 +254,8 @@ install_r_versions() {
   if [ "$SKIP_R_RELEASE" -eq 0 ]; then
     run rig add release
   fi
-  run rig add "$TEST_R_VERSION"
-  if [ "$SKIP_R_RELEASE" -eq 0 ]; then
-    run rig default release
+  if [ "$SKIP_TEST_R" -eq 0 ]; then
+    run rig add "$TEST_R_VERSION"
   fi
 }
 
@@ -283,13 +286,15 @@ verify_install() {
   run python3 --version
   run rig --version
   run Rscript --version
-  if [ "$DRY_RUN" -eq 1 ]; then
+  if [ "$SKIP_TEST_R" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     run rig list --json
     test_r_name="<rig-name-for-${TEST_R_VERSION}>"
-  else
+  elif [ "$SKIP_TEST_R" -eq 0 ]; then
     test_r_name="$(rig_name_for_version "$TEST_R_VERSION")"
   fi
-  run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
+  if [ "$SKIP_TEST_R" -eq 0 ]; then
+    run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
+  fi
   run quarto --version
 }
 
@@ -297,6 +302,13 @@ print_next_steps() {
   cat <<EOF
 
 Developer dependencies are installed.
+EOF
+
+  if [ "$SKIP_TEST_R" -eq 1 ]; then
+    return
+  fi
+
+  cat <<EOF
 To enable the version-selection tests in this shell, run:
 
   export IR_TEST_R_VERSION=${TEST_R_VERSION}

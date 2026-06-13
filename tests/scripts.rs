@@ -67,6 +67,11 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "rig list --json");
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
     assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
         output_text(&out)
@@ -87,6 +92,11 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
     assert_stdout_contains(&out, "rig list --json");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
@@ -129,11 +139,73 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
-    assert!(workflow.contains("Keep the GitHub setup actions above"));
+    assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
+    assert!(workflow.contains("Use rig for R itself so CI has one R installer"));
+    assert!(workflow.contains("Install R package test dependencies"));
+    assert!(workflow.contains("Rscript scripts/install-test-r-deps.R"));
+    assert!(workflow.contains("Install rig and non-default R (Unix)"));
+    assert!(workflow.contains("Install rig and non-default R (Windows)"));
+    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
+    assert!(workflow.contains("--skip quarto"));
+    assert!(workflow.contains("-Skip rust, python, quarto"));
+    assert!(!workflow.contains("r-lib/actions/setup-r"));
+    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
+    assert!(!workflow.contains("IR_RSCRIPT"));
+    assert!(!workflow.contains("--skip r-release"));
+    assert!(!workflow.contains("-Skip rust, python, quarto, r-release"));
+    assert!(
+        !workflow.contains("-Skip rust `\n            -Skip python"),
+        "PowerShell array parameters must be passed in one binding"
+    );
+    assert!(!workflow.contains("#32"));
+    assert!(!workflow.contains(r"\\?\"));
     assert!(!workflow.contains("Install rig (Linux)"));
     assert!(!workflow.contains("Install rig (macOS)"));
     assert!(!workflow.contains("Warm resolver tooling for the non-default R"));
     assert!(!workflow.contains("pak::pkg_install(c(\"pak\", \"renv\", \"secretbase\"))"));
+}
+
+#[test]
+fn docs_workflow_requires_all_ci_jobs() {
+    let path = repo_root().join(".github/workflows/docs.yml");
+    let workflow = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    assert!(
+        !workflow.contains("known-broken"),
+        "docs should not publish around known-broken CI jobs"
+    );
+    assert!(workflow.contains("Install R with rig"));
+    assert!(workflow.contains("scripts/install-dev-deps.sh"));
+    assert!(workflow.contains("--skip test-r"));
+    assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
+    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
+    assert!(!workflow.contains("r-lib/actions/setup-r"));
+    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
+    assert!(
+        !workflow.contains("workflow_dispatch"),
+        "docs should publish only from completed CI runs"
+    );
+    assert!(
+        !workflow.contains("skips the CI-jobs gate"),
+        "docs should not have a manual CI-gate bypass"
+    );
+    assert!(
+        !workflow.contains("github.event_name == 'workflow_run'"),
+        "the CI gate should not be conditional on event type"
+    );
+    assert!(
+        !workflow.contains("github.sha"),
+        "docs checkout should use the CI-triggering commit, not a manual dispatch ref"
+    );
+    assert!(
+        !workflow.contains("non-Windows"),
+        "docs should require all CI jobs, including Windows"
+    );
+    assert!(
+        !workflow.contains(r#"test("windows"; "i")"#),
+        "docs should not filter Windows CI jobs out of the gate"
+    );
 }
 
 #[cfg(windows)]
@@ -141,6 +213,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 fn install_dev_deps_ps1_prints_windows_plan() {
     let out = Command::new("powershell")
         .current_dir(repo_root())
+        .env_remove("GITHUB_ACTIONS")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -165,7 +238,40 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     assert_stdout_contains(&out, "winget install --id Posit.Quarto");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+}
+
+#[cfg(windows)]
+#[test]
+fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
+    let out = Command::new("powershell")
+        .current_dir(repo_root())
+        .env("GITHUB_ACTIONS", "true")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "choco install rig -y --no-progress");
+    assert_stdout_contains(&out, "rig add release");
+    assert_stdout_contains(&out, "rig add 4.4.3");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig default release"), "{stdout}");
+    assert!(
+        !stdout.contains("winget install --id posit.rig"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -178,8 +284,17 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("https://win.rustup.rs"));
     assert!(!script.contains("Rustlang.Rustup"));
     assert!(script.contains("posit.rig"));
+    assert!(script.contains("choco"));
     assert!(script.contains("Posit.Quarto"));
+    assert!(script.contains("ProgramFiles \"rig\""));
+    assert!(script.contains("ProgramFiles \"rig\\bin\""));
+    assert!(script.contains("[string[]]$Skip"));
+    assert!(script.contains("unsupported skip component"));
     assert!(script.contains("function Test-RunnableTool"));
+    assert!(
+        !script.contains("Require-Tool \"winget\"\nAdd-KnownInstallPaths"),
+        "Windows CI must not require winget before honoring skipped components"
+    );
     assert!(script.contains("Microsoft\\WindowsApps"));
     assert!(script.contains(r#"Test-AnyRunnableTool @("python", "python3")"#));
     assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
