@@ -4,13 +4,28 @@
 
 [CmdletBinding()]
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string[]]$Skip = @()
 )
 
 $ErrorActionPreference = "Stop"
 
 $TestRVersion = "4.4.3"
 $RustupInitUrl = "https://win.rustup.rs"
+$SkipRust = $false
+$SkipPython = $false
+$SkipQuarto = $false
+$SkipRRelease = $false
+
+foreach ($component in $Skip) {
+    switch ($component) {
+        "rust" { $SkipRust = $true }
+        "python" { $SkipPython = $true }
+        "quarto" { $SkipQuarto = $true }
+        "r-release" { $SkipRRelease = $true }
+        default { throw "unsupported skip component: $component" }
+    }
+}
 
 function Write-Step {
     param(
@@ -158,7 +173,7 @@ function Install-Rustup {
 Require-Tool "winget"
 Add-KnownInstallPaths
 
-if (-not (Test-Tool "cl")) {
+if (-not $SkipRust -and -not (Test-Tool "cl")) {
     Invoke-Step "winget" @(
         "install",
         "--id",
@@ -171,17 +186,17 @@ if (-not (Test-Tool "cl")) {
     )
 }
 
-if (-not (Test-Tool "cargo")) {
+if (-not $SkipRust -and -not (Test-Tool "cargo")) {
     Install-Rustup
     Add-KnownInstallPaths
 }
 
-if ($DryRun -or (Test-Tool "rustup")) {
+if (-not $SkipRust -and ($DryRun -or (Test-Tool "rustup"))) {
     Invoke-Step "rustup" @("toolchain", "install", "stable", "--component", "rustfmt", "--component", "clippy")
     Invoke-Step "rustup" @("default", "stable")
 }
 
-if (-not (Test-AnyRunnableTool @("python", "python3"))) {
+if (-not $SkipPython -and -not (Test-AnyRunnableTool @("python", "python3"))) {
     Install-WingetPackage "Python.Python.3.13"
     Add-KnownInstallPaths
 }
@@ -191,7 +206,7 @@ if (-not (Test-Tool "rig")) {
     Add-KnownInstallPaths
 }
 
-if (-not (Test-Tool "quarto")) {
+if (-not $SkipQuarto -and -not (Test-Tool "quarto")) {
     Install-WingetPackage "Posit.Quarto"
     Add-KnownInstallPaths
 }
@@ -200,9 +215,13 @@ if (-not $DryRun -and -not (Test-Tool "rig")) {
     throw "rig is not on PATH after installation; restart PowerShell and rerun this script"
 }
 
-Invoke-Step "rig" @("add", "release")
+if (-not $SkipRRelease) {
+    Invoke-Step "rig" @("add", "release")
+}
 Invoke-Step "rig" @("add", $TestRVersion)
-Invoke-Step "rig" @("default", "release")
+if (-not $SkipRRelease) {
+    Invoke-Step "rig" @("default", "release")
+}
 
 Invoke-Step "cargo" @("--version")
 Invoke-Step "rustc" @("--version")

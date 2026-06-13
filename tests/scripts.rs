@@ -129,11 +129,52 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
+    assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
     assert!(workflow.contains("Keep the GitHub setup actions above"));
+    assert!(workflow.contains("Install rig and non-default R (Unix)"));
+    assert!(workflow.contains("Install rig and non-default R (Windows)"));
+    assert!(!workflow.contains("#32"));
+    assert!(!workflow.contains(r"\\?\"));
     assert!(!workflow.contains("Install rig (Linux)"));
     assert!(!workflow.contains("Install rig (macOS)"));
     assert!(!workflow.contains("Warm resolver tooling for the non-default R"));
     assert!(!workflow.contains("pak::pkg_install(c(\"pak\", \"renv\", \"secretbase\"))"));
+}
+
+#[test]
+fn docs_workflow_requires_all_ci_jobs() {
+    let path = repo_root().join(".github/workflows/docs.yml");
+    let workflow = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    assert!(
+        !workflow.contains("known-broken"),
+        "docs should not publish around known-broken CI jobs"
+    );
+    assert!(
+        !workflow.contains("workflow_dispatch"),
+        "docs should publish only from completed CI runs"
+    );
+    assert!(
+        !workflow.contains("skips the CI-jobs gate"),
+        "docs should not have a manual CI-gate bypass"
+    );
+    assert!(
+        !workflow.contains("github.event_name == 'workflow_run'"),
+        "the CI gate should not be conditional on event type"
+    );
+    assert!(
+        !workflow.contains("github.sha"),
+        "docs checkout should use the CI-triggering commit, not a manual dispatch ref"
+    );
+    assert!(
+        !workflow.contains("non-Windows"),
+        "docs should require all CI jobs, including Windows"
+    );
+    assert!(
+        !workflow.contains(r#"test("windows"; "i")"#),
+        "docs should not filter Windows CI jobs out of the gate"
+    );
 }
 
 #[cfg(windows)]
@@ -179,6 +220,8 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains("Rustlang.Rustup"));
     assert!(script.contains("posit.rig"));
     assert!(script.contains("Posit.Quarto"));
+    assert!(script.contains("[string[]]$Skip"));
+    assert!(script.contains("unsupported skip component"));
     assert!(script.contains("function Test-RunnableTool"));
     assert!(script.contains("Microsoft\\WindowsApps"));
     assert!(script.contains(r#"Test-AnyRunnableTool @("python", "python3")"#));
