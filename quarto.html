@@ -365,7 +365,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p><code>ir render</code> renders Quarto documents and Quarto-formatted R scripts with <code>quarto render</code>. Packages live under an <code>ir:</code> key in the source YAML.</p>
+<p><code>ir render</code> renders Quarto documents and Quarto-formatted R scripts with <code>quarto render</code>. Runtime metadata lives under an <code>ir:</code> key in the source YAML.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">title</span><span class="kw">:</span><span class="at"> My report</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">ir</span><span class="kw">:</span></span>
@@ -396,7 +396,7 @@ $ ir render --vanilla report.qmd</code></pre>
 <section id="rmarkdown-injection" class="level2">
 <h2 class="anchored" data-anchor-id="rmarkdown-injection">rmarkdown injection</h2>
 <p>A Quarto render needs the <code>rmarkdown</code> package for the knitr engine. <code>ir</code> appends <code>rmarkdown</code> to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of <code>exclude-newer</code> when set).</p>
-<p>Declare <code>rmarkdown</code> yourself under <code>ir.packages</code> - directly (e.g.&nbsp;<code>rmarkdown@2.29</code>) or transitively, such as through <code>quarto</code> - to override the injected seed.</p>
+<p>Declare <code>rmarkdown</code> yourself under <code>ir.packages</code> - directly (for example, <code>rmarkdown@2.29</code>) or transitively through a package that imports it - to override the injected seed.</p>
 
 
 </section>
