@@ -133,7 +133,11 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Keep the GitHub setup actions above"));
     assert!(workflow.contains("Install rig and non-default R (Unix)"));
     assert!(workflow.contains("Install rig and non-default R (Windows)"));
-    assert!(workflow.contains("-Skip rust, python, quarto, r-release"));
+    assert!(workflow.contains("--skip quarto"));
+    assert!(workflow.contains("-Skip rust, python, quarto"));
+    assert!(!workflow.contains("IR_RSCRIPT"));
+    assert!(!workflow.contains("--skip r-release"));
+    assert!(!workflow.contains("-Skip rust, python, quarto, r-release"));
     assert!(
         !workflow.contains("-Skip rust `\n            -Skip python"),
         "PowerShell array parameters must be passed in one binding"
@@ -226,20 +230,21 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto, r-release",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto",
         ])
         .output()
         .unwrap();
 
     assert_success(&out);
     assert_stdout_contains(&out, "choco install rig -y --no-progress");
+    assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig default release");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("winget install --id posit.rig"),
         "{stdout}"
     );
-    assert!(!stdout.contains("rig add release"), "{stdout}");
 }
 
 #[test]
