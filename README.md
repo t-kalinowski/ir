@@ -117,3 +117,7 @@ For command details, configuration, and edge cases, see:
 - [Cache management](https://t-kalinowski.github.io/ir/cache.html)
 - [Install and configuration](https://t-kalinowski.github.io/ir/config.html)
 - [CLI reference](https://t-kalinowski.github.io/ir/reference.html)
+
+## License
+
+MIT. See [LICENSE](LICENSE).
