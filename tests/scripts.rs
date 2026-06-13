@@ -67,6 +67,11 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "rig list --json");
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
     assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
         output_text(&out)
@@ -87,6 +92,11 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
     assert_stdout_contains(&out, "rig list --json");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
@@ -130,11 +140,16 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
-    assert!(workflow.contains("Keep the GitHub setup actions above"));
+    assert!(workflow.contains("Use rig for R itself so CI has one R installer"));
+    assert!(workflow.contains("Install R package test dependencies"));
+    assert!(workflow.contains("Rscript scripts/install-test-r-deps.R"));
     assert!(workflow.contains("Install rig and non-default R (Unix)"));
     assert!(workflow.contains("Install rig and non-default R (Windows)"));
+    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
     assert!(workflow.contains("--skip quarto"));
     assert!(workflow.contains("-Skip rust, python, quarto"));
+    assert!(!workflow.contains("r-lib/actions/setup-r"));
+    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
     assert!(!workflow.contains("IR_RSCRIPT"));
     assert!(!workflow.contains("--skip r-release"));
     assert!(!workflow.contains("-Skip rust, python, quarto, r-release"));
@@ -160,6 +175,13 @@ fn docs_workflow_requires_all_ci_jobs() {
         !workflow.contains("known-broken"),
         "docs should not publish around known-broken CI jobs"
     );
+    assert!(workflow.contains("Install R with rig"));
+    assert!(workflow.contains("scripts/install-dev-deps.sh"));
+    assert!(workflow.contains("--skip test-r"));
+    assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
+    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
+    assert!(!workflow.contains("r-lib/actions/setup-r"));
+    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
     assert!(
         !workflow.contains("workflow_dispatch"),
         "docs should publish only from completed CI runs"
@@ -216,6 +238,11 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     assert_stdout_contains(&out, "winget install --id Posit.Quarto");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
 }
 
@@ -239,8 +266,8 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
     assert_stdout_contains(&out, "choco install rig -y --no-progress");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
-    assert_stdout_contains(&out, "rig default release");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig default release"), "{stdout}");
     assert!(
         !stdout.contains("winget install --id posit.rig"),
         "{stdout}"

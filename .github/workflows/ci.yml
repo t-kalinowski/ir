@@ -26,40 +26,12 @@ jobs:
         with:
           python-version: "3.13"
       - uses: quarto-dev/quarto-actions/setup@v2
-      - uses: r-lib/actions/setup-r@v2
-        with:
-          use-public-rspm: true
-      # No DESCRIPTION in this repo, so list the end-to-end fixture deps
-      # explicitly (overriding the action's default `deps::.`).
-      - uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          packages: |
-            any::pak
-            any::renv
-            any::secretbase
-            any::cli
-            any::glue
-            any::jsonlite
-            any::dplyr
-            any::tidyr
-            any::reticulate
-            any::fansi
-            any::htmltools
-            any::knitr
-            any::rmarkdown
-            any::quarto
-            any::btw
-            any::Rapp
-            any::docopt
-            any::pkgsearch
-            any::prettyunits
 
       - name: Install rig and non-default R (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Keep the GitHub setup actions above for Rust/Python/Quarto/default R
-          # caching and environment setup. Use rig's default release plus a
-          # second R to exercise version-selection tests.
+          # Keep the GitHub setup actions above for Rust/Python/Quarto setup.
+          # Use rig for R itself so CI has one R installer.
           scripts/install-dev-deps.sh \
             --skip rust \
             --skip python \
@@ -70,12 +42,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Keep the GitHub setup actions above for Rust/Python/Quarto/default R
-          # caching and environment setup. Use rig's default release plus a
-          # second R to exercise version-selection tests.
+          # Keep the GitHub setup actions above for Rust/Python/Quarto setup.
+          # Use rig for R itself so CI has one R installer.
           .\scripts\install-dev-deps.ps1 `
             -Skip rust, python, quarto
           Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=4.4.3"
+
+      - name: Install R package test dependencies
+        run: Rscript scripts/install-test-r-deps.R
+        env:
+          IR_TEST_R_REPOS: https://packagemanager.posit.co/cran/latest
 
       - run: cargo build --verbose
       - run: cargo test --verbose

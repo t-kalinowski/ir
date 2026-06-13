@@ -16,6 +16,7 @@ $SkipRust = $false
 $SkipPython = $false
 $SkipQuarto = $false
 $SkipRRelease = $false
+$SkipTestR = $false
 
 foreach ($component in $Skip) {
     switch ($component) {
@@ -23,6 +24,7 @@ foreach ($component in $Skip) {
         "python" { $SkipPython = $true }
         "quarto" { $SkipQuarto = $true }
         "r-release" { $SkipRRelease = $true }
+        "test-r" { $SkipTestR = $true }
         default { throw "unsupported skip component: $component" }
     }
 }
@@ -231,9 +233,8 @@ if (-not $DryRun -and -not (Test-Tool "rig")) {
 if (-not $SkipRRelease) {
     Invoke-Step "rig" @("add", "release")
 }
-Invoke-Step "rig" @("add", $TestRVersion)
-if (-not $SkipRRelease) {
-    Invoke-Step "rig" @("default", "release")
+if (-not $SkipTestR) {
+    Invoke-Step "rig" @("add", $TestRVersion)
 }
 
 Invoke-Step "cargo" @("--version")
@@ -241,11 +242,16 @@ Invoke-Step "rustc" @("--version")
 Invoke-Step (Get-PythonTool) @("--version")
 Invoke-Step "rig" @("--version")
 Invoke-Step "Rscript" @("--version")
-Invoke-Step "rig" @("run", "-r", $TestRVersion, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+if (-not $SkipTestR) {
+    Invoke-Step "rig" @("run", "-r", $TestRVersion, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+}
 Invoke-Step "quarto" @("--version")
 
 Write-Host ""
 Write-Host "Developer dependencies are installed."
+if ($SkipTestR) {
+    exit 0
+}
 Write-Host "To enable the version-selection tests in this PowerShell session, run:"
 Write-Host ""
 Write-Host "  `$env:IR_TEST_R_VERSION=4.4.3"
