@@ -57,9 +57,41 @@ function Test-AnyTool {
     return $false
 }
 
+function Test-RunnableTool {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    if ($DryRun) {
+        return $false
+    }
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        return $false
+    }
+
+    $windowsApps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+    if ($command.Source -and $command.Source.StartsWith($windowsApps, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+
+    & $Name --version *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Test-AnyRunnableTool {
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+
+    foreach ($name in $Names) {
+        if (Test-RunnableTool $name) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-PythonTool {
     foreach ($name in @("python", "python3")) {
-        if (Test-Tool $name) {
+        if (Test-RunnableTool $name) {
             return $name
         }
     }
@@ -149,7 +181,7 @@ if ($DryRun -or (Test-Tool "rustup")) {
     Invoke-Step "rustup" @("default", "stable")
 }
 
-if (-not (Test-AnyTool @("python", "python3"))) {
+if (-not (Test-AnyRunnableTool @("python", "python3"))) {
     Install-WingetPackage "Python.Python.3.13"
     Add-KnownInstallPaths
 }

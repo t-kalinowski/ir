@@ -179,7 +179,10 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains("Rustlang.Rustup"));
     assert!(script.contains("posit.rig"));
     assert!(script.contains("Posit.Quarto"));
-    assert!(script.contains(r#"Test-AnyTool @("python", "python3")"#));
+    assert!(script.contains("function Test-RunnableTool"));
+    assert!(script.contains("Microsoft\\WindowsApps"));
+    assert!(script.contains(r#"Test-AnyRunnableTool @("python", "python3")"#));
+    assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
     assert!(!script.contains(r#"@("python", "python3", "py")"#));
     assert!(script.contains("R\\bin"));
     assert!(script.contains("IR_TEST_R_VERSION=4.4.3"));
