@@ -5,20 +5,13 @@ packages <- c(
   "rmarkdown"
 )
 
-repos <- c(
-  CRAN = Sys.getenv(
-    "IR_DOCS_R_REPOS",
-    "https://packagemanager.posit.co/cran/latest"
-  )
-)
-
 is_missing <- function(package) {
   !requireNamespace(package, quietly = TRUE)
 }
 
 missing <- packages[vapply(packages, is_missing, logical(1))]
 if (length(missing)) {
-  install.packages(missing, repos = repos, Ncpus = 2)
+  pak::pkg_install(packages)
 }
 
 still_missing <- packages[vapply(packages, is_missing, logical(1))]

@@ -145,11 +145,11 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Rscript scripts/install-test-r-deps.R"));
     assert!(workflow.contains("Install rig and non-default R (Unix)"));
     assert!(workflow.contains("Install rig and non-default R (Windows)"));
-    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
     assert!(workflow.contains("--skip quarto"));
     assert!(workflow.contains("-Skip rust, python, quarto"));
     assert!(!workflow.contains("r-lib/actions/setup-r"));
     assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
+    assert!(!workflow.contains("IR_TEST_R_REPOS"));
     assert!(!workflow.contains("IR_RSCRIPT"));
     assert!(!workflow.contains("--skip r-release"));
     assert!(!workflow.contains("-Skip rust, python, quarto, r-release"));
@@ -179,7 +179,7 @@ fn docs_workflow_requires_all_ci_jobs() {
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
     assert!(workflow.contains("--skip test-r"));
     assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
-    assert!(workflow.contains("https://packagemanager.posit.co/cran/latest"));
+    assert!(!workflow.contains("IR_DOCS_R_REPOS"));
     assert!(!workflow.contains("r-lib/actions/setup-r"));
     assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
     assert!(
@@ -301,4 +301,33 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains(r#"@("python", "python3", "py")"#));
     assert!(script.contains("R\\bin"));
     assert!(script.contains("IR_TEST_R_VERSION=4.4.3"));
+}
+
+#[test]
+fn r_dependency_installers_use_rig_provided_pak() {
+    for script in [
+        "scripts/install-test-r-deps.R",
+        "scripts/install-docs-r-deps.R",
+    ] {
+        let path = repo_root().join(script);
+        let script = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+        assert!(script.contains("pak::pkg_install(packages)"));
+        assert!(
+            !script.contains("install.packages"),
+            "{} should let pak install package dependencies and system requirements",
+            path.display()
+        );
+        assert!(
+            !script.contains("dependencies = NA"),
+            "{} should rely on pak::pkg_install() defaults",
+            path.display()
+        );
+        assert!(
+            !script.contains("IR_TEST_R_REPOS") && !script.contains("IR_DOCS_R_REPOS"),
+            "{} should not carry custom repository plumbing",
+            path.display()
+        );
+    }
 }

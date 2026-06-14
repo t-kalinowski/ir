@@ -56,8 +56,6 @@ jobs:
 
       - name: Install R package docs dependencies
         run: Rscript scripts/install-docs-r-deps.R
-        env:
-          IR_DOCS_R_REPOS: https://packagemanager.posit.co/cran/latest
 
       - name: Build current ir
         shell: bash
