@@ -67,6 +67,11 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "rig list --json");
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
     assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
         output_text(&out)
@@ -87,6 +92,11 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
     assert_stdout_contains(&out, "rig list --json");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig run -r 4.4.3"),
         "{}",
@@ -122,6 +132,16 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
     assert!(!stdout.contains("rig add release"), "{stdout}");
 }
 
+#[cfg(unix)]
+#[test]
+fn install_dev_deps_sh_sets_rig_default_only_when_requested() {
+    let out =
+        dev_deps_sh_plan_with_args(&["--dry-run", "--platform", "linux-deb", "--set-rig-default"]);
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "rig default release");
+}
+
 #[test]
 fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     let path = repo_root().join(".github/workflows/ci.yml");
@@ -130,6 +150,16 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
     assert!(workflow.contains("Keep the GitHub setup actions above"));
+    assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
+    assert!(workflow.contains("Install rig and non-default R (Unix)"));
+    assert!(workflow.contains("Install rig and non-default R (Windows)"));
+    assert!(workflow.contains("-Skip rust, python, quarto, r-release"));
+    assert!(
+        !workflow.contains("-Skip rust `\n            -Skip python"),
+        "PowerShell array parameters must be passed in one binding"
+    );
+    assert!(!workflow.contains("#32"));
+    assert!(!workflow.contains(r"\\?\"));
     assert!(!workflow.contains("Install rig (Linux)"));
     assert!(!workflow.contains("Install rig (macOS)"));
     assert!(!workflow.contains("Warm resolver tooling for the non-default R"));
@@ -158,6 +188,7 @@ fn docs_workflow_requires_all_ci_jobs() {
 fn install_dev_deps_ps1_prints_windows_plan() {
     let out = Command::new("powershell")
         .current_dir(repo_root())
+        .env_remove("GITHUB_ACTIONS")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -182,7 +213,60 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     assert_stdout_contains(&out, "winget install --id Posit.Quarto");
     assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add 4.4.3");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
+        "{}",
+        output_text(&out)
+    );
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+}
+
+#[cfg(windows)]
+#[test]
+fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
+    let out = Command::new("powershell")
+        .current_dir(repo_root())
+        .env("GITHUB_ACTIONS", "true")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto, r-release",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "choco install rig -y --no-progress");
+    assert_stdout_contains(&out, "rig add 4.4.3");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("winget install --id posit.rig"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("rig add release"), "{stdout}");
+    assert!(!stdout.contains("rig default release"), "{stdout}");
+}
+
+#[cfg(windows)]
+#[test]
+fn install_dev_deps_ps1_sets_rig_default_only_when_requested() {
+    let out = Command::new("powershell")
+        .current_dir(repo_root())
+        .env_remove("GITHUB_ACTIONS")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -SetRigDefault",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "rig default release");
 }
 
 #[test]
@@ -195,8 +279,19 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("https://win.rustup.rs"));
     assert!(!script.contains("Rustlang.Rustup"));
     assert!(script.contains("posit.rig"));
+    assert!(script.contains("choco"));
     assert!(script.contains("Posit.Quarto"));
+    assert!(script.contains("ProgramFiles \"rig\""));
+    assert!(script.contains("ProgramFiles \"rig\\bin\""));
+    assert!(script.contains("[string[]]$Skip"));
+    assert!(script.contains("[switch]$SetRigDefault"));
+    assert!(script.contains("if ($SetRigDefault)"));
+    assert!(script.contains("unsupported skip component"));
     assert!(script.contains("function Test-RunnableTool"));
+    assert!(
+        !script.contains("Require-Tool \"winget\"\nAdd-KnownInstallPaths"),
+        "Windows CI must not require winget before honoring skipped components"
+    );
     assert!(script.contains("Microsoft\\WindowsApps"));
     assert!(script.contains(r#"Test-AnyRunnableTool @("python", "python3")"#));
     assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
