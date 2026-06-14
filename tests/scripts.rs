@@ -170,6 +170,33 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 }
 
 #[test]
+fn install_dev_deps_scripts_persist_release_r_for_ci_steps() {
+    let sh_path = repo_root().join("scripts/install-dev-deps.sh");
+    let sh = fs::read_to_string(&sh_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", sh_path.display()));
+    assert!(sh.contains("DEFAULT_RSCRIPT"));
+    assert!(sh.contains("scripts/resolve-test-r.py --release-rscript"));
+    assert!(sh.contains("IR_RSCRIPT"));
+    assert!(sh.contains("GITHUB_PATH"));
+    assert!(
+        !sh.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
+
+    let ps1_path = repo_root().join("scripts/install-dev-deps.ps1");
+    let ps1 = fs::read_to_string(&ps1_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", ps1_path.display()));
+    assert!(ps1.contains("$DefaultRscript"));
+    assert!(ps1.contains("scripts/resolve-test-r.py\" \"--release-rscript"));
+    assert!(ps1.contains("IR_RSCRIPT=$DefaultRscript"));
+    assert!(ps1.contains("GITHUB_PATH"));
+    assert!(
+        !ps1.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
+}
+
+#[test]
 fn docs_workflow_requires_all_ci_jobs() {
     let path = repo_root().join(".github/workflows/docs.yml");
     let workflow = fs::read_to_string(&path)
@@ -182,6 +209,7 @@ fn docs_workflow_requires_all_ci_jobs() {
     assert!(workflow.contains("Install R with rig"));
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
     assert!(workflow.contains("--skip test-r"));
+    assert!(workflow.contains("actions: read"));
     assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
     assert!(!workflow.contains("IR_DOCS_R_REPOS"));
     assert!(!workflow.contains("r-lib/actions/setup-r"));
@@ -307,6 +335,12 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("R\\bin"));
     assert!(script.contains("IR_TEST_R_VERSION=$TestRVersion"));
     assert!(script.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
+    assert!(script.contains("IR_RSCRIPT=$DefaultRscript"));
+    assert!(script.contains("GITHUB_PATH"));
+    assert!(
+        !script.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
 }
 
 #[test]

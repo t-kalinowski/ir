@@ -10,6 +10,7 @@ TEST_R_SPEC="oldrel/2"
 TEST_R_NAME=""
 TEST_R_VERSION=""
 TEST_R_EXCLUDE_NEWER=""
+DEFAULT_RSCRIPT=""
 DRY_RUN=0
 PLATFORM="auto"
 SKIP_RUST=0
@@ -280,12 +281,30 @@ load_test_r_metadata() {
   TEST_R_EXCLUDE_NEWER="$3"
 }
 
+load_default_rscript() {
+  if [ "$SKIP_R_RELEASE" -eq 1 ]; then
+    return
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    DEFAULT_RSCRIPT="<rig-release-Rscript>"
+    return
+  fi
+
+  require_command python3
+  DEFAULT_RSCRIPT="$(python3 scripts/resolve-test-r.py --release-rscript)"
+}
+
 verify_install() {
   run cargo --version
   run rustc --version
   run python3 --version
   run rig --version
-  run Rscript --version
+  if [ -n "$DEFAULT_RSCRIPT" ]; then
+    run "$DEFAULT_RSCRIPT" --version
+  else
+    run Rscript --version
+  fi
   if [ "$SKIP_TEST_R" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     run rig list --json
     test_r_name="<rig-name-for-${TEST_R_SPEC}>"
@@ -300,12 +319,23 @@ verify_install() {
 }
 
 persist_github_env() {
-  if [ "$SKIP_TEST_R" -eq 1 ] || [ "$DRY_RUN" -eq 1 ] || [ -z "${GITHUB_ENV:-}" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
     return
   fi
 
-  printf 'IR_TEST_R_VERSION=%s\n' "$TEST_R_VERSION" >>"$GITHUB_ENV"
-  printf 'IR_TEST_R_EXCLUDE_NEWER=%s\n' "$TEST_R_EXCLUDE_NEWER" >>"$GITHUB_ENV"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    if [ "$SKIP_TEST_R" -eq 0 ]; then
+      printf 'IR_TEST_R_VERSION=%s\n' "$TEST_R_VERSION" >>"$GITHUB_ENV"
+      printf 'IR_TEST_R_EXCLUDE_NEWER=%s\n' "$TEST_R_EXCLUDE_NEWER" >>"$GITHUB_ENV"
+    fi
+    if [ -n "$DEFAULT_RSCRIPT" ]; then
+      printf 'IR_RSCRIPT=%s\n' "$DEFAULT_RSCRIPT" >>"$GITHUB_ENV"
+    fi
+  fi
+
+  if [ -n "${GITHUB_PATH:-}" ] && [ -n "$DEFAULT_RSCRIPT" ]; then
+    dirname "$DEFAULT_RSCRIPT" >>"$GITHUB_PATH"
+  fi
 }
 
 print_next_steps() {
@@ -313,6 +343,15 @@ print_next_steps() {
 
 Developer dependencies are installed.
 EOF
+
+  if [ -n "$DEFAULT_RSCRIPT" ]; then
+    cat <<EOF
+To use rig's release R in this shell, run:
+
+  export IR_RSCRIPT=${DEFAULT_RSCRIPT}
+
+EOF
+  fi
 
   if [ "$SKIP_TEST_R" -eq 1 ]; then
     return
@@ -373,6 +412,7 @@ case "$PLATFORM" in
 esac
 
 install_r_versions
+load_default_rscript
 load_test_r_metadata
 verify_install
 persist_github_env
