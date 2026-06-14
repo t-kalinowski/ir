@@ -126,81 +126,6 @@ function Require-Tool {
     }
 }
 
-function ConvertFrom-RigJson {
-    param([Parameter(Mandatory = $true)][string[]]$Lines)
-
-    $json = ($Lines | Where-Object { -not $_.StartsWith("[INFO]") }) -join "`n"
-    return $json | ConvertFrom-Json
-}
-
-function Get-TestRMetadata {
-    $lines = & rig list --json
-    if ($LASTEXITCODE -ne 0) {
-        throw "rig list --json exited with code $LASTEXITCODE"
-    }
-
-    $installed = @(ConvertFrom-RigJson $lines)
-    $release = $installed |
-        Where-Object { $_.name -eq "release" -or $_.aliases -contains "release" } |
-        Select-Object -First 1
-
-    if ($null -eq $release) {
-        throw "rig does not report an installed release R"
-    }
-
-    if ($TestRSpec -eq "oldrel") {
-        $offset = 1
-    }
-    elseif ($TestRSpec.StartsWith("oldrel/")) {
-        $offset = [int](($TestRSpec -split "/", 2)[1])
-    }
-    else {
-        throw "unsupported test R spec: $TestRSpec"
-    }
-
-    $releaseVersion = [version]$release.version
-    if ($releaseVersion.Minor -lt $offset) {
-        throw "cannot resolve $TestRSpec relative to installed release R $($release.version)"
-    }
-
-    $targetMinor = $releaseVersion.Minor - $offset
-    $matches = @(
-        $installed |
-            Where-Object { $_.version -match "^\d+\.\d+\.\d+$" } |
-            ForEach-Object {
-                $version = [version]$_.version
-                if ($version.Major -eq $releaseVersion.Major -and $version.Minor -eq $targetMinor) {
-                    [pscustomobject]@{
-                        Version = $version
-                        Install = $_
-                    }
-                }
-            } |
-            Sort-Object Version -Descending
-    )
-    if (-not $matches) {
-        throw "R $($releaseVersion.Major).$targetMinor from $TestRSpec is not installed by rig"
-    }
-
-    $install = $matches[0].Install
-    $dateExpr = 'cat(sprintf("%s-%s-%s\n", R.version$year, R.version$month, R.version$day))'
-    $dateLines = & rig run -r $install.name -e $dateExpr
-    if ($LASTEXITCODE -ne 0) {
-        throw "rig run -r $($install.name) exited with code $LASTEXITCODE"
-    }
-    $dateMatch = ($dateLines | Select-String -Pattern "\d{4}-\d{2}-\d{2}" | Select-Object -First 1)
-    $date = if ($dateMatch) { $dateMatch.Matches[0].Value } else { "" }
-    if ($date -notmatch "^\d{4}-\d{2}-\d{2}$") {
-        throw "could not read R release date for $($install.name)"
-    }
-
-    return [pscustomobject]@{
-        Name = $install.name
-        Version = $install.version
-        Date = $date
-    }
-}
-
 function Set-TestRMetadata {
     if ($SkipTestR) {
         return
@@ -212,27 +137,18 @@ function Set-TestRMetadata {
         return
     }
 
-    $metadata = Get-TestRMetadata
-    $script:TestRName = $metadata.Name
-    $script:TestRVersion = $metadata.Version
-    $script:TestRExcludeNewer = $metadata.Date
-}
-
-function Get-RigNameForVersion {
-    param([Parameter(Mandatory = $true)][string]$Version)
-
-    $lines = & rig list --json
+    $metadata = & (Get-PythonTool) "scripts/resolve-test-r.py" $TestRSpec
     if ($LASTEXITCODE -ne 0) {
-        throw "rig list --json exited with code $LASTEXITCODE"
+        throw "scripts/resolve-test-r.py exited with code $LASTEXITCODE"
+    }
+    $fields = ([string]$metadata).Trim() -split "\s+"
+    if ($fields.Count -ne 3) {
+        throw "scripts/resolve-test-r.py returned unexpected output: $metadata"
     }
 
-    foreach ($install in @(ConvertFrom-RigJson $lines)) {
-        if ($install.version -eq $Version) {
-            return $install.name
-        }
-    }
-
-    throw "R $Version is not installed by rig"
+    $script:TestRName = $fields[0]
+    $script:TestRVersion = $fields[1]
+    $script:TestRExcludeNewer = $fields[2]
 }
 
 function Add-PathIfExists {
@@ -361,7 +277,10 @@ if (-not $SkipTestR) {
         $testRName = "<rig-name-for-$TestRSpec>"
     }
     else {
-        $testRName = if ($TestRName) { $TestRName } else { Get-RigNameForVersion $TestRVersion }
+        if (-not $TestRName) {
+            throw "test R metadata was not loaded"
+        }
+        $testRName = $TestRName
     }
     Invoke-Step "rig" @("run", "-r", $testRName, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
 }

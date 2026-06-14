@@ -310,6 +310,40 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
 }
 
 #[test]
+fn test_r_metadata_resolution_is_shared() {
+    let helper = repo_root().join("scripts/resolve-test-r.py");
+    assert!(
+        helper.exists(),
+        "test R metadata resolution should live in a shared helper"
+    );
+
+    for script in [
+        "scripts/install-dev-deps.sh",
+        "scripts/install-dev-deps.ps1",
+        "scripts/setup_codex_universal.sh",
+    ] {
+        let path = repo_root().join(script);
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        assert!(
+            text.contains("scripts/resolve-test-r.py"),
+            "{} should call the shared test R resolver",
+            path.display()
+        );
+        assert!(
+            !text.contains("def version_parts"),
+            "{} should not duplicate the resolver's Python code",
+            path.display()
+        );
+        assert!(
+            !text.contains("function Get-TestRMetadata"),
+            "{} should not duplicate the resolver's PowerShell code",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn r_dependency_installers_use_rig_provided_pak() {
     let path = repo_root().join("scripts/install-docs-r-deps.R");
     let script = fs::read_to_string(&path)
