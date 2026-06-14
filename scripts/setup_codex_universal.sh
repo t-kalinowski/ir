@@ -169,11 +169,52 @@ renv::install(
 )
 EOF
 
-rig add 4.4.3
-rig_name="$(
+rig add oldrel/2
+test_r_metadata="$(
   rig list --json |
-    jq -r '[.[] | select(.version == "4.4.3")][0].name'
+    python3 -c '
+import json
+import re
+import sys
+
+offset = 2
+
+def version_parts(value):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+text = "\n".join(
+    line for line in sys.stdin.read().splitlines()
+    if not line.startswith("[INFO]")
+)
+installed = json.loads(text)
+release = next(
+    (
+        install for install in installed
+        if install.get("name") == "release" or "release" in install.get("aliases", [])
+    ),
+    None,
+)
+if release is None:
+    raise SystemExit("rig does not report an installed release R")
+release_parts = version_parts(release.get("version", ""))
+if release_parts is None or release_parts[1] < offset:
+    raise SystemExit("cannot resolve oldrel/2 relative to installed release R " + str(release.get("version")))
+target = (release_parts[0], release_parts[1] - offset)
+matches = [
+    (parts, install)
+    for install in installed
+    for parts in [version_parts(install.get("version", ""))]
+    if parts is not None and parts[:2] == target
+]
+if not matches:
+    raise SystemExit(f"R {target[0]}.{target[1]} from oldrel/2 is not installed by rig")
+_, install = max(matches, key=lambda item: item[0])
+print(install["name"], install["version"])
+ '
 )"
+read -r rig_name test_r_version <<<"$test_r_metadata"
 cat > /tmp/ir-rig-setup.R <<'EOF'
 options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
 if (!requireNamespace("pak", quietly = TRUE)) {
@@ -200,8 +241,22 @@ stopifnot(
 )
 EOF
 env -u R_LIBS_USER rig run -r "$rig_name" -f /tmp/ir-rig-setup.R
-export IR_TEST_R_VERSION=4.4.3
-persist_export IR_TEST_R_VERSION 4.4.3
+test_r_exclude_newer="$(
+  rig run -r "$rig_name" -e 'cat(sprintf("%s-%s-%s\n", R.version$year, R.version$month, R.version$day))' |
+    python3 -c '
+import re
+import sys
+
+match = re.search(r"\d{4}-\d{2}-\d{2}", sys.stdin.read())
+if not match:
+    raise SystemExit("could not read R release date")
+print(match.group(0))
+'
+)"
+export IR_TEST_R_VERSION="$test_r_version"
+export IR_TEST_R_EXCLUDE_NEWER="$test_r_exclude_newer"
+persist_export IR_TEST_R_VERSION "$test_r_version"
+persist_export IR_TEST_R_EXCLUDE_NEWER "$test_r_exclude_newer"
 
 cores="$(nproc)"
 append_once "$HOME/.Renviron" 'NOT_CRAN=true'

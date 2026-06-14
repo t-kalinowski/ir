@@ -6,7 +6,10 @@
 
 set -eu
 
-TEST_R_VERSION="4.4.3"
+TEST_R_SPEC="oldrel/2"
+TEST_R_NAME=""
+TEST_R_VERSION=""
+TEST_R_EXCLUDE_NEWER=""
 DRY_RUN=0
 PLATFORM="auto"
 SKIP_RUST=0
@@ -19,7 +22,7 @@ usage() {
   cat <<EOF
 Usage: scripts/install-dev-deps.sh [--dry-run] [--platform macos|linux-deb] [--skip COMPONENT]
 
-Installs Rust, Python, rig, R release, R ${TEST_R_VERSION}, and Quarto.
+Installs Rust, Python, rig, R release, R ${TEST_R_SPEC} for tests, and Quarto.
 Use scripts/install-dev-deps.ps1 on Windows.
 
 Options:
@@ -255,8 +258,95 @@ install_r_versions() {
     run rig add release
   fi
   if [ "$SKIP_TEST_R" -eq 0 ]; then
-    run rig add "$TEST_R_VERSION"
+    run rig add "$TEST_R_SPEC"
   fi
+}
+
+resolve_test_r_install() {
+  spec="$1"
+  require_command python3
+  rig list --json | python3 -c '
+import json
+import re
+import sys
+
+spec = sys.argv[1]
+if spec == "oldrel":
+    offset = 1
+elif spec.startswith("oldrel/"):
+    offset = int(spec.split("/", 1)[1])
+else:
+    raise SystemExit(f"unsupported test R spec: {spec}")
+
+def version_parts(value):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+text = "\n".join(
+    line for line in sys.stdin.read().splitlines()
+    if not line.startswith("[INFO]")
+)
+installed = json.loads(text)
+release = next(
+    (
+        install for install in installed
+        if install.get("name") == "release" or "release" in install.get("aliases", [])
+    ),
+    None,
+)
+if release is None:
+    raise SystemExit("rig does not report an installed release R")
+
+release_parts = version_parts(release.get("version", ""))
+if release_parts is None or release_parts[1] < offset:
+    raise SystemExit(f"cannot resolve {spec} relative to installed release R {release.get('version')}")
+
+target = (release_parts[0], release_parts[1] - offset)
+matches = [
+    (parts, install)
+    for install in installed
+    for parts in [version_parts(install.get("version", ""))]
+    if parts is not None and parts[:2] == target
+]
+if not matches:
+    raise SystemExit(f"R {target[0]}.{target[1]} from {spec} is not installed by rig")
+
+_, install = max(matches, key=lambda item: item[0])
+print(install["name"], install["version"])
+' "$spec"
+}
+
+test_r_release_date() {
+  name="$1"
+  require_command python3
+  output="$(rig run -r "$name" -e 'cat(sprintf("%s-%s-%s\n", R.version$year, R.version$month, R.version$day))')"
+  printf '%s\n' "$output" | python3 -c '
+import re
+import sys
+
+match = re.search(r"\d{4}-\d{2}-\d{2}", sys.stdin.read())
+if not match:
+    raise SystemExit("could not read R release date")
+print(match.group(0))
+'
+}
+
+load_test_r_metadata() {
+  if [ "$SKIP_TEST_R" -eq 1 ]; then
+    return
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    TEST_R_VERSION="<resolved-${TEST_R_SPEC}-version>"
+    TEST_R_EXCLUDE_NEWER="<release-date-for-${TEST_R_SPEC}>"
+    return
+  fi
+
+  set -- $(resolve_test_r_install "$TEST_R_SPEC")
+  TEST_R_NAME="$1"
+  TEST_R_VERSION="$2"
+  TEST_R_EXCLUDE_NEWER="$(test_r_release_date "$TEST_R_NAME")"
 }
 
 rig_name_for_version() {
@@ -288,14 +378,23 @@ verify_install() {
   run Rscript --version
   if [ "$SKIP_TEST_R" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     run rig list --json
-    test_r_name="<rig-name-for-${TEST_R_VERSION}>"
+    test_r_name="<rig-name-for-${TEST_R_SPEC}>"
   elif [ "$SKIP_TEST_R" -eq 0 ]; then
-    test_r_name="$(rig_name_for_version "$TEST_R_VERSION")"
+    test_r_name="${TEST_R_NAME:-$(rig_name_for_version "$TEST_R_VERSION")}"
   fi
   if [ "$SKIP_TEST_R" -eq 0 ]; then
     run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
   fi
   run quarto --version
+}
+
+persist_github_env() {
+  if [ "$SKIP_TEST_R" -eq 1 ] || [ "$DRY_RUN" -eq 1 ] || [ -z "${GITHUB_ENV:-}" ]; then
+    return
+  fi
+
+  printf 'IR_TEST_R_VERSION=%s\n' "$TEST_R_VERSION" >>"$GITHUB_ENV"
+  printf 'IR_TEST_R_EXCLUDE_NEWER=%s\n' "$TEST_R_EXCLUDE_NEWER" >>"$GITHUB_ENV"
 }
 
 print_next_steps() {
@@ -312,6 +411,7 @@ EOF
 To enable the version-selection tests in this shell, run:
 
   export IR_TEST_R_VERSION=${TEST_R_VERSION}
+  export IR_TEST_R_EXCLUDE_NEWER=${TEST_R_EXCLUDE_NEWER}
 
 Then run:
 
@@ -362,5 +462,7 @@ case "$PLATFORM" in
 esac
 
 install_r_versions
+load_test_r_metadata
 verify_install
+persist_github_env
 print_next_steps

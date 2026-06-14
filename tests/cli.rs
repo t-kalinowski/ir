@@ -325,6 +325,60 @@ fn default_r_version() -> Option<String> {
     (!version.is_empty()).then_some(version)
 }
 
+fn test_r_selection_target(test_name: &str) -> Option<(String, String)> {
+    let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
+        eprintln!(
+            "SKIP {test_name}: set IR_TEST_R_VERSION to a rig-installed, non-default R version"
+        );
+        return None;
+    };
+    let Ok(exclude_newer) = std::env::var("IR_TEST_R_EXCLUDE_NEWER") else {
+        eprintln!("SKIP {test_name}: set IR_TEST_R_EXCLUDE_NEWER to the target R release date");
+        return None;
+    };
+
+    if default_r_version().as_deref() == Some(target.as_str()) {
+        eprintln!(
+            "SKIP {test_name}: IR_TEST_R_VERSION ({target}) matches the default R; pick a different installed version"
+        );
+        return None;
+    }
+
+    Some((target, exclude_newer))
+}
+
+fn write_r_version_probe(
+    prefix: &str,
+    r_version: Option<&str>,
+    exclude_newer: &str,
+    marker: &str,
+) -> PathBuf {
+    let script = unique_path(prefix, "R");
+    let r_version = r_version
+        .map(|version| {
+            format!(
+                "#| r-version: {}\n",
+                serde_json::to_string(version).unwrap()
+            )
+        })
+        .unwrap_or_default();
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| isolated: true
+{r_version}#| exclude-newer: {}
+
+cat("ir.fixture={marker}\n")
+cat("version.r_version=[", as.character(getRversion()), "]\n", sep = "")
+"#,
+            serde_json::to_string(exclude_newer).unwrap()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
+    script
+}
+
 #[test]
 fn ci_dependencies_are_available() {
     let r_expr = concat!(
@@ -2323,42 +2377,65 @@ fn render_quarto_selects_requested_r_version() {
 }
 
 #[test]
-fn run_script_frontmatter_selects_r_version() {
+fn run_script_exclude_newer_selects_dated_r_version() {
     let _guard = e2e_lock();
-
-    // The fixture pins `#| r-version` to this version, so the test only runs
-    // when CI has provisioned that exact R through rig (signalled by
-    // IR_TEST_R_VERSION). Unlike the flag, the frontmatter value can't come from
-    // the environment because it lives in the static fixture.
-    const FIXTURE_R_VERSION: &str = "4.4.3";
-    if std::env::var("IR_TEST_R_VERSION").ok().as_deref() != Some(FIXTURE_R_VERSION) {
-        eprintln!(
-            "SKIP run_script_frontmatter_selects_r_version: set IR_TEST_R_VERSION={FIXTURE_R_VERSION} (rig plus that R) to match the fixture's `#| r-version`"
-        );
+    let Some((target, exclude_newer)) =
+        test_r_selection_target("run_script_exclude_newer_selects_dated_r_version")
+    else {
         return;
-    }
-
-    // Selecting the version the default path already uses would prove nothing.
-    if default_r_version().as_deref() == Some(FIXTURE_R_VERSION) {
-        eprintln!(
-            "SKIP run_script_frontmatter_selects_r_version: the fixture's R ({FIXTURE_R_VERSION}) matches the default R; nothing to select"
-        );
-        return;
-    }
-
-    let script = fixture("run/r-version-frontmatter.R");
+    };
+    let script = write_r_version_probe(
+        "ir-exclude-newer-r-version",
+        None,
+        &exclude_newer,
+        "exclude-newer-r-version",
+    );
+    let cache_dir = unique_dir("ir-exclude-newer-r-version-cache");
 
     let out = ir()
-        .args(["run", "--isolated", "--vanilla"])
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=r-version-frontmatter");
-    assert_stdout_contains(&out, &format!("version.r_version=[{FIXTURE_R_VERSION}]"));
-    assert_stdout_contains(&out, "version.lib_in_cache=true");
-    assert_stdout_contains(&out, "version.jsonlite_in_cache=true");
+    assert_stdout_contains(&out, "ir.fixture=exclude-newer-r-version");
+    assert_stdout_contains(&out, &format!("version.r_version=[{target}]"));
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_script_r_version_and_exclude_newer_selects_requested_r_version() {
+    let _guard = e2e_lock();
+    let Some((target, exclude_newer)) = test_r_selection_target(
+        "run_script_r_version_and_exclude_newer_selects_requested_r_version",
+    ) else {
+        return;
+    };
+    let script = write_r_version_probe(
+        "ir-r-version-exclude-newer",
+        Some(&target),
+        &exclude_newer,
+        "r-version-exclude-newer",
+    );
+    let cache_dir = unique_dir("ir-r-version-exclude-newer-cache");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=r-version-exclude-newer");
+    assert_stdout_contains(&out, &format!("version.r_version=[{target}]"));
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]

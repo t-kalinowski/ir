@@ -31,7 +31,7 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 
 - **The file explains itself.** Package requirements live in the script or document, not in a separate setup note.
 - **Fast by design.** `ir` keeps package setup direct and reuses cached resolutions and libraries when the same requirements are seen again.
-- **Reproducibility is explicit.** Use `r-version` to select an installed R and `exclude-newer` to resolve packages as of a specific date.
+- **Reproducibility is explicit.** Use `r-version` to select an installed R, or `exclude-newer` to resolve packages and select the newest installed R available as of a specific date.
 - **It works with normal R habits.** Forward `Rscript` options, render Quarto documents, evaluate inline expressions, or use `--with` for one-off packages.
 - **Package tools are easy to try.** Run package executables with `rx`, or install persistent launchers for R, Rapp, and direct executable scripts without setting up a project by hand.
 
@@ -95,14 +95,14 @@ On Windows PowerShell, run:
 > .\scripts\install-dev-deps.ps1
 ```
 
-The setup scripts install Rust, Python, rig, R release, R 4.4.3 for the
+The setup scripts install Rust, Python, rig, R release, a non-default R for the
 version-selection tests, and Quarto. They do not run tests or pre-warm package
 caches. Pass `--dry-run` on Unix or `-DryRun` on Windows to inspect the plan.
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH`, a rig default R install, or `IR_RSCRIPT`.
-- `rig` on `PATH` when using `r-version`.
+- `R` / `Rscript` on `PATH`, a rig default R install, or `IR_RSCRIPT` when neither `r-version` nor `exclude-newer` is set.
+- `rig` on `PATH` when using `r-version` or `exclude-newer`.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 
 On first use, `ir` prepares its resolver tooling in its cache, so you do not need to pre-install pak or renv.

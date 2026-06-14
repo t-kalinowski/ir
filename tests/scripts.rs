@@ -63,9 +63,10 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "https://rig.r-pkg.org/deb/rig.gpg");
     assert_stdout_contains(&out, "quarto-linux-");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
-    assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+    assert_stdout_contains(&out, "IR_TEST_R_VERSION=<resolved-oldrel/2-version>");
+    assert_stdout_contains(&out, "IR_TEST_R_EXCLUDE_NEWER=<release-date-for-oldrel/2>");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
         "{}",
@@ -90,7 +91,7 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "brew install --cask rig");
     assert_stdout_contains(&out, "brew install --cask quarto");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
@@ -123,7 +124,7 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
 
     assert_success(&out);
     assert_stdout_contains(&out, "https://rig.r-pkg.org/deb/rig.gpg");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("https://sh.rustup.rs"), "{stdout}");
@@ -147,6 +148,8 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Install rig and non-default R (Windows)"));
     assert!(workflow.contains("--skip quarto"));
     assert!(workflow.contains("-Skip rust, python, quarto"));
+    assert!(!workflow.contains("IR_TEST_R_VERSION=4.4.3"));
+    assert!(!workflow.contains("IR_TEST_R_EXCLUDE_NEWER=2025-02-28"));
     assert!(!workflow.contains("r-lib/actions/setup-r"));
     assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
     assert!(!workflow.contains("scripts/install-test-r-deps.R"));
@@ -238,13 +241,14 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     assert_stdout_contains(&out, "winget install --id posit.rig");
     assert_stdout_contains(&out, "winget install --id Posit.Quarto");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
         "{}",
         output_text(&out)
     );
-    assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+    assert_stdout_contains(&out, "IR_TEST_R_VERSION=<resolved-oldrel/2-version>");
+    assert_stdout_contains(&out, "IR_TEST_R_EXCLUDE_NEWER=<release-date-for-oldrel/2>");
 }
 
 #[cfg(windows)]
@@ -266,7 +270,7 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
     assert_success(&out);
     assert_stdout_contains(&out, "choco install rig -y --no-progress");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("rig default release"), "{stdout}");
     assert!(
@@ -301,31 +305,30 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
     assert!(!script.contains(r#"@("python", "python3", "py")"#));
     assert!(script.contains("R\\bin"));
-    assert!(script.contains("IR_TEST_R_VERSION=4.4.3"));
+    assert!(script.contains("IR_TEST_R_VERSION=$TestRVersion"));
+    assert!(script.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
 }
 
 #[test]
 fn r_dependency_installers_use_rig_provided_pak() {
-    for script in ["scripts/install-docs-r-deps.R"] {
-        let path = repo_root().join(script);
-        let script = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    let path = repo_root().join("scripts/install-docs-r-deps.R");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
-        assert!(script.contains("pak::pkg_install(packages)"));
-        assert!(
-            !script.contains("install.packages"),
-            "{} should let pak install package dependencies and system requirements",
-            path.display()
-        );
-        assert!(
-            !script.contains("dependencies = NA"),
-            "{} should rely on pak::pkg_install() defaults",
-            path.display()
-        );
-        assert!(
-            !script.contains("IR_TEST_R_REPOS") && !script.contains("IR_DOCS_R_REPOS"),
-            "{} should not carry custom repository plumbing",
-            path.display()
-        );
-    }
+    assert!(script.contains("pak::pkg_install(packages)"));
+    assert!(
+        !script.contains("install.packages"),
+        "{} should let pak install package dependencies and system requirements",
+        path.display()
+    );
+    assert!(
+        !script.contains("dependencies = NA"),
+        "{} should rely on pak::pkg_install() defaults",
+        path.display()
+    );
+    assert!(
+        !script.contains("IR_TEST_R_REPOS") && !script.contains("IR_DOCS_R_REPOS"),
+        "{} should not carry custom repository plumbing",
+        path.display()
+    );
 }

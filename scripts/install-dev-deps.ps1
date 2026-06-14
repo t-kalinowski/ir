@@ -10,7 +10,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$TestRVersion = "4.4.3"
+$TestRSpec = "oldrel/2"
+$TestRName = $null
+$TestRVersion = $null
+$TestRExcludeNewer = $null
 $RustupInitUrl = "https://win.rustup.rs"
 $SkipRust = $false
 $SkipPython = $false
@@ -121,6 +124,115 @@ function Require-Tool {
     if (-not $DryRun -and -not (Test-Tool $Name)) {
         throw "required command not found: $Name"
     }
+}
+
+function ConvertFrom-RigJson {
+    param([Parameter(Mandatory = $true)][string[]]$Lines)
+
+    $json = ($Lines | Where-Object { -not $_.StartsWith("[INFO]") }) -join "`n"
+    return $json | ConvertFrom-Json
+}
+
+function Get-TestRMetadata {
+    $lines = & rig list --json
+    if ($LASTEXITCODE -ne 0) {
+        throw "rig list --json exited with code $LASTEXITCODE"
+    }
+
+    $installed = @(ConvertFrom-RigJson $lines)
+    $release = $installed |
+        Where-Object { $_.name -eq "release" -or $_.aliases -contains "release" } |
+        Select-Object -First 1
+
+    if ($null -eq $release) {
+        throw "rig does not report an installed release R"
+    }
+
+    if ($TestRSpec -eq "oldrel") {
+        $offset = 1
+    }
+    elseif ($TestRSpec.StartsWith("oldrel/")) {
+        $offset = [int](($TestRSpec -split "/", 2)[1])
+    }
+    else {
+        throw "unsupported test R spec: $TestRSpec"
+    }
+
+    $releaseVersion = [version]$release.version
+    if ($releaseVersion.Minor -lt $offset) {
+        throw "cannot resolve $TestRSpec relative to installed release R $($release.version)"
+    }
+
+    $targetMinor = $releaseVersion.Minor - $offset
+    $matches = @(
+        $installed |
+            Where-Object { $_.version -match "^\d+\.\d+\.\d+$" } |
+            ForEach-Object {
+                $version = [version]$_.version
+                if ($version.Major -eq $releaseVersion.Major -and $version.Minor -eq $targetMinor) {
+                    [pscustomobject]@{
+                        Version = $version
+                        Install = $_
+                    }
+                }
+            } |
+            Sort-Object Version -Descending
+    )
+    if (-not $matches) {
+        throw "R $($releaseVersion.Major).$targetMinor from $TestRSpec is not installed by rig"
+    }
+
+    $install = $matches[0].Install
+    $dateExpr = 'cat(sprintf("%s-%s-%s\n", R.version$year, R.version$month, R.version$day))'
+    $dateLines = & rig run -r $install.name -e $dateExpr
+    if ($LASTEXITCODE -ne 0) {
+        throw "rig run -r $($install.name) exited with code $LASTEXITCODE"
+    }
+    $dateMatch = ($dateLines | Select-String -Pattern "\d{4}-\d{2}-\d{2}" | Select-Object -First 1)
+    $date = if ($dateMatch) { $dateMatch.Matches[0].Value } else { "" }
+    if ($date -notmatch "^\d{4}-\d{2}-\d{2}$") {
+        throw "could not read R release date for $($install.name)"
+    }
+
+    return [pscustomobject]@{
+        Name = $install.name
+        Version = $install.version
+        Date = $date
+    }
+}
+
+function Set-TestRMetadata {
+    if ($SkipTestR) {
+        return
+    }
+
+    if ($DryRun) {
+        $script:TestRVersion = "<resolved-$TestRSpec-version>"
+        $script:TestRExcludeNewer = "<release-date-for-$TestRSpec>"
+        return
+    }
+
+    $metadata = Get-TestRMetadata
+    $script:TestRName = $metadata.Name
+    $script:TestRVersion = $metadata.Version
+    $script:TestRExcludeNewer = $metadata.Date
+}
+
+function Get-RigNameForVersion {
+    param([Parameter(Mandatory = $true)][string]$Version)
+
+    $lines = & rig list --json
+    if ($LASTEXITCODE -ne 0) {
+        throw "rig list --json exited with code $LASTEXITCODE"
+    }
+
+    foreach ($install in @(ConvertFrom-RigJson $lines)) {
+        if ($install.version -eq $Version) {
+            return $install.name
+        }
+    }
+
+    throw "R $Version is not installed by rig"
 }
 
 function Add-PathIfExists {
@@ -234,8 +346,10 @@ if (-not $SkipRRelease) {
     Invoke-Step "rig" @("add", "release")
 }
 if (-not $SkipTestR) {
-    Invoke-Step "rig" @("add", $TestRVersion)
+    Invoke-Step "rig" @("add", $TestRSpec)
 }
+
+Set-TestRMetadata
 
 Invoke-Step "cargo" @("--version")
 Invoke-Step "rustc" @("--version")
@@ -243,9 +357,20 @@ Invoke-Step (Get-PythonTool) @("--version")
 Invoke-Step "rig" @("--version")
 Invoke-Step "Rscript" @("--version")
 if (-not $SkipTestR) {
-    Invoke-Step "rig" @("run", "-r", $TestRVersion, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+    if ($DryRun) {
+        $testRName = "<rig-name-for-$TestRSpec>"
+    }
+    else {
+        $testRName = if ($TestRName) { $TestRName } else { Get-RigNameForVersion $TestRVersion }
+    }
+    Invoke-Step "rig" @("run", "-r", $testRName, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
 }
 Invoke-Step "quarto" @("--version")
+
+if (-not $SkipTestR -and -not $DryRun -and $env:GITHUB_ENV) {
+    Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=$TestRVersion"
+    Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
+}
 
 Write-Host ""
 Write-Host "Developer dependencies are installed."
@@ -254,7 +379,8 @@ if ($SkipTestR) {
 }
 Write-Host "To enable the version-selection tests in this PowerShell session, run:"
 Write-Host ""
-Write-Host "  `$env:IR_TEST_R_VERSION=4.4.3"
+Write-Host "  `$env:IR_TEST_R_VERSION=$TestRVersion"
+Write-Host "  `$env:IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
 Write-Host ""
 Write-Host "Then run:"
 Write-Host ""

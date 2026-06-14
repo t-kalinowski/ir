@@ -106,6 +106,26 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
     .into())
 }
 
+pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
+    let exclude_newer = parse_iso_date_field("exclude-newer", exclude_newer)?;
+    let required = required_available_version_for_date(&exclude_newer)?;
+    let installed = rig_list()?;
+
+    if let Some(installed) = installed
+        .iter()
+        .filter(|version| matches_available_version(version, &required))
+        .max_by(|a, b| compare_versions(&a.version, &b.version))
+    {
+        return installed.rscript();
+    }
+
+    Err(format!(
+        "R {} is required for exclude-newer {} but is not installed. Run `rig install {}`.",
+        required.version, exclude_newer, required.name
+    )
+    .into())
+}
+
 /// Rscript of rig's default R install (`"default": true` in `rig list --json`),
 /// or `None` when rig is absent, has no default, or the binary is missing.
 ///
@@ -154,9 +174,20 @@ fn rig_list() -> Result<Vec<InstalledR>, Box<dyn Error>> {
 
 fn rig_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T, Box<dyn Error>> {
     let output = rig_output(args)?;
+    let json = clean_rig_json_output(&output)?;
 
-    serde_json::from_slice(&output)
+    serde_json::from_str(&json)
         .map_err(|e| format!("failed to parse `rig {}` JSON: {e}", args.join(" ")).into())
+}
+
+fn clean_rig_json_output(output: &[u8]) -> Result<String, Box<dyn Error>> {
+    let output = String::from_utf8(output.to_vec())
+        .map_err(|e| format!("`rig --json` returned non-UTF-8 output: {e}"))?;
+    Ok(output
+        .lines()
+        .filter(|line| !line.starts_with("[INFO]"))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn rig_output(args: &[&str]) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -213,6 +244,21 @@ fn required_available_version(
     )
 }
 
+fn required_available_version_for_date(exclude_newer: &str) -> Result<AvailableR, Box<dyn Error>> {
+    if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
+        return required_available_version_for_date_from_candidates(
+            exclude_newer,
+            EMBEDDED_AVAILABLE.iter().copied(),
+        );
+    }
+
+    let available = cached_rig_available()?;
+    required_available_version_for_date_from_candidates(
+        exclude_newer,
+        available.iter().map(AvailableCandidate::from),
+    )
+}
+
 fn required_available_version_from_candidates<'a>(
     req: &str,
     requirement: &VersionRequirement,
@@ -233,6 +279,21 @@ fn required_available_version_from_candidates<'a>(
         })
 }
 
+fn required_available_version_for_date_from_candidates<'a>(
+    exclude_newer: &str,
+    candidates: impl IntoIterator<Item = AvailableCandidate<'a>>,
+) -> Result<AvailableR, Box<dyn Error>> {
+    candidates
+        .into_iter()
+        .filter(|version| released_before_or_on(version, Some(exclude_newer)))
+        .filter(stable_release_candidate)
+        .max_by(|a, b| compare_versions(a.version, b.version))
+        .map(AvailableR::from)
+        .ok_or_else(|| {
+            format!("could not resolve an R version available before or on {exclude_newer}").into()
+        })
+}
+
 fn cached_rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("rig")
@@ -243,8 +304,8 @@ fn cached_rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
         return parse_rig_available_json(&json);
     }
 
-    let json = String::from_utf8(rig_output(&["available", "--json"])?)
-        .map_err(|e| format!("`rig available --json` returned non-UTF-8 output: {e}"))?;
+    let output = rig_output(&["available", "--json"])?;
+    let json = clean_rig_json_output(&output)?;
     let available = parse_rig_available_json(&json)?;
     let json = serde_json::to_string_pretty(&available)
         .map_err(|e| format!("failed to serialize cached rig available JSON: {e}"))?;
@@ -286,6 +347,19 @@ fn released_before_or_on(version: &AvailableCandidate<'_>, exclude_newer: Option
         return false;
     };
     date <= exclude_newer
+}
+
+fn stable_release_candidate(version: &AvailableCandidate<'_>) -> bool {
+    version.name != "devel" && version.name != "next" && parse_version(version.version).is_some()
+}
+
+fn matches_available_version(installed: &InstalledR, required: &AvailableR) -> bool {
+    installed.version == required.version
+        || installed.name == required.name
+        || installed
+            .aliases
+            .iter()
+            .any(|alias| alias == &required.name)
 }
 
 impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {

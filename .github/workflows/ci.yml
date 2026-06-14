@@ -36,7 +36,6 @@ jobs:
             --skip rust \
             --skip python \
             --skip quarto
-          echo "IR_TEST_R_VERSION=4.4.3" >> "$GITHUB_ENV"
 
       - name: Install rig and non-default R (Windows)
         if: runner.os == 'Windows'
@@ -46,7 +45,6 @@ jobs:
           # Use rig for R itself so CI has one R installer.
           .\scripts\install-dev-deps.ps1 `
             -Skip rust, python, quarto
-          Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=4.4.3"
 
       - name: Install R package docs dependencies
         run: Rscript scripts/install-docs-r-deps.R
