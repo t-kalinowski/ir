@@ -2880,6 +2880,24 @@ fn run_script_exclude_newer_queries_available_for_historical_unknown_installs() 
 
 #[cfg(unix)]
 #[test]
+fn run_script_exclude_newer_checks_unknown_installed_release_before_embedded_install_hint() {
+    let _guard = e2e_lock();
+    let out = run_fake_rig_exclude_newer_selection(
+        "2021-06-01",
+        &[("4.0.5", "4.0.5")],
+        Some(&[
+            ("4.0.5", "4.0.5", "2021-03-31"),
+            ("4.1.0", "4.1.0", "2021-05-18"),
+        ]),
+    );
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&out, "version.r_version=[4.0.5]");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_script_exclude_newer_checks_unknown_installed_release_before_returning() {
     let _guard = e2e_lock();
     let out = run_fake_rig_exclude_newer_selection(

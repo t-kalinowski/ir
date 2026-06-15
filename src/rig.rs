@@ -207,12 +207,14 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         EMBEDDED_AVAILABLE.iter().copied(),
     )
     .ok();
+    let has_unknown_installed_release =
+        installed_has_unknown_stable_release_newer_than(&installed, embedded_selection);
 
     let needs_available_refresh = if exclude_newer.as_str() > EMBEDDED_AVAILABLE_BUILD_DATE {
-        embedded_selection.is_none()
-            || installed_has_unknown_stable_release_newer_than(&installed, embedded_selection)
+        embedded_selection.is_none() || has_unknown_installed_release
     } else {
-        embedded_selection.is_none() && embedded_required.is_none()
+        embedded_selection.is_none()
+            && (embedded_required.is_none() || has_unknown_installed_release)
     };
 
     if needs_available_refresh {
