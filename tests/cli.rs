@@ -385,6 +385,39 @@ fn real_uninstalled_symbolic_r_version(test_name: &str) -> Option<(String, Strin
     })
 }
 
+fn real_installed_symbolic_r_with_stable_peer(test_name: &str) -> Option<(String, String, String)> {
+    let installed = rig_json(&["list", "--json"], test_name)?;
+    let installed = installed.as_array()?;
+    installed
+        .iter()
+        .filter(|version| rig_record_is_symbolic(version))
+        .find_map(|symbolic| {
+            let version = symbolic.get("version")?.as_str()?;
+            let symbolic_path = symbolic.get("path")?.as_str()?.replace('\\', "/");
+            let stable = installed.iter().find(|candidate| {
+                candidate.get("version").and_then(|value| value.as_str()) == Some(version)
+                    && !rig_record_is_symbolic(candidate)
+            })?;
+            let stable_path = stable.get("path")?.as_str()?.replace('\\', "/");
+            Some((version.to_string(), stable_path, symbolic_path))
+        })
+}
+
+fn rig_record_is_symbolic(record: &serde_json::Value) -> bool {
+    let name = record.get("name").and_then(|value| value.as_str());
+    let aliases = record
+        .get("aliases")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str());
+
+    matches!(name, Some("devel" | "next"))
+        || aliases
+            .into_iter()
+            .any(|alias| alias == "devel" || alias == "next")
+}
+
 fn test_r_selection_target(test_name: &str) -> Option<(String, String)> {
     let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
         eprintln!(
@@ -2765,6 +2798,47 @@ fn run_script_r_version_install_hint_ignores_symbolic_prereleases() {
     assert!(
         !stderr.contains(&format!("rig install {name}")),
         "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_script_r_version_numeric_spec_ignores_installed_symbolic_prereleases() {
+    let _guard = e2e_lock();
+    let test_name = "run_script_r_version_numeric_spec_ignores_installed_symbolic_prereleases";
+    let Some((version, stable_path, symbolic_path)) =
+        real_installed_symbolic_r_with_stable_peer(test_name)
+    else {
+        eprintln!("SKIP {test_name}: rig has no installed symbolic prerelease with a stable peer");
+        return;
+    };
+    let script = unique_path("ir-r-version-installed-symbolic-prerelease", "R");
+    let cache_dir = unique_dir("ir-r-version-installed-symbolic-prerelease-cache");
+    fs::write(
+        &script,
+        r#"cat("r.home=", normalizePath(R.home(), winslash = "/", mustWork = FALSE), "\n", sep = "")
+"#,
+    )
+    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--r-version"])
+        .arg(&version)
+        .arg("--vanilla")
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, &stable_path);
+    let stdout = stdout(&out);
+    assert!(
+        !stdout.contains(&symbolic_path),
+        "selected symbolic prerelease install {symbolic_path}\n{}",
         output_text(&out)
     );
 

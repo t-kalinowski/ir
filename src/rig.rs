@@ -190,6 +190,10 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
 
     if let Some(installed) = installed
         .iter()
+        .filter(|version| {
+            stable_installed_release_candidate(version)
+                || requirement.matches_requested_installed_candidate(version)
+        })
         .filter(|version| requirement.matches_installed(version))
         .max_by(|a, b| compare_versions(&a.version, &b.version))
     {
@@ -678,6 +682,14 @@ impl VersionRequirement {
             self,
             VersionRequirement::Bare(req)
                 if (version.name == "devel" || version.name == "next") && req == version.name
+        )
+    }
+
+    fn matches_requested_installed_candidate(&self, version: &InstalledR) -> bool {
+        matches!(
+            self,
+            VersionRequirement::Bare(req)
+                if version.name == req.as_str() || version.aliases.iter().any(|alias| alias == req)
         )
     }
 
