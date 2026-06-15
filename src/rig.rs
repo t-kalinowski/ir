@@ -201,7 +201,11 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
     let embedded_selection =
         select_installed_r_for_date(&installed, EMBEDDED_AVAILABLE, &exclude_newer);
 
-    if installed_has_unknown_stable_release_newer_than(&installed, embedded_selection) {
+    let needs_available_refresh = embedded_selection.is_none()
+        || (exclude_newer.as_str() > EMBEDDED_AVAILABLE_BUILD_DATE
+            && installed_has_unknown_stable_release_newer_than(&installed, embedded_selection));
+
+    if needs_available_refresh {
         let available = cached_rig_available(&exclude_newer)?;
         let candidates: Vec<_> = available.iter().map(AvailableCandidate::from).collect();
         if let Some(r) = select_installed_r_for_date(&installed, &candidates, &exclude_newer) {
@@ -326,7 +330,13 @@ fn read_cached_rig_available(
 
     let json = fs::read_to_string(&path)
         .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-    let mut cache: AvailableRCache = serde_json::from_str(&json)
+    let value: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("failed to parse `{}`: {e}", path.display()))?;
+    if value.is_array() {
+        return Ok(None);
+    }
+
+    let mut cache: AvailableRCache = serde_json::from_value(value)
         .map_err(|e| format!("failed to parse `{}`: {e}", path.display()))?;
     let stored_known_through =
         parse_iso_date_field("rig available cache known_through", &cache.known_through)?;

@@ -518,13 +518,14 @@ fn run_fake_rig_exclude_newer_selection_with_cache_result(
 fn run_fake_rig_exclude_newer_selection_with_legacy_cache(
     exclude_newer: &str,
     installed: &[(&str, &str)],
+    available: Option<&[(&str, &str, &str)]>,
     cache: &[(&str, &str, &str)],
 ) -> Output {
     run_fake_rig_exclude_newer_selection_with_options(
         exclude_newer,
         installed,
         FakeRigSelectionOptions {
-            available: None,
+            available,
             cache: None,
             legacy_cache: Some(cache),
             include_broken_entry: false,
@@ -2771,6 +2772,21 @@ fn run_script_exclude_newer_selects_newest_installed_r_before_date() {
 
 #[cfg(unix)]
 #[test]
+fn run_script_exclude_newer_does_not_refresh_when_embedded_selection_exists() {
+    let _guard = e2e_lock();
+    let out = run_fake_rig_exclude_newer_selection(
+        "2025-03-01",
+        &[("4.4.3", "4.4.3"), ("4.7.0", "4.7.0")],
+        None,
+    );
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&out, "version.r_version=[4.4.3]");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_script_exclude_newer_uses_complete_available_release_dates() {
     let _guard = e2e_lock();
     let out = run_fake_rig_exclude_newer_selection("2024-01-15", &[("4.3.2", "4.3.2")], None);
@@ -2812,6 +2828,28 @@ fn run_script_exclude_newer_refreshes_available_releases_for_future_dates() {
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
     assert_stdout_contains(&out, "version.r_version=[4.7.0]");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_exclude_newer_refreshes_future_install_recommendation() {
+    let _guard = e2e_lock();
+    let out = run_fake_rig_exclude_newer_selection(
+        "2026-07-15",
+        &[],
+        Some(&[
+            ("4.6.0", "4.6.0", "2026-04-24"),
+            ("4.7.0", "4.7.0", "2026-07-01"),
+        ]),
+    );
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rig install 4.7.0"),
+        "{}",
+        output_text(&out)
+    );
 }
 
 #[cfg(unix)]
@@ -2875,19 +2913,22 @@ fn run_script_exclude_newer_reuses_cached_available_releases_for_known_dates() {
 
 #[cfg(unix)]
 #[test]
-fn run_script_exclude_newer_rejects_legacy_available_cache_shape() {
+fn run_script_exclude_newer_refreshes_legacy_available_cache_shape() {
     let _guard = e2e_lock();
-    let legacy_cache = [("4.7.0", "4.7.0", "2026-07-01")];
+    let legacy_cache = [("4.6.0", "4.6.0", "2026-04-24")];
     let out = run_fake_rig_exclude_newer_selection_with_legacy_cache(
         "2026-07-01",
         &[("4.7.0", "4.7.0")],
+        Some(&[
+            ("4.6.0", "4.6.0", "2026-04-24"),
+            ("4.7.0", "4.7.0", "2026-07-01"),
+        ]),
         &legacy_cache,
     );
 
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("failed to parse"), "{}", output_text(&out));
-    assert!(stderr.contains("available.json"), "{}", output_text(&out));
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
 }
 
 #[cfg(unix)]
