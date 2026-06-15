@@ -46,6 +46,39 @@ Local packages may be written as `local::path`, as a bare file-system path in pa
 Omit `packages`, use `packages: []`, or use `packages: null` when no package refs are needed.
 Unknown keys are ignored after YAML parsing, so future metadata such as `sys-reqs` can be present before `ir` supports it.
 
+## R version selection
+
+`r-version` and `exclude-newer` control different parts of the run.
+`r-version` selects the R executable.
+`exclude-newer` selects the package snapshot date.
+When `r-version` is omitted, `exclude-newer` also gives `ir` enough information to choose a default R version by date.
+
+Any run with `r-version` or `exclude-newer` uses R installs reported by rig.
+`IR_RSCRIPT` is ignored for those runs.
+When neither field is set, `ir` uses `IR_RSCRIPT`, rig's default R install, or `Rscript` on `PATH`, in that order.
+
+| Metadata | R selection | If no matching R is installed |
+| --- | --- | --- |
+| no `r-version`, no `exclude-newer` | Use `IR_RSCRIPT`, then rig's default R, then `Rscript` on `PATH`. | The selected command must exist and be runnable. |
+| `r-version` only | Use the newest installed R reported by rig that matches the `r-version` spec. | Error with a `rig install` hint for the newest matching stable R available from rig. |
+| `exclude-newer` only | Use the newest installed stable R released on or before the `exclude-newer` date. | Error with a `rig install` hint for the newest stable R released on or before that date. |
+| both `r-version` and `exclude-newer` | Use the newest installed R that matches `r-version`. `exclude-newer` does not make `ir` fall back to an older installed R. | Error. The install hint is limited to matching stable R releases available on or before the `exclude-newer` date. |
+
+For example, suppose `exclude-newer: "2022-04-22"` is the date of R 4.2.0.
+
+| Metadata | Installed R versions | Outcome |
+| --- | --- | --- |
+| `exclude-newer: "2022-04-22"` | 4.1 only | Use R 4.1. It is the newest installed stable R released on or before the date. |
+| `exclude-newer: "2022-04-22"` | 4.3 only | Error with an install hint for R 4.2.0. R 4.3 was released after the date. |
+| `r-version: ">= 4.0"` and `exclude-newer: "2022-04-22"` | 4.1 only | Use R 4.1. It matches the explicit `r-version` requirement. |
+| `r-version: ">= 4.0"` and `exclude-newer: "2022-04-22"` | 4.1 and 4.3 | Use R 4.3. Explicit `r-version` selection is not capped by `exclude-newer`. |
+| `r-version: ">= 4.2"` and `exclude-newer: "2022-04-22"` | 4.1 only | Error with an install hint for R 4.2.0. R 4.1 does not match `>= 4.2`. |
+| `r-version: "4.3"` and `exclude-newer: "2022-04-22"` | 4.1 only | Error because R 4.3 was not available on or before the snapshot date. |
+
+Bare `r-version` values such as `"4.2"` match installed patch releases in that series, such as 4.2.3.
+Comparison specs such as `">= 4.2"` compare numeric versions.
+Symbolic rig names such as `next` and `devel` are used only when explicitly requested.
+
 ## Inline runs
 
 Inline expressions use the same resolver and cache:
