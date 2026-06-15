@@ -1,8 +1,9 @@
 //! Integration tests for the public `ir` CLI.
 //!
-//! These tests avoid mocked `Rscript`, `quarto`, `rig`, or package executable
-//! shims. The end-to-end cases run real fixture scripts/documents through the
-//! compiled binary and assert marker lines printed by those public workflows.
+//! These tests mostly avoid mocked `Rscript`, `quarto`, `rig`, or package
+//! executable shims. The end-to-end cases run real fixture scripts/documents
+//! through the compiled binary and assert marker lines printed by those public
+//! workflows.
 
 use std::ffi::OsString;
 use std::fs;
@@ -637,6 +638,168 @@ cat("version.r_version=[", as.character(getRversion()), "]\n", sep = "")
     )
     .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
     script
+}
+
+#[cfg(unix)]
+fn write_fake_r_install(root: &Path, name: &str, version: &str) -> PathBuf {
+    let bin_dir = root.join(name).join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let r = bin_dir.join("R");
+    let rscript = bin_dir.join("Rscript");
+
+    write_executable(&r, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
+                "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "echo \"ir.fixture=fake-r-selection\"\n",
+                "echo \"version.r_version=[{}]\"\n",
+            ),
+            version
+        ),
+    );
+
+    r
+}
+
+#[cfg(unix)]
+struct FakeRigAvailableCache<'a> {
+    known_through: &'a str,
+    checked_at: u64,
+    available: &'a [(&'a str, &'a str, &'a str)],
+}
+
+#[cfg(unix)]
+struct FakeRigSelectionOptions<'a> {
+    available: Option<&'a [(&'a str, &'a str, &'a str)]>,
+    cache: Option<FakeRigAvailableCache<'a>>,
+}
+
+#[cfg(unix)]
+struct FakeRigSelectionResult {
+    output: Output,
+    cache_json: Option<String>,
+}
+
+#[cfg(unix)]
+fn fake_available_json(available: &[(&str, &str, &str)]) -> Vec<serde_json::Value> {
+    available
+        .iter()
+        .map(|(name, version, date)| {
+            serde_json::json!({
+                "name": name,
+                "version": version,
+                "date": date,
+            })
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn run_fake_rig_exclude_newer_selection(
+    exclude_newer: &str,
+    installed: &[(&str, &str)],
+    options: FakeRigSelectionOptions<'_>,
+) -> FakeRigSelectionResult {
+    let bin_dir = unique_dir("ir-fake-rig-bin");
+    let installs_dir = unique_dir("ir-fake-rig-installs");
+    let cache_dir = unique_dir("ir-fake-rig-cache");
+    let cache_path = cache_dir.join("rig").join("available.json");
+    let rig = bin_dir.join("rig");
+    let list_json = unique_path("ir-fake-rig-list", "json");
+    let available_json = unique_path("ir-fake-rig-available", "json");
+    let script = write_r_version_probe(
+        "ir-fake-rig-exclude-newer",
+        None,
+        exclude_newer,
+        "fake-r-selection",
+    );
+
+    let installed_json = installed
+        .iter()
+        .map(|(name, version)| {
+            let binary = write_fake_r_install(&installs_dir, name, version);
+            serde_json::json!({
+                "name": name,
+                "default": false,
+                "version": version,
+                "aliases": [],
+                "path": binary.parent().unwrap().parent().unwrap().to_string_lossy(),
+                "binary": binary.to_string_lossy(),
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(&list_json, serde_json::to_string(&installed_json).unwrap()).unwrap();
+
+    if let Some(available) = options.available {
+        fs::write(
+            &available_json,
+            serde_json::to_string(&fake_available_json(available)).unwrap(),
+        )
+        .unwrap();
+    }
+    if let Some(cache) = options.cache {
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let cache_json = serde_json::json!({
+            "known_through": cache.known_through,
+            "checked_at": cache.checked_at,
+            "versions": fake_available_json(cache.available),
+        });
+        fs::write(&cache_path, serde_json::to_string(&cache_json).unwrap()).unwrap();
+    }
+
+    write_executable(
+        &rig,
+        concat!(
+            "#!/bin/sh\n",
+            "case \"$*\" in\n",
+            "  \"list --json\") cat \"$IR_FAKE_RIG_LIST\" ;;\n",
+            "  \"available --all --json\")\n",
+            "    if [ -z \"${IR_FAKE_RIG_AVAILABLE:-}\" ]; then\n",
+            "      echo \"rig available --all should not be called\" >&2\n",
+            "      exit 3\n",
+            "    fi\n",
+            "    cat \"$IR_FAKE_RIG_AVAILABLE\"\n",
+            "    ;;\n",
+            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
+            "esac\n",
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let mut command = ir();
+    command
+        .env("PATH", path)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_FAKE_RIG_LIST", &list_json)
+        .args(["run", "--vanilla"])
+        .arg(&script);
+    if options.available.is_some() {
+        command.env("IR_FAKE_RIG_AVAILABLE", &available_json);
+    }
+    let output = command.output().unwrap();
+    let cache_json = fs::read_to_string(&cache_path).ok();
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_file(&list_json);
+    let _ = fs::remove_file(&available_json);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&installs_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+
+    FakeRigSelectionResult { output, cache_json }
 }
 
 #[test]
@@ -2814,6 +2977,50 @@ fn run_script_r_version_and_exclude_newer_selects_requested_r_version() {
 
     let _ = fs::remove_file(&script);
     let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_exclude_newer_uses_embedded_catalog_for_historical_installs() {
+    let _guard = e2e_lock();
+    let result = run_fake_rig_exclude_newer_selection(
+        "2021-04-01",
+        &[("4.0.5", "4.0.5")],
+        FakeRigSelectionOptions {
+            available: None,
+            cache: None,
+        },
+    );
+
+    assert_success(&result.output);
+    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&result.output, "version.r_version=[4.0.5]");
+    assert!(
+        result.cache_json.is_none(),
+        "historical embedded selections should not write a rig available cache"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_exclude_newer_uses_fresh_cache_for_later_dates() {
+    let _guard = e2e_lock();
+    let result = run_fake_rig_exclude_newer_selection(
+        "9999-01-01",
+        &[("4.7.0", "4.7.0")],
+        FakeRigSelectionOptions {
+            available: None,
+            cache: Some(FakeRigAvailableCache {
+                known_through: "2026-07-01",
+                checked_at: current_utc_seconds(),
+                available: &[("4.7.0", "4.7.0", "2026-07-01")],
+            }),
+        },
+    );
+
+    assert_success(&result.output);
+    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&result.output, "version.r_version=[4.7.0]");
 }
 
 #[test]
