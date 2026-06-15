@@ -382,7 +382,7 @@ fn required_available_version_from_candidates<'a>(
         .filter(|version| released_before_or_on(version, exclude_newer))
         .filter(|version| requirement.matches_candidate(version.name, version.version, &[]))
         .max_by(|a, b| compare_versions(a.version, b.version))
-        .map(AvailableR::from)
+        .map(|candidate| AvailableR::from(&candidate))
         .ok_or_else(|| {
             let suffix = exclude_newer
                 .map(|date| format!(" before or on {date}"))
@@ -393,11 +393,7 @@ fn required_available_version_from_candidates<'a>(
 
 fn available_for_exclude_newer(exclude_newer: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     if embedded_available_covers_exclude_newer(exclude_newer) {
-        return Ok(EMBEDDED_AVAILABLE
-            .iter()
-            .copied()
-            .map(AvailableR::from)
-            .collect());
+        return Ok(EMBEDDED_AVAILABLE.iter().map(AvailableR::from).collect());
     }
 
     cached_rig_available()
@@ -446,7 +442,7 @@ fn required_available_version_for_date(
         .filter(|version| available_name_is_concrete(version.name))
         .filter(|version| released_before_or_on(version, Some(exclude_newer)))
         .max_by(|a, b| compare_versions(a.version, b.version))
-        .map(AvailableR::from)
+        .map(|candidate| AvailableR::from(&candidate))
         .ok_or_else(|| {
             format!("could not resolve an R version before or on {exclude_newer}").into()
         })
@@ -534,8 +530,8 @@ impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
     }
 }
 
-impl From<AvailableCandidate<'_>> for AvailableR {
-    fn from(value: AvailableCandidate<'_>) -> Self {
+impl From<&AvailableCandidate<'_>> for AvailableR {
+    fn from(value: &AvailableCandidate<'_>) -> Self {
         Self {
             name: value.name.to_string(),
             version: value.version.to_string(),
