@@ -2822,6 +2822,21 @@ fn run_script_exclude_newer_refreshes_future_install_recommendation() {
 
 #[cfg(unix)]
 #[test]
+fn run_script_exclude_newer_uses_embedded_historical_install_recommendation() {
+    let _guard = e2e_lock();
+    let out = run_fake_rig_exclude_newer_selection("2025-03-01", &[], None);
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rig install 4.4.3"),
+        "{}",
+        output_text(&out)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_script_exclude_newer_queries_available_for_historical_unknown_installs() {
     let _guard = e2e_lock();
     let out = run_fake_rig_exclude_newer_selection(

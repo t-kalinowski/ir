@@ -200,10 +200,18 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
     let installed = rig_list()?;
     let embedded_selection =
         select_installed_r_for_date(&installed, EMBEDDED_AVAILABLE, &exclude_newer);
+    let embedded_required = required_available_version_for_date_from_candidates(
+        &exclude_newer,
+        EMBEDDED_AVAILABLE.iter().copied(),
+    )
+    .ok();
 
-    let needs_available_refresh = embedded_selection.is_none()
-        || (exclude_newer.as_str() > EMBEDDED_AVAILABLE_BUILD_DATE
-            && installed_has_unknown_stable_release_newer_than(&installed, embedded_selection));
+    let needs_available_refresh = if exclude_newer.as_str() > EMBEDDED_AVAILABLE_BUILD_DATE {
+        embedded_selection.is_none()
+            || installed_has_unknown_stable_release_newer_than(&installed, embedded_selection)
+    } else {
+        embedded_selection.is_none() && embedded_required.is_none()
+    };
 
     if needs_available_refresh {
         let available = cached_rig_available(&exclude_newer)?;
@@ -228,10 +236,9 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         return r.rscript();
     }
 
-    let required = required_available_version_for_date_from_candidates(
-        &exclude_newer,
-        EMBEDDED_AVAILABLE.iter().copied(),
-    )?;
+    let required = embedded_required.ok_or_else(|| {
+        format!("could not resolve an R version available before or on {exclude_newer}")
+    })?;
     Err(format!(
         "No installed R is available for exclude-newer {}. Run `rig install {}` to install R {}.",
         exclude_newer, required.name, required.version
