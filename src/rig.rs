@@ -182,6 +182,17 @@ struct InstalledR {
     binary: PathBuf,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RigListEntry {
+    name: String,
+    version: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    default: bool,
+    binary: PathBuf,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AvailableCandidate<'a> {
     name: &'a str,
@@ -296,7 +307,15 @@ fn rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
 }
 
 fn rig_list() -> Result<Vec<InstalledR>, Box<dyn Error>> {
-    rig_json(&["list", "--json"])
+    let output = rig_output(&["list", "--json"])?;
+    let json = clean_rig_json_output(&output)?;
+    let entries: Vec<RigListEntry> = serde_json::from_str(&json)
+        .map_err(|e| format!("failed to parse `rig list --json` JSON: {e}"))?;
+
+    Ok(entries
+        .into_iter()
+        .filter_map(InstalledR::from_rig_list_entry)
+        .collect())
 }
 
 fn rig_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T, Box<dyn Error>> {
@@ -590,6 +609,18 @@ impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
             version: &value.version,
             date: value.date.as_deref(),
         }
+    }
+}
+
+impl InstalledR {
+    fn from_rig_list_entry(value: RigListEntry) -> Option<Self> {
+        Some(Self {
+            name: value.name,
+            version: value.version?,
+            aliases: value.aliases,
+            default: value.default,
+            binary: value.binary,
+        })
     }
 }
 

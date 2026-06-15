@@ -2435,6 +2435,13 @@ fn run_script_exclude_newer_selects_latest_installed_r_released_before_date() {
                 "binary": future_r.to_string_lossy(),
             }),
             serde_json::json!({
+                "name": "broken",
+                "default": false,
+                "version": null,
+                "aliases": [],
+                "binary": installs_dir.join("broken").to_string_lossy(),
+            }),
+            serde_json::json!({
                 "name": "4.2",
                 "default": false,
                 "version": "4.2.0",
