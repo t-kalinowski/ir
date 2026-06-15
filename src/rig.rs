@@ -128,13 +128,6 @@ struct AvailableRCache {
     versions: Vec<AvailableR>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(untagged)]
-enum AvailableRCacheFile {
-    Current(AvailableRCache),
-    Legacy(Vec<AvailableR>),
-}
-
 #[derive(Debug)]
 struct InstalledR {
     name: String,
@@ -221,7 +214,7 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         installed_has_unknown_stable_release_newer_than(&installed, embedded_selection);
 
     let needs_available_refresh = if exclude_newer.as_str() > EMBEDDED_AVAILABLE_BUILD_DATE {
-        embedded_selection.is_none() || has_unknown_installed_release
+        true
     } else {
         embedded_selection.is_none()
             && (embedded_required.is_none() || has_unknown_installed_release)
@@ -351,15 +344,8 @@ fn read_cached_rig_available(
 
     let json = fs::read_to_string(&path)
         .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-    let cache_file: AvailableRCacheFile = serde_json::from_str(&json)
+    let mut cache: AvailableRCache = serde_json::from_str(&json)
         .map_err(|e| format!("failed to parse `{}`: {e}", path.display()))?;
-    let mut cache = match cache_file {
-        AvailableRCacheFile::Current(cache) => cache,
-        AvailableRCacheFile::Legacy(versions) => {
-            drop(versions);
-            return Ok(None);
-        }
-    };
     let stored_known_through =
         parse_iso_date_field("rig available cache known_through", &cache.known_through)?;
     let checked_on = parse_iso_date_field("rig available cache checked_on", &cache.checked_on)?;

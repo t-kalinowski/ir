@@ -1,9 +1,8 @@
 //! Integration tests for the public `ir` CLI.
 //!
-//! These tests mostly avoid mocked `Rscript`, `quarto`, `rig`, or package
-//! executable shims. The end-to-end cases run real fixture scripts/documents
-//! through the compiled binary and assert marker lines printed by those public
-//! workflows.
+//! These tests avoid mocked `Rscript`, `quarto`, `rig`, or package executable
+//! shims. The end-to-end cases run real fixture scripts/documents through the
+//! compiled binary and assert marker lines printed by those public workflows.
 
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 static E2E_LOCK: Mutex<()> = Mutex::new(());
@@ -188,10 +187,6 @@ fn current_utc_seconds() -> u64 {
 
 fn current_utc_date() -> String {
     time::OffsetDateTime::now_utc().date().to_string()
-}
-
-fn yesterday_utc_date() -> String {
-    (time::OffsetDateTime::now_utc().date() - time::Duration::days(1)).to_string()
 }
 
 fn e2e_lock() -> MutexGuard<'static, ()> {
@@ -403,15 +398,23 @@ fn rig_record_is_symbolic(record: &serde_json::Value) -> bool {
             .any(|alias| alias == "devel" || alias == "next")
 }
 
-fn test_r_selection_target(test_name: &str) -> Option<(String, String)> {
+fn rig_json_array(args: &[&str], test_name: &str) -> Option<Vec<serde_json::Value>> {
+    let value = rig_json(args, test_name)?;
+    let Some(array) = value.as_array() else {
+        eprintln!(
+            "SKIP {test_name}: `rig {}` did not return a JSON array",
+            args.join(" ")
+        );
+        return None;
+    };
+    Some(array.clone())
+}
+
+fn real_installed_test_r_version(test_name: &str) -> Option<String> {
     let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
         eprintln!(
             "SKIP {test_name}: set IR_TEST_R_VERSION to a rig-installed, non-default R version"
         );
-        return None;
-    };
-    let Ok(exclude_newer) = std::env::var("IR_TEST_R_EXCLUDE_NEWER") else {
-        eprintln!("SKIP {test_name}: set IR_TEST_R_EXCLUDE_NEWER to the target R release date");
         return None;
     };
 
@@ -422,7 +425,175 @@ fn test_r_selection_target(test_name: &str) -> Option<(String, String)> {
         return None;
     }
 
-    Some((target, exclude_newer))
+    let installed = rig_json_array(&["list", "--json"], test_name)?;
+    if installed.iter().any(|version| {
+        version.get("version").and_then(|value| value.as_str()) == Some(target.as_str())
+    }) {
+        Some(target)
+    } else {
+        eprintln!("SKIP {test_name}: rig list does not include R {target}");
+        None
+    }
+}
+
+fn real_available_release_date(test_name: &str, target: &str) -> Option<String> {
+    let available = rig_json_array(&["available", "--all", "--json"], test_name)?;
+    available.iter().find_map(|version| {
+        if rig_record_is_symbolic(version)
+            || version.get("version").and_then(|value| value.as_str()) != Some(target)
+        {
+            return None;
+        }
+        let date = version.get("date")?.as_str()?;
+        Some(iso_date_prefix_for_test(date)?.to_string())
+    })
+}
+
+fn test_r_selection_target(test_name: &str) -> Option<(String, String)> {
+    if std::env::var_os("IR_TEST_R_VERSION").is_some() {
+        let target = real_installed_test_r_version(test_name)?;
+        let Some(exclude_newer) = real_available_release_date(test_name, &target) else {
+            eprintln!("SKIP {test_name}: rig available has no stable release date for R {target}");
+            return None;
+        };
+        return Some((target, exclude_newer));
+    }
+
+    let default = default_r_version();
+    let installed = rig_json_array(&["list", "--json"], test_name)?;
+    let available = rig_json_array(&["available", "--all", "--json"], test_name)?;
+
+    installed
+        .iter()
+        .filter(|version| !rig_record_is_symbolic(version))
+        .filter_map(|installed| {
+            let version = installed.get("version")?.as_str()?;
+            parse_version_parts_for_test(version)?;
+            if Some(version) == default.as_deref() {
+                return None;
+            }
+            let date = available.iter().find_map(|available| {
+                if rig_record_is_symbolic(available)
+                    || !rig_records_match_for_test(installed, available)
+                {
+                    return None;
+                }
+                available
+                    .get("date")
+                    .and_then(|value| value.as_str())
+                    .and_then(iso_date_prefix_for_test)
+            })?;
+            Some((version.to_string(), date.to_string()))
+        })
+        .max_by(|left, right| compare_versions_for_test(&left.0, &right.0))
+        .or_else(|| {
+            eprintln!(
+                "SKIP {test_name}: rig has no installed non-default stable R with a release date"
+            );
+            None
+        })
+}
+
+fn real_latest_installed_stable_r_version_for_date(
+    test_name: &str,
+    exclude_newer: &str,
+) -> Option<String> {
+    let installed = rig_json_array(&["list", "--json"], test_name)?;
+    let available = rig_json_array(&["available", "--all", "--json"], test_name)?;
+
+    installed
+        .iter()
+        .filter(|version| !rig_record_is_symbolic(version))
+        .filter_map(|installed| {
+            let version = installed.get("version")?.as_str()?;
+            parse_version_parts_for_test(version)?;
+            if available.iter().any(|available| {
+                !rig_record_is_symbolic(available)
+                    && rig_records_match_for_test(installed, available)
+                    && available
+                        .get("date")
+                        .and_then(|value| value.as_str())
+                        .and_then(iso_date_prefix_for_test)
+                        .map(|date| date <= exclude_newer)
+                        .unwrap_or(false)
+            }) {
+                Some(version.to_string())
+            } else {
+                None
+            }
+        })
+        .max_by(|left, right| compare_versions_for_test(left, right))
+        .or_else(|| {
+            eprintln!(
+                "SKIP {test_name}: rig has no installed stable R released on or before {exclude_newer}"
+            );
+            None
+        })
+}
+
+fn rig_records_match_for_test(
+    installed: &serde_json::Value,
+    available: &serde_json::Value,
+) -> bool {
+    let installed_version = installed.get("version").and_then(|value| value.as_str());
+    let installed_name = installed.get("name").and_then(|value| value.as_str());
+    let available_version = available.get("version").and_then(|value| value.as_str());
+    let available_name = available.get("name").and_then(|value| value.as_str());
+
+    installed_version == available_version
+        || installed_name == available_name
+        || installed
+            .get("aliases")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .any(|alias| Some(alias) == available_name)
+}
+
+fn iso_date_prefix_for_test(value: &str) -> Option<&str> {
+    let date = value.get(..10)?;
+    let bytes = date.as_bytes();
+    (bytes.len() == 10
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+        && bytes[4] == b'-'
+        && bytes[5].is_ascii_digit()
+        && bytes[6].is_ascii_digit()
+        && bytes[7] == b'-'
+        && bytes[8].is_ascii_digit()
+        && bytes[9].is_ascii_digit())
+    .then_some(date)
+}
+
+fn parse_version_parts_for_test(value: &str) -> Option<Vec<u64>> {
+    let mut parts = Vec::new();
+    for part in value.split('.') {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        parts.push(part.parse().ok()?);
+    }
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn compare_versions_for_test(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = parse_version_parts_for_test(left).unwrap_or_default();
+    let right = parse_version_parts_for_test(right).unwrap_or_default();
+    let len = left.len().max(right.len());
+
+    for idx in 0..len {
+        let left = left.get(idx).copied().unwrap_or(0);
+        let right = right.get(idx).copied().unwrap_or(0);
+        match left.cmp(&right) {
+            std::cmp::Ordering::Equal => {}
+            other => return other,
+        }
+    }
+
+    std::cmp::Ordering::Equal
 }
 
 fn write_r_version_probe(
@@ -455,266 +626,6 @@ cat("version.r_version=[", as.character(getRversion()), "]\n", sep = "")
     )
     .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
     script
-}
-
-#[cfg(unix)]
-fn write_fake_r_install(root: &Path, name: &str, version: &str) -> PathBuf {
-    let bin_dir = root.join(name).join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let r = bin_dir.join("R");
-    let rscript = bin_dir.join("Rscript");
-
-    write_executable(&r, "#!/bin/sh\nexit 0\n");
-    write_executable(
-        &rscript,
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
-                "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
-                "  exit 0\n",
-                "fi\n",
-                "echo \"ir.fixture=fake-r-selection\"\n",
-                "echo \"version.r_version=[{}]\"\n",
-            ),
-            version
-        ),
-    );
-
-    r
-}
-
-#[cfg(unix)]
-struct FakeRigAvailableCache<'a> {
-    known_through: &'a str,
-    checked_on: String,
-    available: &'a [(&'a str, &'a str, &'a str)],
-}
-
-#[cfg(unix)]
-struct FakeRigSelectionOptions<'a> {
-    available: Option<&'a [(&'a str, &'a str, &'a str)]>,
-    cache: Option<FakeRigAvailableCache<'a>>,
-    legacy_cache: Option<&'a [(&'a str, &'a str, &'a str)]>,
-    include_broken_entry: bool,
-}
-
-#[cfg(unix)]
-struct FakeRigSelectionResult {
-    output: Output,
-    cache_json: Option<String>,
-}
-
-#[cfg(unix)]
-fn fake_available_json(available: &[(&str, &str, &str)]) -> Vec<serde_json::Value> {
-    available
-        .iter()
-        .map(|(name, version, date)| {
-            serde_json::json!({
-                "name": name,
-                "version": version,
-                "date": date,
-            })
-        })
-        .collect::<Vec<_>>()
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    available: Option<&[(&str, &str, &str)]>,
-) -> Output {
-    run_fake_rig_exclude_newer_selection_with_options(
-        exclude_newer,
-        installed,
-        FakeRigSelectionOptions {
-            available,
-            cache: None,
-            legacy_cache: None,
-            include_broken_entry: false,
-        },
-    )
-    .output
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection_with_broken_entry(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    available: Option<&[(&str, &str, &str)]>,
-    include_broken_entry: bool,
-) -> Output {
-    run_fake_rig_exclude_newer_selection_with_options(
-        exclude_newer,
-        installed,
-        FakeRigSelectionOptions {
-            available,
-            cache: None,
-            legacy_cache: None,
-            include_broken_entry,
-        },
-    )
-    .output
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection_with_cache(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    available: Option<&[(&str, &str, &str)]>,
-    cache: FakeRigAvailableCache<'_>,
-) -> Output {
-    run_fake_rig_exclude_newer_selection_with_cache_result(
-        exclude_newer,
-        installed,
-        available,
-        cache,
-    )
-    .output
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection_with_cache_result(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    available: Option<&[(&str, &str, &str)]>,
-    cache: FakeRigAvailableCache<'_>,
-) -> FakeRigSelectionResult {
-    run_fake_rig_exclude_newer_selection_with_options(
-        exclude_newer,
-        installed,
-        FakeRigSelectionOptions {
-            available,
-            cache: Some(cache),
-            legacy_cache: None,
-            include_broken_entry: false,
-        },
-    )
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection_with_options(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    options: FakeRigSelectionOptions<'_>,
-) -> FakeRigSelectionResult {
-    let bin_dir = unique_dir("ir-fake-rig-bin");
-    let installs_dir = unique_dir("ir-fake-rig-installs");
-    let cache_dir = unique_dir("ir-fake-rig-cache");
-    let cache_path = cache_dir.join("rig").join("available.json");
-    let rig = bin_dir.join("rig");
-    let list_json = unique_path("ir-fake-rig-list", "json");
-    let available_json = unique_path("ir-fake-rig-available", "json");
-    let script = write_r_version_probe(
-        "ir-fake-rig-exclude-newer",
-        None,
-        exclude_newer,
-        "fake-r-selection",
-    );
-
-    let mut installed_json = installed
-        .iter()
-        .map(|(name, version)| {
-            let binary = write_fake_r_install(&installs_dir, name, version);
-            serde_json::json!({
-                "name": name,
-                "default": false,
-                "version": version,
-                "aliases": [],
-                "path": binary.parent().unwrap().parent().unwrap().to_string_lossy(),
-                "binary": binary.to_string_lossy(),
-            })
-        })
-        .collect::<Vec<_>>();
-    if options.include_broken_entry {
-        installed_json.push(serde_json::json!({
-            "name": "broken",
-            "default": false,
-            "version": null,
-            "aliases": [],
-            "path": installs_dir.join("broken").to_string_lossy(),
-            "binary": null,
-        }));
-    }
-
-    fs::write(&list_json, serde_json::to_string(&installed_json).unwrap()).unwrap();
-    if let Some(available) = options.available {
-        let available_json_value = fake_available_json(available);
-        fs::write(
-            &available_json,
-            serde_json::to_string(&available_json_value).unwrap(),
-        )
-        .unwrap();
-    }
-    if let Some(cache) = options.cache {
-        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-        let cache_json = serde_json::json!({
-            "known_through": cache.known_through,
-            "checked_on": cache.checked_on,
-            "versions": fake_available_json(cache.available),
-        });
-        fs::write(&cache_path, serde_json::to_string(&cache_json).unwrap()).unwrap();
-    } else if let Some(cache) = options.legacy_cache {
-        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-        fs::write(
-            &cache_path,
-            serde_json::to_string(&fake_available_json(cache)).unwrap(),
-        )
-        .unwrap();
-    }
-
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  \"available --all --json\")\n",
-            "    if [ -z \"${IR_FAKE_RIG_AVAILABLE:-}\" ]; then\n",
-            "      echo \"rig available --all should not be called\" >&2\n",
-            "      exit 3\n",
-            "    fi\n",
-            "    cat \"$IR_FAKE_RIG_AVAILABLE\"\n",
-            "    ;;\n",
-            "  \"available --json\") echo \"rig available must request --all\" >&2; exit 4 ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-
-    let mut command = ir();
-    command
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .args(["run", "--vanilla"])
-        .arg(&script);
-    if options.available.is_some() {
-        command.env("IR_FAKE_RIG_AVAILABLE", &available_json);
-    }
-    let out = command.output().unwrap();
-    let cache_json = fs::read_to_string(&cache_path).ok();
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_file(&available_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-
-    FakeRigSelectionResult {
-        output: out,
-        cache_json,
-    }
 }
 
 #[test]
@@ -2893,351 +2804,73 @@ fn run_script_r_version_and_exclude_newer_selects_requested_r_version() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
-#[cfg(unix)]
 #[test]
-fn run_script_exclude_newer_selects_newest_installed_r_before_date() {
+fn run_script_exclude_newer_reuses_real_available_cache_for_future_date() {
     let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection("2025-03-01", &[("4.3.3", "4.3.3")], None);
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.3.3]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_does_not_refresh_when_embedded_selection_exists() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2025-03-01",
-        &[("4.4.3", "4.4.3"), ("4.7.0", "4.7.0")],
+    let test_name = "run_script_exclude_newer_reuses_real_available_cache_for_future_date";
+    let exclude_newer = "9999-01-01";
+    let Some(expected) = real_latest_installed_stable_r_version_for_date(test_name, exclude_newer)
+    else {
+        return;
+    };
+    let script = write_r_version_probe(
+        "ir-exclude-newer-real-cache",
         None,
+        exclude_newer,
+        "exclude-newer-real-cache",
     );
+    let cache_dir = unique_dir("ir-exclude-newer-real-cache");
+    let cache_path = cache_dir.join("rig").join("available.json");
 
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.4.3]");
-}
+    let first = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
 
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_uses_complete_available_release_dates() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection("2024-01-15", &[("4.3.2", "4.3.2")], None);
+    assert_success(&first);
+    assert_stdout_contains(&first, "ir.fixture=exclude-newer-real-cache");
+    assert_stdout_contains(&first, &format!("version.r_version=[{expected}]"));
 
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.3.2]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_skips_broken_rig_entries() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection_with_broken_entry(
-        "2025-03-01",
-        &[("4.3.3", "4.3.3")],
-        None,
-        true,
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.3.3]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_available_releases_for_future_dates() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2026-07-15",
-        &[("4.7.0", "4.7.0")],
-        Some(&[
-            ("4.6.0", "4.6.0", "2026-04-24"),
-            ("4.7.0", "4.7.0", "2026-07-01"),
-        ]),
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_future_install_recommendation() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2026-07-15",
-        &[],
-        Some(&[
-            ("4.6.0", "4.6.0", "2026-04-24"),
-            ("4.7.0", "4.7.0", "2026-07-01"),
-        ]),
-    );
-
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("rig install 4.7.0"),
-        "{}",
-        output_text(&out)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_uses_embedded_historical_install_recommendation() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection("2025-03-01", &[], None);
-
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("rig install 4.4.3"),
-        "{}",
-        output_text(&out)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_queries_available_for_historical_unknown_installs() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2021-04-01",
-        &[("4.0.5", "4.0.5")],
-        Some(&[
-            ("4.0.5", "4.0.5", "2021-03-31"),
-            ("4.1.0", "4.1.0", "2021-05-18"),
-        ]),
+        cache_path.exists(),
+        "later-date requests should create a real rig available cache"
     );
 
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.0.5]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_checks_unknown_installed_release_before_embedded_install_hint() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2021-06-01",
-        &[("4.0.5", "4.0.5")],
-        Some(&[
-            ("4.0.5", "4.0.5", "2021-03-31"),
-            ("4.1.0", "4.1.0", "2021-05-18"),
-        ]),
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.0.5]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_checks_unknown_installed_release_before_returning() {
-    let _guard = e2e_lock();
-    let out = run_fake_rig_exclude_newer_selection(
-        "2026-07-15",
-        &[("4.6.0", "4.6.0"), ("4.7.0", "4.7.0")],
-        Some(&[
-            ("4.6.0", "4.6.0", "2026-04-24"),
-            ("4.7.0", "4.7.0", "2026-07-01"),
-        ]),
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_reuses_cached_available_releases_for_known_dates() {
-    let _guard = e2e_lock();
-    let cached_available = [
-        ("4.6.0", "4.6.0", "2026-04-24"),
-        ("4.7.0", "4.7.0", "2026-07-01"),
-    ];
-    let out = run_fake_rig_exclude_newer_selection_with_cache(
-        "2026-07-01",
-        &[("4.6.0", "4.6.0"), ("4.7.0", "4.7.0")],
-        None,
-        FakeRigAvailableCache {
-            known_through: "2026-07-01",
-            checked_on: current_utc_date(),
-            available: &cached_available,
-        },
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_does_not_write_future_cutoff_as_cache_coverage() {
-    let _guard = e2e_lock();
-    let available = [
-        ("4.6.0", "4.6.0", "2026-04-24"),
-        ("4.7.0", "4.7.0", "2026-07-01"),
-    ];
-    let result = run_fake_rig_exclude_newer_selection_with_options(
-        "2027-01-01",
-        &[("4.7.0", "4.7.0")],
-        FakeRigSelectionOptions {
-            available: Some(&available),
-            cache: None,
-            legacy_cache: None,
-            include_broken_entry: false,
-        },
-    );
-
-    assert_success(&result.output);
-    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&result.output, "version.r_version=[4.7.0]");
-
-    let cache_json = result
-        .cache_json
-        .expect("rig available cache should be written");
+    let cache_json = fs::read_to_string(&cache_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", cache_path.display()));
     let cache: serde_json::Value = serde_json::from_str(&cache_json).unwrap();
-    assert_eq!(cache["known_through"], "2026-07-01");
     assert_eq!(cache["checked_on"], current_utc_date());
-}
 
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_legacy_available_cache() {
-    let _guard = e2e_lock();
-    let legacy_available = [("4.6.0", "4.6.0", "2026-04-24")];
-    let refreshed_available = [
-        ("4.6.0", "4.6.0", "2026-04-24"),
-        ("4.7.0", "4.7.0", "2026-07-01"),
-    ];
-    let result = run_fake_rig_exclude_newer_selection_with_options(
-        "2026-07-15",
-        &[("4.6.0", "4.6.0"), ("4.7.0", "4.7.0")],
-        FakeRigSelectionOptions {
-            available: Some(&refreshed_available),
-            cache: None,
-            legacy_cache: Some(&legacy_available),
-            include_broken_entry: false,
-        },
+    let first_modified = fs::metadata(&cache_path)
+        .unwrap_or_else(|e| panic!("failed to stat {}: {e}", cache_path.display()))
+        .modified()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let second = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&second);
+    assert_stdout_contains(&second, "ir.fixture=exclude-newer-real-cache");
+    assert_stdout_contains(&second, &format!("version.r_version=[{expected}]"));
+
+    let second_modified = fs::metadata(&cache_path)
+        .unwrap_or_else(|e| panic!("failed to stat {}: {e}", cache_path.display()))
+        .modified()
+        .unwrap();
+    assert_eq!(
+        first_modified, second_modified,
+        "cache file should not be rewritten for a same-day future-date request"
     );
 
-    assert_success(&result.output);
-    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&result.output, "version.r_version=[4.7.0]");
-
-    let cache_json = result
-        .cache_json
-        .expect("rig available cache should be refreshed");
-    let cache: serde_json::Value = serde_json::from_str(&cache_json).unwrap();
-    assert_eq!(cache["known_through"], "2026-07-01");
-    assert_eq!(cache["versions"][1]["version"], "4.7.0");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_cache_when_stored_coverage_exceeds_release_data() {
-    let _guard = e2e_lock();
-    let cached_available = [("4.0.4", "4.0.4", "2021-02-15")];
-    let out = run_fake_rig_exclude_newer_selection_with_cache(
-        "2021-04-01",
-        &[("4.0.5", "4.0.5")],
-        Some(&[
-            ("4.0.4", "4.0.4", "2021-02-15"),
-            ("4.0.5", "4.0.5", "2021-03-31"),
-        ]),
-        FakeRigAvailableCache {
-            known_through: "2027-01-01",
-            checked_on: "2021-03-01".to_string(),
-            available: &cached_available,
-        },
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.0.5]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_cache_when_only_prerelease_covers_today() {
-    let _guard = e2e_lock();
-    let today = current_utc_date();
-    let cached_available = [
-        ("4.6.0", "4.6.0", "2026-04-24"),
-        ("next", "4.6.1", "9999-01-01"),
-    ];
-    let refreshed_available = [
-        ("4.6.0", "4.6.0", "2026-04-24"),
-        ("4.6.1", "4.6.1", today.as_str()),
-    ];
-    let out = run_fake_rig_exclude_newer_selection_with_cache(
-        "9999-01-01",
-        &[("4.6.0", "4.6.0"), ("4.6.1", "4.6.1")],
-        Some(&refreshed_available),
-        FakeRigAvailableCache {
-            known_through: "9999-01-01",
-            checked_on: yesterday_utc_date(),
-            available: &cached_available,
-        },
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.6.1]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_reuses_today_cache_for_future_cutoff() {
-    let _guard = e2e_lock();
-    let cached_available = [("4.7.0", "4.7.0", "2026-07-01")];
-    let out = run_fake_rig_exclude_newer_selection_with_cache(
-        "9999-01-01",
-        &[("4.7.0", "4.7.0")],
-        None,
-        FakeRigAvailableCache {
-            known_through: "2026-07-01",
-            checked_on: current_utc_date(),
-            available: &cached_available,
-        },
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_refreshes_future_cutoff_cache_checked_before_today() {
-    let _guard = e2e_lock();
-    let cached_available = [("4.6.0", "4.6.0", "2026-04-24")];
-    let out = run_fake_rig_exclude_newer_selection_with_cache(
-        "9999-01-01",
-        &[("4.6.0", "4.6.0"), ("4.7.0", "4.7.0")],
-        Some(&[
-            ("4.6.0", "4.6.0", "2026-04-24"),
-            ("4.7.0", "4.7.0", "2026-07-01"),
-        ]),
-        FakeRigAvailableCache {
-            known_through: "1970-01-01",
-            checked_on: yesterday_utc_date(),
-            available: &cached_available,
-        },
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
