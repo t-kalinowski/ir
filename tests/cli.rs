@@ -2994,6 +2994,35 @@ fn run_script_exclude_newer_refreshes_cache_when_stored_coverage_exceeds_release
 
 #[cfg(unix)]
 #[test]
+fn run_script_exclude_newer_refreshes_cache_when_only_prerelease_covers_today() {
+    let _guard = e2e_lock();
+    let today = current_utc_date();
+    let cached_available = [
+        ("4.6.0", "4.6.0", "2026-04-24"),
+        ("next", "4.6.1", "9999-01-01"),
+    ];
+    let refreshed_available = [
+        ("4.6.0", "4.6.0", "2026-04-24"),
+        ("4.6.1", "4.6.1", today.as_str()),
+    ];
+    let out = run_fake_rig_exclude_newer_selection_with_cache(
+        "9999-01-01",
+        &[("4.6.0", "4.6.0"), ("4.6.1", "4.6.1")],
+        Some(&refreshed_available),
+        FakeRigAvailableCache {
+            known_through: "9999-01-01",
+            checked_on: yesterday_utc_date(),
+            available: &cached_available,
+        },
+    );
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&out, "version.r_version=[4.6.1]");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_script_exclude_newer_reuses_today_cache_for_future_cutoff() {
     let _guard = e2e_lock();
     let cached_available = [("4.7.0", "4.7.0", "2026-07-01")];

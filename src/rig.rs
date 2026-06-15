@@ -523,7 +523,9 @@ fn normalize_available_release_dates(versions: &mut [AvailableR]) -> Result<(), 
 fn latest_available_release_date(versions: &[AvailableR]) -> Option<&str> {
     versions
         .iter()
-        .filter_map(|version| version.date.as_deref())
+        .map(AvailableCandidate::from)
+        .filter(stable_release_candidate)
+        .filter_map(|version| version.date)
         .max()
 }
 
