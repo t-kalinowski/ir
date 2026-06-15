@@ -2439,7 +2439,7 @@ fn run_script_exclude_newer_selects_latest_installed_r_released_before_date() {
                 "default": false,
                 "version": null,
                 "aliases": [],
-                "binary": installs_dir.join("broken").to_string_lossy(),
+                "binary": null,
             }),
             serde_json::json!({
                 "name": "4.2",

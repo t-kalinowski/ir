@@ -190,7 +190,7 @@ struct RigListEntry {
     aliases: Vec<String>,
     #[serde(default)]
     default: bool,
-    binary: PathBuf,
+    binary: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -619,7 +619,7 @@ impl InstalledR {
             version: value.version?,
             aliases: value.aliases,
             default: value.default,
-            binary: value.binary,
+            binary: value.binary?,
         })
     }
 }
