@@ -33,6 +33,21 @@ pub(super) fn select_installed_for_date<'a>(
         .max_by(|a, b| compare_versions(&a.version, &b.version))
 }
 
+pub(super) fn has_stable_installed_outside_catalog(
+    installed: &[InstalledR],
+    catalog: &ReleaseCatalog,
+) -> bool {
+    installed
+        .iter()
+        .filter(|version| stable_installed_release_candidate(version))
+        .any(|installed| {
+            !catalog.candidates().any(|candidate| {
+                stable_release_candidate(&candidate)
+                    && matches_available_candidate(installed, &candidate)
+            })
+        })
+}
+
 pub(super) fn required_available_version(
     req: &str,
     requirement: &VersionRequirement,

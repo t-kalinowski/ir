@@ -36,8 +36,28 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
 pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
     let exclude_newer = parse_iso_date_field("exclude-newer", exclude_newer)?;
     let installed = command::rig_list()?;
-    let catalog = catalog::for_exclude_newer(&exclude_newer)?;
+    let embedded_catalog = catalog::ReleaseCatalog::embedded();
+    let embedded_selection =
+        selection::select_installed_for_date(&installed, &embedded_catalog, &exclude_newer);
 
+    if exclude_newer.as_str() <= catalog::EMBEDDED_AVAILABLE_BUILD_DATE
+        || !selection::has_stable_installed_outside_catalog(&installed, &embedded_catalog)
+    {
+        if let Some(r) = embedded_selection {
+            return r.rscript();
+        }
+        if exclude_newer.as_str() <= catalog::EMBEDDED_AVAILABLE_BUILD_DATE {
+            let required =
+                selection::required_available_version_for_date(&embedded_catalog, &exclude_newer)?;
+            return Err(format!(
+                "No installed R is available for exclude-newer {}. Run `rig install {}` to install R {}.",
+                exclude_newer, required.name, required.version
+            )
+            .into());
+        }
+    }
+
+    let catalog = catalog::for_exclude_newer(&exclude_newer)?;
     if let Some(r) = selection::select_installed_for_date(&installed, &catalog, &exclude_newer) {
         return r.rscript();
     }

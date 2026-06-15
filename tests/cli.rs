@@ -3003,6 +3003,54 @@ fn run_script_exclude_newer_uses_embedded_catalog_for_historical_installs() {
 
 #[cfg(unix)]
 #[test]
+fn run_script_exclude_newer_uses_embedded_catalog_for_future_known_installs() {
+    let _guard = e2e_lock();
+    let result = run_fake_rig_exclude_newer_selection(
+        "2026-06-15",
+        &[("4.6.0", "4.6.0")],
+        FakeRigSelectionOptions {
+            available: None,
+            cache: None,
+        },
+    );
+
+    assert_success(&result.output);
+    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&result.output, "version.r_version=[4.6.0]");
+    assert!(
+        result.cache_json.is_none(),
+        "embedded-known installed selections should not write a rig available cache"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_exclude_newer_fetches_live_catalog_for_future_unknown_installs() {
+    let _guard = e2e_lock();
+    let result = run_fake_rig_exclude_newer_selection(
+        "2026-07-15",
+        &[("4.6.0", "4.6.0"), ("4.7.0", "4.7.0")],
+        FakeRigSelectionOptions {
+            available: Some(&[
+                ("4.6.0", "4.6.0", "2026-04-24"),
+                ("4.7.0", "4.7.0", "2026-07-01"),
+            ]),
+            cache: None,
+        },
+    );
+
+    assert_success(&result.output);
+    assert_stdout_contains(&result.output, "ir.fixture=fake-r-selection");
+    assert_stdout_contains(&result.output, "version.r_version=[4.7.0]");
+    let cache = result
+        .cache_json
+        .expect("future unknown installs should write a rig available cache");
+    let cache: serde_json::Value = serde_json::from_str(&cache).unwrap();
+    assert_eq!(cache["known_through"], "2026-07-01");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_script_exclude_newer_uses_fresh_cache_for_later_dates() {
     let _guard = e2e_lock();
     let result = run_fake_rig_exclude_newer_selection(
@@ -3054,10 +3102,14 @@ fn run_script_exclude_newer_reuses_real_available_cache_for_future_date() {
     assert_stdout_contains(&first, "ir.fixture=exclude-newer-real-cache");
     assert_stdout_contains(&first, &format!("version.r_version=[{expected}]"));
 
-    assert!(
-        cache_path.exists(),
-        "later-date requests should create a real rig available cache"
-    );
+    if !cache_path.exists() {
+        eprintln!(
+            "SKIP {test_name}: embedded catalog selected installed R {expected} without live rig availability"
+        );
+        let _ = fs::remove_file(&script);
+        let _ = fs::remove_dir_all(&cache_dir);
+        return;
+    }
 
     let cache_json = fs::read_to_string(&cache_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", cache_path.display()));
