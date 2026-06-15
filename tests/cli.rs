@@ -416,7 +416,6 @@ struct FakeRigAvailableCache<'a> {
 struct FakeRigSelectionOptions<'a> {
     available: Option<&'a [(&'a str, &'a str, &'a str)]>,
     cache: Option<FakeRigAvailableCache<'a>>,
-    legacy_cache: Option<&'a [(&'a str, &'a str, &'a str)]>,
     include_broken_entry: bool,
 }
 
@@ -452,7 +451,6 @@ fn run_fake_rig_exclude_newer_selection(
         FakeRigSelectionOptions {
             available,
             cache: None,
-            legacy_cache: None,
             include_broken_entry: false,
         },
     )
@@ -472,7 +470,6 @@ fn run_fake_rig_exclude_newer_selection_with_broken_entry(
         FakeRigSelectionOptions {
             available,
             cache: None,
-            legacy_cache: None,
             include_broken_entry,
         },
     )
@@ -508,30 +505,9 @@ fn run_fake_rig_exclude_newer_selection_with_cache_result(
         FakeRigSelectionOptions {
             available,
             cache: Some(cache),
-            legacy_cache: None,
             include_broken_entry: false,
         },
     )
-}
-
-#[cfg(unix)]
-fn run_fake_rig_exclude_newer_selection_with_legacy_cache(
-    exclude_newer: &str,
-    installed: &[(&str, &str)],
-    available: Option<&[(&str, &str, &str)]>,
-    cache: &[(&str, &str, &str)],
-) -> Output {
-    run_fake_rig_exclude_newer_selection_with_options(
-        exclude_newer,
-        installed,
-        FakeRigSelectionOptions {
-            available,
-            cache: None,
-            legacy_cache: Some(cache),
-            include_broken_entry: false,
-        },
-    )
-    .output
 }
 
 #[cfg(unix)]
@@ -595,14 +571,6 @@ fn run_fake_rig_exclude_newer_selection_with_options(
             "versions": fake_available_json(cache.available),
         });
         fs::write(&cache_path, serde_json::to_string(&cache_json).unwrap()).unwrap();
-    }
-    if let Some(cache) = options.legacy_cache {
-        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-        fs::write(
-            &cache_path,
-            serde_json::to_string(&fake_available_json(cache)).unwrap(),
-        )
-        .unwrap();
     }
 
     write_executable(
@@ -2913,26 +2881,6 @@ fn run_script_exclude_newer_reuses_cached_available_releases_for_known_dates() {
 
 #[cfg(unix)]
 #[test]
-fn run_script_exclude_newer_refreshes_legacy_available_cache_shape() {
-    let _guard = e2e_lock();
-    let legacy_cache = [("4.6.0", "4.6.0", "2026-04-24")];
-    let out = run_fake_rig_exclude_newer_selection_with_legacy_cache(
-        "2026-07-01",
-        &[("4.7.0", "4.7.0")],
-        Some(&[
-            ("4.6.0", "4.6.0", "2026-04-24"),
-            ("4.7.0", "4.7.0", "2026-07-01"),
-        ]),
-        &legacy_cache,
-    );
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-}
-
-#[cfg(unix)]
-#[test]
 fn run_script_exclude_newer_does_not_write_future_cutoff_as_cache_coverage() {
     let _guard = e2e_lock();
     let available = [
@@ -2945,7 +2893,6 @@ fn run_script_exclude_newer_does_not_write_future_cutoff_as_cache_coverage() {
         FakeRigSelectionOptions {
             available: Some(&available),
             cache: None,
-            legacy_cache: None,
             include_broken_entry: false,
         },
     );

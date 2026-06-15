@@ -330,13 +330,7 @@ fn read_cached_rig_available(
 
     let json = fs::read_to_string(&path)
         .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| format!("failed to parse `{}`: {e}", path.display()))?;
-    if value.is_array() {
-        return Ok(None);
-    }
-
-    let mut cache: AvailableRCache = serde_json::from_value(value)
+    let mut cache: AvailableRCache = serde_json::from_str(&json)
         .map_err(|e| format!("failed to parse `{}`: {e}", path.display()))?;
     let stored_known_through =
         parse_iso_date_field("rig available cache known_through", &cache.known_through)?;
