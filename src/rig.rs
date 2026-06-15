@@ -344,7 +344,7 @@ fn required_available_version(
     exclude_newer: Option<&str>,
 ) -> Result<AvailableR, Box<dyn Error>> {
     if let Some(exclude_newer) = exclude_newer {
-        if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
+        if embedded_available_covers_exclude_newer(exclude_newer) {
             return required_available_version_from_candidates(
                 req,
                 requirement,
@@ -392,7 +392,7 @@ fn required_available_version_from_candidates<'a>(
 }
 
 fn available_for_exclude_newer(exclude_newer: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
+    if embedded_available_covers_exclude_newer(exclude_newer) {
         return Ok(EMBEDDED_AVAILABLE
             .iter()
             .copied()
@@ -401,6 +401,13 @@ fn available_for_exclude_newer(exclude_newer: &str) -> Result<Vec<AvailableR>, B
     }
 
     cached_rig_available()
+}
+
+fn embedded_available_covers_exclude_newer(exclude_newer: &str) -> bool {
+    exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE
+        && EMBEDDED_AVAILABLE
+            .iter()
+            .any(|version| released_before_or_on(version, Some(exclude_newer)))
 }
 
 fn installed_released_before_or_on(
