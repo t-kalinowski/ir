@@ -335,7 +335,7 @@ ul.task-list li input[type="checkbox"] {
 <section id="requirements" class="level2">
 <h2 class="anchored" data-anchor-id="requirements">Requirements</h2>
 <ul>
-<li><code>R</code> / <code>Rscript</code> on <code>PATH</code>, a rig default R install, or <code>IR_RSCRIPT</code> when <code>r-version</code> is not set.</li>
+<li><code>R</code> / <code>Rscript</code> on <code>PATH</code>, or <code>IR_RSCRIPT</code> when <code>r-version</code> is not set.</li>
 <li><code>rig</code> on <code>PATH</code> when <code>r-version</code> is set.</li>
 <li><code>quarto</code> on <code>PATH</code>, or <code>IR_QUARTO</code>, when rendering <code>.qmd</code>, <code>.Rmd</code>, or R script files.</li>
 <li><code>ir</code> installs its own resolver tooling (<code>pak</code>, <code>renv</code>, <code>secretbase</code>) on first use into a dedicated library under the cache directory, so you do not need to pre-install them. Copies already on the R library path are reused instead of installing a private one.</li>
@@ -379,7 +379,7 @@ ul.task-list li input[type="checkbox"] {
 <tr class="odd">
 <td><code>IR_RSCRIPT</code></td>
 <td>runs without <code>r-version</code></td>
-<td>rig’s default R install, then <code>Rscript</code> on <code>PATH</code></td>
+<td><code>Rscript</code> on <code>PATH</code></td>
 </tr>
 <tr class="even">
 <td><code>IR_QUARTO</code></td>
