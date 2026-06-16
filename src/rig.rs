@@ -367,7 +367,7 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
 pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
     let exclude_newer = parse_iso_date_field("exclude-newer", exclude_newer)?;
     let installed = rig_list()?;
-    let available = available_for_exclude_newer(&exclude_newer)?;
+    let available = available_for_exclude_newer(&exclude_newer, &installed)?;
 
     if let Some(installed) = installed
         .iter()
@@ -499,7 +499,10 @@ fn required_available_version_from_candidates<'a>(
         })
 }
 
-fn available_for_exclude_newer(exclude_newer: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+fn available_for_exclude_newer(
+    exclude_newer: &str,
+    installed: &[InstalledR],
+) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
         return Ok(EMBEDDED_AVAILABLE
             .iter()
@@ -508,7 +511,7 @@ fn available_for_exclude_newer(exclude_newer: &str) -> Result<Vec<AvailableR>, B
             .collect());
     }
 
-    cached_rig_available_all()
+    cached_rig_available_all_refreshing_for_installed(installed)
 }
 
 fn installed_released_before_or_on(
@@ -564,15 +567,47 @@ fn symbolic_prerelease_name(value: &str) -> bool {
 }
 
 fn cached_rig_available_all() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    cached_rig_available_all_refreshing_if(|_| false)
+}
+
+fn cached_rig_available_all_refreshing_for_installed(
+    installed: &[InstalledR],
+) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    cached_rig_available_all_refreshing_if(|available| {
+        !available_covers_installed_releases(available, installed)
+    })
+}
+
+fn cached_rig_available_all_refreshing_if(
+    refresh_cached: impl FnOnce(&[AvailableR]) -> bool,
+) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("rig")
         .join("available-all.json");
     if path.exists() {
         let json = fs::read_to_string(&path)
             .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-        return parse_rig_available_json(&json);
+        let available = parse_rig_available_json(&json)?;
+        if !refresh_cached(&available) {
+            return Ok(available);
+        }
     }
 
+    refresh_cached_rig_available_all(&path)
+}
+
+fn available_covers_installed_releases(available: &[AvailableR], installed: &[InstalledR]) -> bool {
+    installed
+        .iter()
+        .filter(|version| !installed_is_symbolic_prerelease(version))
+        .all(|installed| {
+            available
+                .iter()
+                .any(|available| available_matches_installed(available, installed))
+        })
+}
+
+fn refresh_cached_rig_available_all(path: &Path) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let json = String::from_utf8(rig_output(&["available", "--all", "--json"])?)
         .map_err(|e| format!("`rig available --all --json` returned non-UTF-8 output: {e}"))?;
     let available = parse_rig_available_json(&json)?;
