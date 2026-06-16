@@ -10,11 +10,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
-static E2E_LOCK: Mutex<()> = Mutex::new(());
 
 fn ir() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ir"))
@@ -41,58 +39,9 @@ fn rx_bin_name() -> String {
 }
 
 fn rscript() -> OsString {
-    let command = std::env::var_os("IR_RSCRIPT")
+    std::env::var_os("IR_RSCRIPT")
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Rscript".into());
-
-    #[cfg(unix)]
-    {
-        resolve_unix_command_path(&command).unwrap_or(command)
-    }
-
-    #[cfg(not(unix))]
-    {
-        command
-    }
-}
-
-#[cfg(unix)]
-fn resolve_unix_command_path(command: &std::ffi::OsStr) -> Option<OsString> {
-    let path = Path::new(command);
-    if path.components().count() > 1 {
-        return executable_file(path).then(|| path.into());
-    }
-
-    let path_env = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_env)
-        .map(|dir| dir.join(path))
-        .find(|candidate| executable_file(candidate))
-        .map(|path| path.into_os_string())
-}
-
-#[cfg(unix)]
-fn executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-fn resolved_rscript() -> OsString {
-    let rscript = rscript();
-    if Path::new(&rscript).components().count() > 1 {
-        return rscript;
-    }
-
-    std::env::var_os("PATH")
-        .and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join(&rscript))
-                .find(|path| path.is_file())
-                .map(PathBuf::into_os_string)
-        })
-        .unwrap_or(rscript)
+        .unwrap_or_else(|| "Rscript".into())
 }
 
 fn rscript_from_r_binary(binary: &Path) -> PathBuf {
@@ -232,17 +181,52 @@ fn current_utc_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-fn e2e_lock() -> MutexGuard<'static, ()> {
-    E2E_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join(name)
+}
+
+fn copy_dir_files(source: &Path, destination: &Path) {
+    for entry in fs::read_dir(source)
+        .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", source.display()))
+    {
+        let entry = entry.unwrap_or_else(|e| {
+            panic!("failed to read fixture entry in {}: {e}", source.display())
+        });
+        let path = entry.path();
+        if path.is_file() {
+            fs::copy(&path, destination.join(entry.file_name())).unwrap_or_else(|e| {
+                panic!(
+                    "failed to copy fixture {} to {}: {e}",
+                    path.display(),
+                    destination.display()
+                )
+            });
+        }
+    }
+}
+
+fn fixture_copy(name: &str, prefix: &str) -> PathBuf {
+    let source = fixture(name);
+    let destination = unique_dir(prefix);
+    copy_dir_files(&source, &destination);
+
+    destination
+}
+
+fn docs_copy(prefix: &str) -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = manifest_dir.join("docs");
+    let (destination, _) = unique_dir_in(manifest_dir, prefix);
+    copy_dir_files(&source, &destination);
+
+    destination
+}
+
+fn test_cache(prefix: &str) -> PathBuf {
+    unique_dir(prefix)
 }
 
 fn write_r_source_package(root: &Path, name: &str, extra_description: &[String]) -> PathBuf {
@@ -325,33 +309,6 @@ fn make_executable(path: &Path) {
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
     make_executable(path);
-}
-
-#[cfg(unix)]
-fn write_fake_r_install(root: &Path, name: &str, version: &str) -> PathBuf {
-    let bin_dir = root.join(name).join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let r = bin_dir.join("R");
-    let rscript = bin_dir.join("Rscript");
-
-    write_executable(&r, "#!/bin/sh\nexit 0\n");
-    write_executable(
-        &rscript,
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
-                "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
-                "  exit 0\n",
-                "fi\n",
-                "printf 'ir.fixture=fake-r-selection\\n'\n",
-                "printf 'version.r_version=[{}]\\n'\n",
-            ),
-            version
-        ),
-    );
-
-    r
 }
 
 fn python_executable() -> PathBuf {
@@ -619,9 +576,7 @@ fn help_section_headings_are_colored() {
 fn docs_website_has_dark_mode_and_colored_reference_output() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _guard = e2e_lock();
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let docs_dir = manifest_dir.join("docs");
+    let docs_dir = docs_copy("ir-docs-reference-project");
     let (output_dir, output_dir_name) = unique_dir_in(&docs_dir, "ir-docs-reference-output");
     let bin_dir = unique_dir("ir-docs-reference-bin");
     let fake_cargo = bin_dir.join("cargo");
@@ -721,13 +676,12 @@ fn docs_website_has_dark_mode_and_colored_reference_output() {
 
     let _ = fs::remove_dir_all(&output_dir);
     let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&docs_dir);
 }
 
 #[test]
 fn docs_run_page_dark_mode_styles_console_blocks() {
-    let _guard = e2e_lock();
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let docs_dir = manifest_dir.join("docs");
+    let docs_dir = docs_copy("ir-docs-run-project");
     let (output_dir, output_dir_name) = unique_dir_in(&docs_dir, "ir-docs-run-output");
 
     let mut quarto = Command::new("quarto");
@@ -760,6 +714,7 @@ fn docs_run_page_dark_mode_styles_console_blocks() {
     );
 
     let _ = fs::remove_dir_all(&output_dir);
+    let _ = fs::remove_dir_all(&docs_dir);
 }
 
 #[test]
@@ -954,6 +909,7 @@ cat('not reached')
 #[test]
 fn frontmatter_packages_null_means_empty_sequence() {
     let script = unique_path("ir-packages-null-frontmatter", "R");
+    let cache_dir = test_cache("ir-packages-null-cache");
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
@@ -965,10 +921,12 @@ cat("ir.fixture=packages-null\n")
     .unwrap();
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--vanilla", script.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=packages-null");
@@ -976,8 +934,8 @@ cat("ir.fixture=packages-null\n")
 
 #[test]
 fn run_script_frontmatter_accepts_packages_and_isolated() {
-    let _guard = e2e_lock();
     let script = unique_path("ir-packages-frontmatter", "R");
+    let cache_dir = test_cache("ir-packages-frontmatter-cache");
     fs::write(
         &script,
         r#"#!/usr/bin/env -S ir run
@@ -999,6 +957,7 @@ cat("frontmatter.user_library=", Sys.getenv("R_LIBS_USER", unset = "<unset>"), "
 
     let user_library = unique_dir("ir-packages-frontmatter-user-library");
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .env("R_LIBS_USER", &user_library)
         .args(["run", "--vanilla"])
         .arg(&script)
@@ -1006,6 +965,7 @@ cat("frontmatter.user_library=", Sys.getenv("R_LIBS_USER", unset = "<unset>"), "
         .unwrap();
 
     let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&user_library);
 
     assert_success(&out);
@@ -1150,10 +1110,11 @@ fn cache_clean_removes_cache_dir() {
 
 #[test]
 fn run_script_fixture_resolves_packages_and_isolates_user_library() {
-    let _guard = e2e_lock();
     let script = fixture("run/packages.R");
+    let cache_dir = test_cache("ir-run-script-cache");
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .args(["--script-arg", "value"])
@@ -1171,14 +1132,16 @@ fn run_script_fixture_resolves_packages_and_isolates_user_library() {
     );
     assert_stdout_contains(&out, "script.result=a:4,b:2");
     assert_stdout_contains(&out, "script.json={\"ok\":true,\"rows\":1}");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn run_script_uses_only_the_first_yaml_document() {
-    let _guard = e2e_lock();
     let script = fixture("run/multiple-documents.R");
+    let cache_dir = test_cache("ir-multi-doc-cache");
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
@@ -1189,11 +1152,12 @@ fn run_script_uses_only_the_first_yaml_document() {
     assert_stdout_contains(&out, "multi.packages=glue:true");
     assert_stdout_contains(&out, "multi.ignored_package=false");
     assert_stdout_contains(&out, "multi.result=5");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn run_inline_expression_resolves_with_dependencies() {
-    let _guard = e2e_lock();
+    let cache_dir = test_cache("ir-inline-cache");
     let expr = concat!(
         "{",
         "library(cli); ",
@@ -1210,6 +1174,7 @@ fn run_inline_expression_resolves_with_dependencies() {
     );
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args([
             "run",
             "--isolated",
@@ -1229,12 +1194,14 @@ fn run_inline_expression_resolves_with_dependencies() {
     assert_stdout_contains(&out, "inline.lib_in_cache=true");
     assert_stdout_contains(&out, "inline.pkgs_in_cache=true");
     assert_stdout_contains(&out, "inline.glue=2");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn run_inline_expression_forwards_option_like_args_after_expr() {
-    let _guard = e2e_lock();
+    let cache_dir = test_cache("ir-inline-args-cache");
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args([
             "run",
             "--isolated",
@@ -1254,11 +1221,11 @@ fn run_inline_expression_forwards_option_like_args_after_expr() {
         "{}",
         output_text(&out)
     );
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn run_normalizes_version_specs_before_resolution_cache_keying() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-ref-normalized-cache");
     let expr = "{ library(cli); cat('ir.fixture=normalized-cache\\n') }";
 
@@ -1284,7 +1251,6 @@ fn run_normalizes_version_specs_before_resolution_cache_keying() {
 
 #[test]
 fn run_frontmatter_github_ref_installs_github_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-github-ref-cache");
     let script = unique_path("ir-github-ref", "R");
     fs::write(
@@ -1340,7 +1306,6 @@ cat("github.remote=", paste(
 
 #[test]
 fn run_frontmatter_github_subdir_ref_installs_subdir_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-github-subdir-ref-cache");
     let script = unique_path("ir-github-subdir-ref", "R");
     let sha = "a7c16d1ea299853694af95b3cdd3b7ab3e97fb0e";
@@ -1401,7 +1366,6 @@ cat("github.remote=", paste(
 
 #[test]
 fn run_frontmatter_preserves_transitive_source_refs() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-transitive-source-cache");
     let package_dir = unique_dir("ir-transitive-source-packages");
     let dep = write_r_source_package(&package_dir, "irdep", &[]);
@@ -1452,7 +1416,6 @@ cat("ir.fixture=transitive-source\n")
 
 #[test]
 fn run_frontmatter_local_ref_reruns_resolution_when_package_changes() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-local-ref-cache");
     let package_dir = unique_dir("ir-local-ref-packages");
     let package = write_r_source_package(&package_dir, "irlocal", &[]);
@@ -1513,7 +1476,6 @@ cat("irlocal.version=", as.character(packageVersion("irlocal")), "\n", sep = "")
 
 #[test]
 fn run_frontmatter_local_ref_with_pak_params_installs_local_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-local-ref-params-cache");
     let package_dir = unique_dir("ir-local-ref-params-packages");
     let package = write_r_source_package(&package_dir, "irlocal", &[]);
@@ -1551,7 +1513,6 @@ cat("ir.fixture=local-ref-params\n")
 
 #[test]
 fn run_frontmatter_named_local_ref_installs_local_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-named-local-ref-cache");
     let package_dir = unique_dir("ir-named-local-ref-packages");
     let package = write_r_source_package(&package_dir, "irlocal", &[]);
@@ -1589,7 +1550,6 @@ cat("ir.fixture=named-local-ref\n")
 
 #[test]
 fn run_frontmatter_sequence_entry_preserves_space_containing_local_ref() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-local-ref-spaces-cache");
     let package_dir = unique_dir("ir local ref spaces packages");
     let package = write_r_source_package(&package_dir, "irlocal", &[]);
@@ -1627,7 +1587,6 @@ cat("ir.fixture=local-ref-spaces\n")
 
 #[test]
 fn run_latest_resolution_cache_marker_truncates_fractional_creation_time() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-latest-cache-fractional-time");
     let profile = unique_path("ir-fractional-systime", "R");
     fs::write(
@@ -1667,7 +1626,6 @@ fn run_latest_resolution_cache_marker_truncates_fractional_creation_time() {
 
 #[test]
 fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-latest-cache-refresh");
     let expr = "{ library(cli); cat('ir.fixture=latest-cache-refresh\\n') }";
 
@@ -1823,7 +1781,6 @@ fn run_latest_resolution_cache_refreshes_marker_value_in_place() {
 
 #[test]
 fn run_passes_rust_owned_cache_dir_to_resolver() {
-    let _guard = e2e_lock();
     let xdg_cache_home = unique_dir("ir-rust-owned-cache-xdg");
     let renviron_cache = unique_dir("ir-rust-owned-cache-renviron");
     let renviron = unique_path("ir-rust-owned-cache", "Renviron");
@@ -1879,8 +1836,7 @@ fn run_passes_rust_owned_cache_dir_to_resolver() {
 // succeeds because ir injects it quietly for the knitr engine.
 #[test]
 fn render_quarto_fixture_injects_rmarkdown_and_renders() {
-    let _guard = e2e_lock();
-    let fixture_dir = fixture("run");
+    let fixture_dir = fixture_copy("run", "ir-e2e-qmd-fixture");
     let cache_dir = unique_dir("ir-e2e-qmd-cache");
 
     for _ in 0..2 {
@@ -1915,13 +1871,13 @@ fn render_quarto_fixture_injects_rmarkdown_and_renders() {
     }
 
     let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fixture_dir);
 }
 
 // report-pinned.qmd declares rmarkdown itself, so the resolver leaves it alone.
 #[test]
 fn render_quarto_fixture_with_declared_rmarkdown_skips_injection() {
-    let _guard = e2e_lock();
-    let fixture_dir = fixture("run");
+    let fixture_dir = fixture_copy("run", "ir-e2e-qmd-pinned-fixture");
     let cache_dir = unique_dir("ir-e2e-qmd-pinned-cache");
 
     let out = ir()
@@ -1953,14 +1909,14 @@ fn render_quarto_fixture_with_declared_rmarkdown_skips_injection() {
     let _ = fs::remove_file(fixture_dir.join("report-pinned.html"));
     let _ = fs::remove_dir_all(fixture_dir.join("report-pinned_files"));
     let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fixture_dir);
 }
 
 // report-transitive.qmd declares `quarto`, which Imports rmarkdown. The
 // resolver sees rmarkdown already in the resolved set and skips its own seed.
 #[test]
 fn render_quarto_fixture_with_transitive_rmarkdown_renders() {
-    let _guard = e2e_lock();
-    let fixture_dir = fixture("run");
+    let fixture_dir = fixture_copy("run", "ir-e2e-qmd-transitive-fixture");
     let cache_dir = unique_dir("ir-e2e-qmd-transitive-cache");
 
     let out = ir()
@@ -1997,14 +1953,14 @@ fn render_quarto_fixture_with_transitive_rmarkdown_renders() {
     let _ = fs::remove_file(fixture_dir.join("report-transitive.html"));
     let _ = fs::remove_dir_all(fixture_dir.join("report-transitive_files"));
     let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fixture_dir);
 }
 
 // report-bare.qmd declares no dependencies at all, so the resolver must still
 // inject rmarkdown quietly for the knitr engine to render.
 #[test]
 fn render_quarto_bare_fixture_injects_rmarkdown() {
-    let _guard = e2e_lock();
-    let fixture_dir = fixture("run");
+    let fixture_dir = fixture_copy("run", "ir-e2e-qmd-bare-fixture");
     let cache_dir = unique_dir("ir-e2e-qmd-bare-cache");
 
     for run in ["fresh resolution", "cached resolution"] {
@@ -2039,12 +1995,12 @@ fn render_quarto_bare_fixture_injects_rmarkdown() {
     let _ = fs::remove_file(fixture_dir.join("report-bare.html"));
     let _ = fs::remove_dir_all(fixture_dir.join("report-bare_files"));
     let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fixture_dir);
 }
 
 #[test]
 fn render_quarto_script_fixture_renders_with_dependencies() {
-    let _guard = e2e_lock();
-    let fixture_dir = fixture("run");
+    let fixture_dir = fixture_copy("run", "ir-e2e-render-script-fixture");
     let cache_dir = unique_dir("ir-e2e-render-script-cache");
 
     let out = ir()
@@ -2068,12 +2024,12 @@ fn render_quarto_script_fixture_renders_with_dependencies() {
     let _ = fs::remove_file(fixture_dir.join("report-script.html"));
     let _ = fs::remove_dir_all(fixture_dir.join("report-script_files"));
     let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&fixture_dir);
 }
 
 #[cfg(unix)]
 #[test]
 fn resolver_tooling_uses_compatible_user_library_packages() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-compatible-tooling-cache");
     let user_library = unique_dir("ir-compatible-tooling-user-library");
     let fake_load_marker = unique_path("ir-compatible-secretbase-loaded", "txt");
@@ -2212,7 +2168,6 @@ utils::assignInNamespace("install.packages", function(...) {{
 #[cfg(unix)]
 #[test]
 fn resolver_tooling_ignores_wrong_r_minor_user_library_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-ambient-tooling-cache");
     let ambient_library = unique_dir("ir-ambient-tooling-user-library");
     let fake_secretbase_load_marker = unique_path("ir-ambient-secretbase-loaded", "txt");
@@ -2415,17 +2370,41 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
 }
 
 #[test]
-fn render_quarto_selects_requested_r_version() {
-    let _guard = e2e_lock();
+fn r_version_selection_covers_render_flag_and_run_frontmatter() {
+    const FIXTURE_R_VERSION: &str = "4.4.3";
 
-    let Some(target) = rig_test_r_version("render_quarto_selects_requested_r_version") else {
+    // Opt-in: needs rig plus a non-default R installed (CI provisions both).
+    // `ir`'s `--r-version` path resolves through rig unconditionally, so with a
+    // single R there is nothing to select. The frontmatter fixture pins 4.4.3,
+    // so CI sets the same value to cover both public version-selection paths.
+    let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
+        eprintln!(
+            "SKIP r_version_selection_covers_render_flag_and_run_frontmatter: set IR_TEST_R_VERSION={FIXTURE_R_VERSION}"
+        );
         return;
     };
 
-    let fixture_dir = fixture("run");
+    if target != FIXTURE_R_VERSION {
+        eprintln!(
+            "SKIP r_version_selection_covers_render_flag_and_run_frontmatter: IR_TEST_R_VERSION ({target}) must match the fixture's `#| r-version`"
+        );
+        return;
+    }
 
-    let out = ir()
+    // Selecting the version the default path already uses would prove nothing.
+    if default_r_version().as_deref() == Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP r_version_selection_covers_render_flag_and_run_frontmatter: the fixture's R ({FIXTURE_R_VERSION}) matches the default R; nothing to select"
+        );
+        return;
+    }
+
+    let fixture_dir = fixture_copy("run", "ir-r-version-render-fixture");
+    let cache_dir = test_cache("ir-r-version-cache");
+
+    let render = ir()
         .current_dir(&fixture_dir)
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["render", "--isolated", "--r-version"])
         .arg(&target)
         .arg("r-version-select.qmd")
@@ -2433,10 +2412,14 @@ fn render_quarto_selects_requested_r_version() {
         .output()
         .unwrap();
 
-    assert_success(&out);
+    assert_success(&render);
 
-    let html = fs::read_to_string(fixture_dir.join("r-version-select.html"))
-        .unwrap_or_else(|e| panic!("failed to read rendered report: {e}\n{}", output_text(&out)));
+    let html = fs::read_to_string(fixture_dir.join("r-version-select.html")).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rendered report: {e}\n{}",
+            output_text(&render)
+        )
+    });
     assert!(html.contains("ir.fixture=r-version"), "{html}");
     assert!(
         html.contains(&format!("version.r_version=[{target}]")),
@@ -2445,43 +2428,82 @@ fn render_quarto_selects_requested_r_version() {
     assert!(html.contains("version.lib_in_cache=true"), "{html}");
     assert!(html.contains("version.jsonlite_in_cache=true"), "{html}");
 
+    let script = fixture("run/r-version-frontmatter.R");
+
+    let run = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&run);
+    assert_stdout_contains(&run, "ir.fixture=r-version-frontmatter");
+    assert_stdout_contains(&run, &format!("version.r_version=[{FIXTURE_R_VERSION}]"));
+    assert_stdout_contains(&run, "version.lib_in_cache=true");
+    assert_stdout_contains(&run, "version.jsonlite_in_cache=true");
+
     let _ = fs::remove_file(fixture_dir.join("r-version-select.html"));
     let _ = fs::remove_dir_all(fixture_dir.join("r-version-select_files"));
+    let _ = fs::remove_dir_all(&fixture_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
-fn run_script_frontmatter_selects_r_version() {
-    let _guard = e2e_lock();
+fn exclude_newer_selects_r_version_from_real_rig() {
+    const FIXTURE_R_VERSION: &str = "4.4.3";
+    const FIXTURE_R_RELEASE_DATE: &str = "2025-02-28";
 
-    let Some(target) = rig_test_r_version("run_script_frontmatter_selects_r_version") else {
+    let Ok(target) = std::env::var("IR_TEST_R_VERSION") else {
+        eprintln!(
+            "SKIP exclude_newer_selects_r_version_from_real_rig: set IR_TEST_R_VERSION={FIXTURE_R_VERSION}"
+        );
         return;
     };
-
-    // The fixture pins `#| r-version` to this version, so the test only runs
-    // when CI has provisioned that exact R through rig (signalled by
-    // IR_TEST_R_VERSION). Unlike the flag, the frontmatter value can't come from
-    // the environment because it lives in the static fixture.
-    const FIXTURE_R_VERSION: &str = "4.4.3";
     if target != FIXTURE_R_VERSION {
         eprintln!(
-            "SKIP run_script_frontmatter_selects_r_version: set IR_TEST_R_VERSION={FIXTURE_R_VERSION} (rig plus that R) to match the fixture's `#| r-version`"
+            "SKIP exclude_newer_selects_r_version_from_real_rig: IR_TEST_R_VERSION ({target}) must be {FIXTURE_R_VERSION}"
+        );
+        return;
+    }
+    if default_r_version().as_deref() == Some(FIXTURE_R_VERSION) {
+        eprintln!(
+            "SKIP exclude_newer_selects_r_version_from_real_rig: default R already matches {FIXTURE_R_VERSION}"
         );
         return;
     }
 
-    let script = fixture("run/r-version-frontmatter.R");
+    let script = unique_path("ir-exclude-newer-r-selection", "R");
+    let cache_dir = test_cache("ir-exclude-newer-r-selection-cache");
+    fs::write(
+        &script,
+        format!(
+            concat!(
+                "#!/usr/bin/env -S ir run\n",
+                "#| isolated: true\n",
+                "#| exclude-newer: \"{}\"\n",
+                "\n",
+                "cat(\"ir.fixture=exclude-newer-r-selection\\n\")\n",
+                "cat(\"version.r_version=[\", as.character(getRversion()), \"]\\n\", sep = \"\")\n",
+            ),
+            FIXTURE_R_RELEASE_DATE
+        ),
+    )
+    .unwrap();
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=r-version-frontmatter");
+    assert_stdout_contains(&out, "ir.fixture=exclude-newer-r-selection");
     assert_stdout_contains(&out, &format!("version.r_version=[{FIXTURE_R_VERSION}]"));
-    assert_stdout_contains(&out, "version.lib_in_cache=true");
-    assert_stdout_contains(&out, "version.jsonlite_in_cache=true");
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[cfg(unix)]
@@ -3061,628 +3083,14 @@ fn render_without_r_version_pins_quarto_to_rscript_bat_target() {
     let _ = fs::remove_dir_all(&bin_dir);
 }
 
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_selects_latest_installed_r_released_before_date() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-exclude-newer-r-bin");
-    let installs_dir = unique_dir("ir-exclude-newer-r-installs");
-    let cache_dir = unique_dir("ir-exclude-newer-r-cache");
-    let script = unique_path("ir-exclude-newer-r-selection", "R");
-    let list_json = unique_path("ir-exclude-newer-r-list", "json");
-    let rig = bin_dir.join("rig");
-    let fallback_rscript = bin_dir.join("wrong-Rscript");
-    let old_r = write_fake_r_install(&installs_dir, "4.1", "4.1.3");
-    let cutoff_r = write_fake_r_install(&installs_dir, "4.2", "4.2.0");
-    let future_r = write_fake_r_install(&installs_dir, "4.3", "4.3.3");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2023-12-31\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "4.1",
-                "default": false,
-                "version": "4.1.3",
-                "aliases": [],
-                "binary": old_r.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "name": "4.3",
-                "default": false,
-                "version": "4.3.3",
-                "aliases": [],
-                "binary": future_r.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "name": "broken",
-                "default": false,
-                "version": null,
-                "aliases": [],
-                "binary": null,
-            }),
-            serde_json::json!({
-                "name": "4.2",
-                "default": false,
-                "version": "4.2.0",
-                "aliases": [],
-                "binary": cutoff_r.to_string_lossy(),
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-    write_executable(
-        &fallback_rscript,
-        concat!(
-            "#!/bin/sh\n",
-            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
-            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
-            "  exit 0\n",
-            "fi\n",
-            "printf 'version.r_version=[9.9.9]\\n'\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", &fallback_rscript)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.2.0]");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_ignores_future_installs_missing_from_embedded_table() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-future-exclude-newer-r-bin");
-    let installs_dir = unique_dir("ir-future-exclude-newer-r-installs");
-    let cache_dir = unique_dir("ir-future-exclude-newer-r-cache");
-    let script = unique_path("ir-future-exclude-newer-r-selection", "R");
-    let list_json = unique_path("ir-future-exclude-newer-r-list", "json");
-    let rig = bin_dir.join("rig");
-    let selected_r = write_fake_r_install(&installs_dir, "4.2", "4.2.0");
-    let future_r = write_fake_r_install(&installs_dir, "4.7", "4.7.0");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2023-01-01\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "4.7",
-                "default": false,
-                "version": "4.7.0",
-                "aliases": [],
-                "binary": future_r.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "name": "4.2",
-                "default": false,
-                "version": "4.2.0",
-                "aliases": [],
-                "binary": selected_r.to_string_lossy(),
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.2.0]");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_ignores_legacy_rig_available_cache() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-legacy-available-r-bin");
-    let installs_dir = unique_dir("ir-legacy-available-r-installs");
-    let cache_dir = unique_dir("ir-legacy-available-r-cache");
-    let script = unique_path("ir-legacy-available-r-selection", "R");
-    let list_json = unique_path("ir-legacy-available-r-list", "json");
-    let available_json = unique_path("ir-legacy-available-r-available", "json");
-    let rig = bin_dir.join("rig");
-    let selected_r = write_fake_r_install(&installs_dir, "3.5", "3.5.3");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2019-05-01\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![serde_json::json!({
-            "name": "3.5",
-            "default": false,
-            "version": "3.5.3",
-            "aliases": [],
-            "binary": selected_r.to_string_lossy(),
-        })])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        &available_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "3.5.3",
-                "version": "3.5.3",
-                "date": "2019-03-11",
-            }),
-            serde_json::json!({
-                "name": "3.6.0",
-                "version": "3.6.0",
-                "date": "2019-04-26",
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::create_dir_all(cache_dir.join("rig")).unwrap();
-    fs::write(
-        cache_dir.join("rig").join("available.json"),
-        serde_json::to_string(&vec![serde_json::json!({
-            "name": "3.6",
-            "version": "3.6.0",
-            "date": "2019-04-26",
-        })])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  \"available --all --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_AVAILABLE\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .env("IR_FAKE_RIG_AVAILABLE", &available_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[3.5.3]");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_file(&available_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_before_embedded_table_uses_rig_available_all() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-old-exclude-newer-r-bin");
-    let installs_dir = unique_dir("ir-old-exclude-newer-r-installs");
-    let cache_dir = unique_dir("ir-old-exclude-newer-r-cache");
-    let script = unique_path("ir-old-exclude-newer-r-selection", "R");
-    let list_json = unique_path("ir-old-exclude-newer-r-list", "json");
-    let available_json = unique_path("ir-old-exclude-newer-r-available", "json");
-    let rig = bin_dir.join("rig");
-    let selected_r = write_fake_r_install(&installs_dir, "3.5", "3.5.3");
-    let future_r = write_fake_r_install(&installs_dir, "3.6", "3.6.0");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2019-03-15\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "3.6",
-                "default": false,
-                "version": "3.6.0",
-                "aliases": [],
-                "binary": future_r.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "name": "3.5",
-                "default": false,
-                "version": "3.5.3",
-                "aliases": [],
-                "binary": selected_r.to_string_lossy(),
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        &available_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "3.5.3",
-                "version": "3.5.3",
-                "date": "2019-03-11",
-            }),
-            serde_json::json!({
-                "name": "3.6.0",
-                "version": "3.6.0",
-                "date": "2019-04-26",
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  \"available --all --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_AVAILABLE\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .env("IR_FAKE_RIG_AVAILABLE", &available_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[3.5.3]");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_file(&available_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_after_embedded_table_refreshes_stale_rig_available_cache() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-stale-available-r-bin");
-    let installs_dir = unique_dir("ir-stale-available-r-installs");
-    let cache_dir = unique_dir("ir-stale-available-r-cache");
-    let script = unique_path("ir-stale-available-r-selection", "R");
-    let list_json = unique_path("ir-stale-available-r-list", "json");
-    let available_json = unique_path("ir-stale-available-r-available", "json");
-    let rig = bin_dir.join("rig");
-    let stale_r = write_fake_r_install(&installs_dir, "4.6", "4.6.0");
-    let selected_r = write_fake_r_install(&installs_dir, "4.7", "4.7.0");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2026-06-10\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "4.6",
-                "default": false,
-                "version": "4.6.0",
-                "aliases": [],
-                "binary": stale_r.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "name": "4.7",
-                "default": false,
-                "version": "4.7.0",
-                "aliases": [],
-                "binary": selected_r.to_string_lossy(),
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        &available_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "4.6.0",
-                "version": "4.6.0",
-                "date": "2026-04-24",
-            }),
-            serde_json::json!({
-                "name": "4.7.0",
-                "version": "4.7.0",
-                "date": "2026-06-09",
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::create_dir_all(cache_dir.join("rig")).unwrap();
-    fs::write(
-        cache_dir.join("rig").join("available-all.json"),
-        serde_json::to_string(&vec![serde_json::json!({
-            "name": "4.6.0",
-            "version": "4.6.0",
-            "date": "2026-04-24",
-        })])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  \"available --all --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_AVAILABLE\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .env("IR_FAKE_RIG_AVAILABLE", &available_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[4.7.0]");
-
-    let cached = fs::read_to_string(cache_dir.join("rig").join("available-all.json")).unwrap();
-    assert!(cached.contains("4.7.0"), "{cached}");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_file(&available_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_script_exclude_newer_after_first_embedded_release_can_select_older_installed_r() {
-    let _guard = e2e_lock();
-    let bin_dir = unique_dir("ir-early-exclude-newer-r-bin");
-    let installs_dir = unique_dir("ir-early-exclude-newer-r-installs");
-    let cache_dir = unique_dir("ir-early-exclude-newer-r-cache");
-    let script = unique_path("ir-early-exclude-newer-r-selection", "R");
-    let list_json = unique_path("ir-early-exclude-newer-r-list", "json");
-    let available_json = unique_path("ir-early-exclude-newer-r-available", "json");
-    let rig = bin_dir.join("rig");
-    let selected_r = write_fake_r_install(&installs_dir, "3.5", "3.5.3");
-
-    fs::write(
-        &script,
-        concat!(
-            "#!/usr/bin/env -S ir run\n",
-            "#| isolated: true\n",
-            "#| exclude-newer: \"2019-05-01\"\n",
-            "\n",
-            "cat(\"script body should be handled by fake Rscript\\n\")\n",
-        ),
-    )
-    .unwrap_or_else(|e| panic!("failed to write {}: {e}", script.display()));
-    fs::write(
-        &list_json,
-        serde_json::to_string(&vec![serde_json::json!({
-            "name": "3.5",
-            "default": false,
-            "version": "3.5.3",
-            "aliases": [],
-            "binary": selected_r.to_string_lossy(),
-        })])
-        .unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        &available_json,
-        serde_json::to_string(&vec![
-            serde_json::json!({
-                "name": "3.5.3",
-                "version": "3.5.3",
-                "date": "2019-03-11",
-            }),
-            serde_json::json!({
-                "name": "3.6.0",
-                "version": "3.6.0",
-                "date": "2019-04-26",
-            }),
-        ])
-        .unwrap(),
-    )
-    .unwrap();
-    write_executable(
-        &rig,
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$*\" in\n",
-            "  \"list --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_LIST\" ;;\n",
-            "  \"available --all --json\") printf '[INFO] fake rig\\n'; cat \"$IR_FAKE_RIG_AVAILABLE\" ;;\n",
-            "  *) echo \"unexpected rig args: $*\" >&2; exit 2 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let out = ir()
-        .env("PATH", path)
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_FAKE_RIG_LIST", &list_json)
-        .env("IR_FAKE_RIG_AVAILABLE", &available_json)
-        .args(["run", "--vanilla"])
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=fake-r-selection");
-    assert_stdout_contains(&out, "version.r_version=[3.5.3]");
-
-    let _ = fs::remove_file(&script);
-    let _ = fs::remove_file(&list_json);
-    let _ = fs::remove_file(&available_json);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&installs_dir);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
 #[test]
 fn run_reticulate_fixture_imports_python_module() {
-    let _guard = e2e_lock();
     let script = fixture("run/reticulate.R");
+    let cache_dir = test_cache("ir-reticulate-cache");
     let managed_reticulate = std::env::var_os("IR_TEST_RETICULATE_MANAGED").is_some();
 
     let mut cmd = ir();
+    cmd.env("IR_CACHE_DIR", &cache_dir);
 
     if managed_reticulate {
         cmd.env("IR_TEST_RETICULATE_MANAGED", "1")
@@ -3703,13 +3111,14 @@ fn run_reticulate_fixture_imports_python_module() {
     assert_stdout_contains(&out, "reticulate.lib_in_cache=true");
     assert_stdout_contains(&out, "reticulate.ephemeral=");
     assert_stdout_contains(&out, "reticulate.json={\"ok\": true}");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn tool_run_executes_real_package_entrypoint() {
-    let _guard = e2e_lock();
-
+    let cache_dir = test_cache("ir-tool-run-real-cache");
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args([
             "tool",
             "run",
@@ -3726,13 +3135,14 @@ fn tool_run_executes_real_package_entrypoint() {
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn rx_executes_real_package_entrypoint() {
-    let _guard = e2e_lock();
-
+    let cache_dir = test_cache("ir-rx-real-cache");
     let out = rx()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args([
             "-w",
             "docopt,pkgsearch,prettyunits",
@@ -3747,14 +3157,16 @@ fn rx_executes_real_package_entrypoint() {
     assert_success(&out);
     assert_stdout_contains(&out, "Seach for CRAN packages on r-pkg.org");
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
-    let _guard = e2e_lock();
+    let cache_dir = test_cache("ir-tool-install-real-cache");
     let bin_dir = unique_dir("ir-e2e-tool-install-bin");
 
     let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
         .args([
             "tool",
             "install",
@@ -3779,12 +3191,12 @@ fn tool_install_installs_real_package_entrypoint() {
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
 
     let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn tool_install_adds_default_macos_bin_dir_to_zprofile_once() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-install-macos-path-cache");
     let home = unique_dir("ir-tool-install-macos-path-home");
     let default_bin_dir = home.join(".local").join("bin");
@@ -3801,11 +3213,10 @@ cat("mac.path.fixture=TRUE\n")
     )
     .unwrap();
     let package_ref = format!("local::{}", renviron_path(&package));
-    let rscript = resolved_rscript();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", &rscript)
+        .env("IR_RSCRIPT", rscript())
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env_remove("ZDOTDIR")
@@ -3847,7 +3258,7 @@ cat("mac.path.fixture=TRUE\n")
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", &rscript)
+        .env("IR_RSCRIPT", rscript())
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env_remove("ZDOTDIR")
@@ -3880,7 +3291,6 @@ cat("mac.path.fixture=TRUE\n")
 #[cfg(target_os = "macos")]
 #[test]
 fn tool_install_custom_bin_dir_skips_default_macos_path_setup() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-install-custom-path-cache");
     let home = unique_dir("ir-tool-install-custom-path-home");
     let bin_dir = unique_path("ir-tool-install-custom-path-bin", "");
@@ -3899,7 +3309,7 @@ cat("mac.custom.path.fixture=TRUE\n")
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", resolved_rscript())
+        .env("IR_RSCRIPT", rscript())
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env_remove("ZDOTDIR")
@@ -3930,7 +3340,6 @@ cat("mac.custom.path.fixture=TRUE\n")
 #[cfg(target_os = "macos")]
 #[test]
 fn tool_install_existing_launcher_does_not_modify_zprofile() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-install-collision-path-cache");
     let home = unique_dir("ir-tool-install-collision-path-home");
     let default_bin_dir = home.join(".local").join("bin");
@@ -3955,7 +3364,7 @@ cat("mac.path.collision.fixture=TRUE\n")
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", resolved_rscript())
+        .env("IR_RSCRIPT", rscript())
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env_remove("ZDOTDIR")
@@ -3990,7 +3399,6 @@ cat("mac.path.collision.fixture=TRUE\n")
 fn tool_install_write_failure_does_not_modify_zprofile() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-install-write-failure-cache");
     let home = unique_dir("ir-tool-install-write-failure-home");
     let default_bin_dir = home.join(".local").join("bin");
@@ -4013,7 +3421,7 @@ cat("mac.path.write.failure.fixture=TRUE\n")
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_RSCRIPT", resolved_rscript())
+        .env("IR_RSCRIPT", rscript())
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env_remove("ZDOTDIR")
@@ -4044,7 +3452,6 @@ cat("mac.path.write.failure.fixture=TRUE\n")
 
 #[test]
 fn tool_run_and_install_rapp_package_frontend() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-rapp-frontend-cache");
     let bin_dir = unique_dir("ir-rapp-frontend-bin");
     let app = unique_path("ir-rapp-frontend-app", "R");
@@ -4089,7 +3496,6 @@ fn tool_run_and_install_rapp_package_frontend() {
 
 #[test]
 fn tool_run_and_install_use_launcher_metadata() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-launcher-metadata-cache");
     let bin_dir = unique_dir("ir-tool-launcher-metadata-bin");
     let package_dir = unique_dir("ir-tool-launcher-metadata-packages");
@@ -4206,7 +3612,6 @@ cat("selected=top-level\n")
 
 #[test]
 fn tool_run_rejects_duplicate_launcher_metadata_names() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-duplicate-launcher-cache");
     let package_dir = unique_dir("ir-tool-duplicate-launcher-packages");
     let package = write_r_source_package(&package_dir, "irtooldupe", &[]);
@@ -4253,7 +3658,6 @@ cat("selected=metadata\n")
 
 #[test]
 fn tool_run_ignores_non_r_direct_file_for_metadata_name() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-non-r-direct-cache");
     let package_dir = unique_dir("ir-tool-non-r-direct-packages");
     let package = write_r_source_package(&package_dir, "irtoolnonr", &[]);
@@ -4286,7 +3690,6 @@ cat("selected=metadata\n")
 #[cfg(unix)]
 #[test]
 fn tool_run_and_install_support_direct_package_scripts() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-direct-script-cache");
     let bin_dir = unique_dir("ir-tool-direct-script-bin");
     let package_dir = unique_dir("ir-tool-direct-script-packages");
@@ -4354,7 +3757,6 @@ fn tool_run_and_install_support_direct_package_scripts() {
 
 #[test]
 fn tool_run_skips_binary_exec_files() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-binary-exec-cache");
     let package_dir = unique_dir("ir-tool-binary-exec-packages");
     let package = write_r_source_package(&package_dir, "irtoolbinary", &[]);
@@ -4384,7 +3786,6 @@ cat("selected=valid\n")
 
 #[test]
 fn tool_install_rejects_invalid_metadata_launcher_names() {
-    let _guard = e2e_lock();
     for (package_name, launcher_name) in [
         ("irtoolbadname", "bad?name"),
         ("irtoolpercentname", "foo%PATH%"),
@@ -4437,7 +3838,6 @@ cat("not reached\n")
 
 #[test]
 fn tool_run_limits_metadata_lookup_to_primary_package() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-primary-package-cache");
     let package_dir = unique_dir("ir-tool-primary-package-packages");
     let dep = write_r_source_package(&package_dir, "irtooldep", &[]);
@@ -4486,7 +3886,6 @@ cat("selected=primary\n")
 
 #[test]
 fn tool_run_and_install_apply_package_default_packages() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-tool-default-packages-cache");
     let bin_dir = unique_dir("ir-tool-default-packages-bin");
     let package_dir = unique_dir("ir-tool-default-packages-packages");
@@ -4565,7 +3964,6 @@ cat("stats.attached=", tolower("package:stats" %in% search()), "\n", sep = "")
 #[cfg(unix)]
 #[test]
 fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-warm-tool-install-cache");
     let bin_dir = unique_dir("ir-warm-tool-install-bin");
     let rscript = rscript();
@@ -4691,7 +4089,6 @@ fn tool_install_with_path_rscript_symlink_records_target() {
 #[cfg(unix)]
 #[test]
 fn tool_install_with_rscript_wrapper_records_primary_package_marker() {
-    let _guard = e2e_lock();
     let cache_dir = unique_dir("ir-wrapper-tool-install-cache");
     let bin_dir = unique_dir("ir-wrapper-tool-install-bin");
     let wrapper = unique_path("ir-rscript-wrapper", "sh");
