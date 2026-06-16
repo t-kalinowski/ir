@@ -23,6 +23,15 @@ struct InstalledR {
     binary: PathBuf,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct InstalledRListEntry {
+    name: String,
+    version: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    binary: Option<PathBuf>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AvailableCandidate<'a> {
     name: &'a str,
@@ -83,6 +92,7 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         .filter(|version| {
             installed_minor_released_before_or_on(version, &available, &exclude_newer)
         })
+        .filter(|version| version.rscript_path().exists())
         .max_by(|a, b| compare_versions(&a.version, &b.version))
     {
         return installed.rscript();
@@ -124,7 +134,11 @@ fn rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
 }
 
 fn rig_list() -> Result<Vec<InstalledR>, Box<dyn Error>> {
-    rig_json(&["list", "--json"])
+    let entries: Vec<InstalledRListEntry> = rig_json(&["list", "--json"])?;
+    Ok(entries
+        .into_iter()
+        .filter_map(InstalledR::from_list_entry)
+        .collect())
 }
 
 fn rig_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T, Box<dyn Error>> {
@@ -478,8 +492,21 @@ impl VersionRequirement {
 }
 
 impl InstalledR {
+    fn from_list_entry(entry: InstalledRListEntry) -> Option<Self> {
+        Some(Self {
+            name: entry.name,
+            version: entry.version?,
+            aliases: entry.aliases,
+            binary: entry.binary?,
+        })
+    }
+
+    fn rscript_path(&self) -> PathBuf {
+        rscript_from_r_binary(&self.binary)
+    }
+
     fn rscript(&self) -> Result<OsString, Box<dyn Error>> {
-        let rscript = rscript_from_r_binary(&self.binary);
+        let rscript = self.rscript_path();
         if !rscript.exists() {
             return Err(format!(
                 "rig reported R {} at `{}`, but `{}` does not exist",
