@@ -105,7 +105,7 @@ jobs:
         run: |
           "$IR_RSCRIPT" scripts/warm-renv-cache.R \
             cli glue jsonlite dplyr tidyr reticulate fansi htmltools knitr rmarkdown quarto \
-            bookdown btw Rapp docopt pkgsearch prettyunits
+            btw Rapp docopt pkgsearch prettyunits
 
       - run: cargo nextest run --verbose --no-fail-fast
         env:

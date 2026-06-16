@@ -156,6 +156,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("shell: bash"));
     assert!(workflow.contains("scripts/warm-renv-cache.R"));
+    assert!(!workflow.contains("bookdown btw Rapp"));
     assert!(!workflow.contains("Warm default R package cache (Unix)"));
     assert!(!workflow.contains("Warm default R package cache (Windows)"));
     assert!(workflow.contains("cargo nextest run --verbose --no-fail-fast"));
