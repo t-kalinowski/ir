@@ -153,9 +153,12 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
-    assert!(workflow.contains("Warm default R package cache (Unix)"));
+    assert!(workflow.contains("Warm default R package cache"));
+    assert!(workflow.contains("shell: Rscript {0}"));
+    assert!(workflow.contains("GITHUB_PATH"));
     assert!(workflow.contains("scripts/warm-renv-cache.R"));
-    assert!(workflow.contains("Warm default R package cache (Windows)"));
+    assert!(!workflow.contains("Warm default R package cache (Unix)"));
+    assert!(!workflow.contains("Warm default R package cache (Windows)"));
     assert!(workflow.contains("cargo nextest run --verbose --no-fail-fast"));
     assert!(!workflow.contains("cargo build --verbose"));
     assert!(!workflow.contains("Warm non-default R package cache"));
