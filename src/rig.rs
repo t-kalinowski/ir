@@ -23,15 +23,6 @@ struct InstalledR {
     binary: PathBuf,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct InstalledRListEntry {
-    name: String,
-    version: Option<String>,
-    #[serde(default)]
-    aliases: Vec<String>,
-    binary: Option<PathBuf>,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct AvailableCandidate<'a> {
     name: &'a str,
@@ -92,7 +83,6 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         .filter(|version| {
             installed_minor_released_before_or_on(version, &available, &exclude_newer)
         })
-        .filter(|version| version.rscript_path().exists())
         .max_by(|a, b| compare_versions(&a.version, &b.version))
     {
         return installed.rscript();
@@ -134,11 +124,7 @@ fn rig_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
 }
 
 fn rig_list() -> Result<Vec<InstalledR>, Box<dyn Error>> {
-    let entries: Vec<InstalledRListEntry> = rig_json(&["list", "--json"])?;
-    Ok(entries
-        .into_iter()
-        .filter_map(InstalledR::from_list_entry)
-        .collect())
+    rig_json(&["list", "--json"])
 }
 
 fn rig_json<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T, Box<dyn Error>> {
@@ -346,7 +332,6 @@ fn available_covers_installed_releases(available: &[AvailableR], installed: &[In
     installed
         .iter()
         .filter(|version| !installed_is_symbolic_prerelease(version))
-        .filter(|version| version.rscript_path().exists())
         .all(|installed| {
             available
                 .iter()
@@ -493,21 +478,8 @@ impl VersionRequirement {
 }
 
 impl InstalledR {
-    fn from_list_entry(entry: InstalledRListEntry) -> Option<Self> {
-        Some(Self {
-            name: entry.name,
-            version: entry.version?,
-            aliases: entry.aliases,
-            binary: entry.binary?,
-        })
-    }
-
-    fn rscript_path(&self) -> PathBuf {
-        rscript_from_r_binary(&self.binary)
-    }
-
     fn rscript(&self) -> Result<OsString, Box<dyn Error>> {
-        let rscript = self.rscript_path();
+        let rscript = rscript_from_r_binary(&self.binary);
         if !rscript.exists() {
             return Err(format!(
                 "rig reported R {} at `{}`, but `{}` does not exist",
