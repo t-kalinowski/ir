@@ -68,7 +68,6 @@ jobs:
         run: |
           rscript_path=$(Rscript -e 'cat(file.path(R.home("bin"), "Rscript"))')
           echo "IR_RSCRIPT=$rscript_path" >> "$GITHUB_ENV"
-          dirname "$rscript_path" >> "$GITHUB_PATH"
 
       - name: Pin the default Rscript before installing rig (Windows)
         if: runner.os == 'Windows'
@@ -76,7 +75,6 @@ jobs:
         run: |
           $rscriptPath = Rscript -e "cat(normalizePath(file.path(R.home('bin'), 'Rscript.exe'), winslash = '/', mustWork = TRUE))"
           Add-Content -Path $env:GITHUB_ENV -Value "IR_RSCRIPT=$rscriptPath"
-          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $rscriptPath)
 
       - name: Install rig and non-default R (Unix)
         if: runner.os != 'Windows'
@@ -103,14 +101,11 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=4.4.3"
 
       - name: Warm default R package cache
-        shell: Rscript {0}
+        shell: bash
         run: |
-          source("scripts/warm-renv-cache.R")
-          warm_renv_cache(c(
-            "cli", "glue", "jsonlite", "dplyr", "tidyr", "reticulate",
-            "fansi", "htmltools", "knitr", "rmarkdown", "quarto",
-            "bookdown", "btw", "Rapp", "docopt", "pkgsearch", "prettyunits"
-          ))
+          "$IR_RSCRIPT" scripts/warm-renv-cache.R \
+            cli glue jsonlite dplyr tidyr reticulate fansi htmltools knitr rmarkdown quarto \
+            bookdown btw Rapp docopt pkgsearch prettyunits
 
       - run: cargo nextest run --verbose --no-fail-fast
         env:
