@@ -2508,6 +2508,99 @@ fn exclude_newer_selects_latest_installed_patch_from_real_rig() {
 
 #[cfg(unix)]
 #[test]
+fn exclude_newer_uses_embedded_minor_line_for_newer_installed_patch() {
+    let script = unique_path("ir-exclude-newer-embedded-minor", "R");
+    let cache_dir = test_cache("ir-exclude-newer-embedded-minor-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-embedded-minor-bin");
+    let rig_dir = unique_dir("ir-exclude-newer-embedded-minor-rig");
+    let called_available = unique_path("ir-exclude-newer-called-available", "txt");
+
+    fs::write(
+        &script,
+        concat!(
+            "#!/usr/bin/env -S ir run\n",
+            "#| isolated: true\n",
+            "#| exclude-newer: \"2026-06-16\"\n",
+            "\n",
+            "cat(\"ignored\\n\")\n",
+        ),
+    )
+    .unwrap();
+
+    let rig_binary = rig_dir.join("R");
+    let rig_rscript = rig_dir.join("Rscript");
+    write_executable(
+        &rig_rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=4.6.1\n",
+        ),
+    );
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$*\" in\n",
+                "  'list --json')\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.6.1","version":"4.6.1","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  'available --all --json')\n",
+                "    : > '{}'\n",
+                "    echo 'unexpected rig available refresh' >&2\n",
+                "    exit 42\n",
+                "    ;;\n",
+                "  *)\n",
+                "    echo \"unexpected rig args: $*\" >&2\n",
+                "    exit 43\n",
+                "    ;;\n",
+                "esac\n",
+            ),
+            rig_binary.display(),
+            called_available.display()
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=4.6.1");
+    assert!(
+        !called_available.exists(),
+        "embedded minor-line coverage should avoid `rig available --all`"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_file(&called_available);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&rig_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_without_r_version_uses_rscript_on_path_when_rig_has_default() {
     let cache_dir = unique_dir("ir-path-rscript-cache");
     let bin_dir = unique_dir("ir-path-rscript-bin");

@@ -269,6 +269,13 @@ fn available_matches_installed(available: &AvailableR, installed: &InstalledR) -
             .aliases
             .iter()
             .any(|alias| alias == &available.name)
+        || matches!(
+            (
+                minor_version(&available.version),
+                minor_version(&installed.version)
+            ),
+            (Some(available_minor), Some(installed_minor)) if available_minor == installed_minor
+        )
 }
 
 fn latest_available_before_or_on(
