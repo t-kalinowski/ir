@@ -624,7 +624,7 @@ fn refresh_cached_rig_available_all(path: &Path) -> Result<Vec<AvailableR>, Box<
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create `{}`: {e}", parent.display()))?;
     }
-    fs::write(&path, json).map_err(|e| format!("failed to write `{}`: {e}", path.display()))?;
+    fs::write(path, json).map_err(|e| format!("failed to write `{}`: {e}", path.display()))?;
     Ok(available)
 }
 
