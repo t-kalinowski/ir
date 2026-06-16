@@ -340,9 +340,9 @@ fn available_covers_installed_releases(available: &[AvailableR], installed: &[In
         .iter()
         .filter(|version| !installed_is_symbolic_prerelease(version))
         .all(|installed| {
-            available
-                .iter()
-                .any(|available| available_matches_installed(available, installed))
+            available.iter().any(|available| {
+                available.date.is_some() && available_matches_installed(available, installed)
+            })
         })
 }
 

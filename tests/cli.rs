@@ -2601,6 +2601,120 @@ fn exclude_newer_uses_embedded_minor_line_for_newer_installed_patch() {
 
 #[cfg(unix)]
 #[test]
+fn exclude_newer_refreshes_cached_undated_installed_release() {
+    let script = unique_path("ir-exclude-newer-refresh-undated", "R");
+    let cache_dir = test_cache("ir-exclude-newer-refresh-undated-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-refresh-undated-bin");
+    let rig_dir = unique_dir("ir-exclude-newer-refresh-undated-rig");
+    let called_available = unique_path("ir-exclude-newer-refresh-undated-called", "txt");
+
+    fs::write(
+        &script,
+        concat!(
+            "#!/usr/bin/env -S ir run\n",
+            "#| isolated: true\n",
+            "#| exclude-newer: \"2026-06-16\"\n",
+            "\n",
+            "cat(\"ignored\\n\")\n",
+        ),
+    )
+    .unwrap();
+
+    let cache_rig_dir = cache_dir.join("rig");
+    fs::create_dir_all(&cache_rig_dir).unwrap();
+    fs::write(
+        cache_rig_dir.join("available-all.json"),
+        concat!(
+            "[\n",
+            r#"  {"name":"4.6.0","version":"4.6.0","date":"2026-04-24"}"#,
+            ",\n",
+            r#"  {"name":"4.7.0","version":"4.7.0","date":null}"#,
+            "\n",
+            "]\n",
+        ),
+    )
+    .unwrap();
+
+    let rig_binary = rig_dir.join("R");
+    let rig_rscript = rig_dir.join("Rscript");
+    write_executable(
+        &rig_rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=4.7.0\n",
+        ),
+    );
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$*\" in\n",
+                "  'list --json')\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.7.0","version":"4.7.0","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  'available --all --json')\n",
+                "    : > '{}'\n",
+                "    cat <<'JSON'\n",
+                "[\n",
+                r#"  {{"name":"4.6.0","version":"4.6.0","date":"2026-04-24"}},"#,
+                "\n",
+                r#"  {{"name":"4.7.0","version":"4.7.0","date":"2026-06-10"}}"#,
+                "\n",
+                "]\n",
+                "JSON\n",
+                "    ;;\n",
+                "  *)\n",
+                "    echo \"unexpected rig args: $*\" >&2\n",
+                "    exit 43\n",
+                "    ;;\n",
+                "esac\n",
+            ),
+            rig_binary.display(),
+            called_available.display()
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=4.7.0");
+    assert!(
+        called_available.exists(),
+        "undated cache coverage should refresh `rig available --all`"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_file(&called_available);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&rig_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_without_r_version_uses_rscript_on_path_when_rig_has_default() {
     let cache_dir = unique_dir("ir-path-rscript-cache");
     let bin_dir = unique_dir("ir-path-rscript-bin");
