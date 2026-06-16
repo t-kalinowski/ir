@@ -5,299 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const EMBEDDED_AVAILABLE_BUILD_DATE: &str = "2026-06-03";
-const EMBEDDED_AVAILABLE: &[AvailableCandidate<'static>] = &[
-    AvailableCandidate {
-        name: "3.0.0",
-        version: "3.0.0",
-        date: Some("2013-04-03"),
-    },
-    AvailableCandidate {
-        name: "3.0.1",
-        version: "3.0.1",
-        date: Some("2013-05-16"),
-    },
-    AvailableCandidate {
-        name: "3.0.2",
-        version: "3.0.2",
-        date: Some("2013-09-25"),
-    },
-    AvailableCandidate {
-        name: "3.0.3",
-        version: "3.0.3",
-        date: Some("2014-03-06"),
-    },
-    AvailableCandidate {
-        name: "3.1.0",
-        version: "3.1.0",
-        date: Some("2014-04-10"),
-    },
-    AvailableCandidate {
-        name: "3.1.1",
-        version: "3.1.1",
-        date: Some("2014-07-10"),
-    },
-    AvailableCandidate {
-        name: "3.1.2",
-        version: "3.1.2",
-        date: Some("2014-10-31"),
-    },
-    AvailableCandidate {
-        name: "3.1.3",
-        version: "3.1.3",
-        date: Some("2015-03-09"),
-    },
-    AvailableCandidate {
-        name: "3.2.0",
-        version: "3.2.0",
-        date: Some("2015-04-16"),
-    },
-    AvailableCandidate {
-        name: "3.2.1",
-        version: "3.2.1",
-        date: Some("2015-06-18"),
-    },
-    AvailableCandidate {
-        name: "3.2.2",
-        version: "3.2.2",
-        date: Some("2015-08-14"),
-    },
-    AvailableCandidate {
-        name: "3.2.3",
-        version: "3.2.3",
-        date: Some("2015-12-10"),
-    },
-    AvailableCandidate {
-        name: "3.2.4",
-        version: "3.2.4",
-        date: Some("2016-03-10"),
-    },
-    AvailableCandidate {
-        name: "3.2.5",
-        version: "3.2.5",
-        date: Some("2016-04-14"),
-    },
-    AvailableCandidate {
-        name: "3.3.0",
-        version: "3.3.0",
-        date: Some("2016-05-03"),
-    },
-    AvailableCandidate {
-        name: "3.3.1",
-        version: "3.3.1",
-        date: Some("2016-06-21"),
-    },
-    AvailableCandidate {
-        name: "3.3.2",
-        version: "3.3.2",
-        date: Some("2016-10-31"),
-    },
-    AvailableCandidate {
-        name: "3.3.3",
-        version: "3.3.3",
-        date: Some("2017-03-06"),
-    },
-    AvailableCandidate {
-        name: "3.4.0",
-        version: "3.4.0",
-        date: Some("2017-04-21"),
-    },
-    AvailableCandidate {
-        name: "3.4.1",
-        version: "3.4.1",
-        date: Some("2017-06-30"),
-    },
-    AvailableCandidate {
-        name: "3.4.2",
-        version: "3.4.2",
-        date: Some("2017-09-28"),
-    },
-    AvailableCandidate {
-        name: "3.4.3",
-        version: "3.4.3",
-        date: Some("2017-11-30"),
-    },
-    AvailableCandidate {
-        name: "3.4.4",
-        version: "3.4.4",
-        date: Some("2018-03-15"),
-    },
-    AvailableCandidate {
-        name: "3.5.0",
-        version: "3.5.0",
-        date: Some("2018-04-23"),
-    },
-    AvailableCandidate {
-        name: "3.5.1",
-        version: "3.5.1",
-        date: Some("2018-07-02"),
-    },
-    AvailableCandidate {
-        name: "3.5.2",
-        version: "3.5.2",
-        date: Some("2018-12-20"),
-    },
-    AvailableCandidate {
-        name: "3.5.3",
-        version: "3.5.3",
-        date: Some("2019-03-11"),
-    },
-    AvailableCandidate {
-        name: "3.6.0",
-        version: "3.6.0",
-        date: Some("2019-04-26"),
-    },
-    AvailableCandidate {
-        name: "3.6.1",
-        version: "3.6.1",
-        date: Some("2019-07-05"),
-    },
-    AvailableCandidate {
-        name: "3.6.2",
-        version: "3.6.2",
-        date: Some("2019-12-12"),
-    },
-    AvailableCandidate {
-        name: "3.6.3",
-        version: "3.6.3",
-        date: Some("2020-02-29"),
-    },
-    AvailableCandidate {
-        name: "4.0.0",
-        version: "4.0.0",
-        date: Some("2020-04-24"),
-    },
-    AvailableCandidate {
-        name: "4.0.1",
-        version: "4.0.1",
-        date: Some("2020-06-06"),
-    },
-    AvailableCandidate {
-        name: "4.0.2",
-        version: "4.0.2",
-        date: Some("2020-06-22"),
-    },
-    AvailableCandidate {
-        name: "4.0.3",
-        version: "4.0.3",
-        date: Some("2020-10-10"),
-    },
-    AvailableCandidate {
-        name: "4.0.4",
-        version: "4.0.4",
-        date: Some("2021-02-15"),
-    },
-    AvailableCandidate {
-        name: "4.0.5",
-        version: "4.0.5",
-        date: Some("2021-03-31"),
-    },
-    AvailableCandidate {
-        name: "4.1.0",
-        version: "4.1.0",
-        date: Some("2021-05-18"),
-    },
-    AvailableCandidate {
-        name: "4.1.1",
-        version: "4.1.1",
-        date: Some("2021-08-10"),
-    },
-    AvailableCandidate {
-        name: "4.1.2",
-        version: "4.1.2",
-        date: Some("2021-11-01"),
-    },
-    AvailableCandidate {
-        name: "4.1.3",
-        version: "4.1.3",
-        date: Some("2022-03-10"),
-    },
-    AvailableCandidate {
-        name: "4.2.0",
-        version: "4.2.0",
-        date: Some("2022-04-22"),
-    },
-    AvailableCandidate {
-        name: "4.2.1",
-        version: "4.2.1",
-        date: Some("2022-06-23"),
-    },
-    AvailableCandidate {
-        name: "4.2.2",
-        version: "4.2.2",
-        date: Some("2022-10-31"),
-    },
-    AvailableCandidate {
-        name: "4.2.3",
-        version: "4.2.3",
-        date: Some("2023-03-15"),
-    },
-    AvailableCandidate {
-        name: "4.3.0",
-        version: "4.3.0",
-        date: Some("2023-04-21"),
-    },
-    AvailableCandidate {
-        name: "4.3.1",
-        version: "4.3.1",
-        date: Some("2023-06-16"),
-    },
-    AvailableCandidate {
-        name: "4.3.2",
-        version: "4.3.2",
-        date: Some("2023-10-31"),
-    },
-    AvailableCandidate {
-        name: "4.3.3",
-        version: "4.3.3",
-        date: Some("2024-02-29"),
-    },
-    AvailableCandidate {
-        name: "4.4.0",
-        version: "4.4.0",
-        date: Some("2024-04-24"),
-    },
-    AvailableCandidate {
-        name: "4.4.1",
-        version: "4.4.1",
-        date: Some("2024-06-14"),
-    },
-    AvailableCandidate {
-        name: "4.4.2",
-        version: "4.4.2",
-        date: Some("2024-10-31"),
-    },
-    AvailableCandidate {
-        name: "4.4.3",
-        version: "4.4.3",
-        date: Some("2025-02-28"),
-    },
-    AvailableCandidate {
-        name: "4.5.0",
-        version: "4.5.0",
-        date: Some("2025-04-11"),
-    },
-    AvailableCandidate {
-        name: "4.5.1",
-        version: "4.5.1",
-        date: Some("2025-06-13"),
-    },
-    AvailableCandidate {
-        name: "4.5.2",
-        version: "4.5.2",
-        date: Some("2025-10-31"),
-    },
-    AvailableCandidate {
-        name: "4.5.3",
-        version: "4.5.3",
-        date: Some("2026-03-11"),
-    },
-    AvailableCandidate {
-        name: "4.6.0",
-        version: "4.6.0",
-        date: Some("2026-04-24"),
-    },
-];
+use crate::rig_releases::{EMBEDDED_AVAILABLE, EMBEDDED_AVAILABLE_BUILD_DATE};
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct AvailableR {
@@ -457,7 +165,7 @@ fn required_available_version(
                 req,
                 requirement,
                 Some(exclude_newer),
-                EMBEDDED_AVAILABLE.iter().copied(),
+                embedded_available_candidates(),
             );
         }
 
@@ -514,11 +222,19 @@ fn available_for_exclude_newer(
 }
 
 fn embedded_available() -> Vec<AvailableR> {
-    EMBEDDED_AVAILABLE
-        .iter()
-        .copied()
+    embedded_available_candidates()
         .map(AvailableR::from)
         .collect()
+}
+
+fn embedded_available_candidates() -> impl Iterator<Item = AvailableCandidate<'static>> {
+    EMBEDDED_AVAILABLE
+        .iter()
+        .map(|&(version, date)| AvailableCandidate {
+            name: version,
+            version,
+            date: Some(date),
+        })
 }
 
 fn installed_released_before_or_on(

@@ -38,6 +38,7 @@ mod cli;
 mod quarto;
 mod resolve_cache;
 mod rig;
+mod rig_releases;
 mod runtime;
 mod script;
 mod spec;
