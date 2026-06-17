@@ -174,8 +174,7 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn run_with_exclude_newer_uses_embedded_metadata_on_common_target() {
+fn run_with_exclude_newer_uses_embedded_neutral_metadata_without_refresh() {
     let cache_dir = unique_dir("ir-r-version-embedded-common-cache");
     let bin_dir = unique_dir("ir-r-version-embedded-common-bin");
     let script = unique_path("ir-r-version-embedded-common", "R");
@@ -285,10 +284,10 @@ fn run_with_exclude_newer_preserves_available_patch_releases() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_uses_platform_available_metadata_for_embedded_dates() {
-    let cache_dir = unique_dir("ir-r-version-platform-available-cache");
-    let bin_dir = unique_dir("ir-r-version-platform-available-bin");
-    let script = unique_path("ir-r-version-platform-available", "R");
+fn run_with_exclude_newer_uses_embedded_neutral_metadata_for_old_releases() {
+    let cache_dir = unique_dir("ir-r-version-neutral-old-cache");
+    let bin_dir = unique_dir("ir-r-version-neutral-old-bin");
+    let script = unique_path("ir-r-version-neutral-old", "R");
 
     fs::write(
         &script,
@@ -308,10 +307,6 @@ fn run_with_exclude_newer_uses_platform_available_metadata_for_embedded_dates() 
             "  printf '[]\\n'\n",
             "  exit 0\n",
             "fi\n",
-            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--json\" ] && [ \"$3\" = \"--all\" ]; then\n",
-            "  printf '%s\\n' '[{\"name\":\"4.1\",\"version\":\"4.1.0\",\"date\":\"2021-05-18T00:00:00Z\"}]'\n",
-            "  exit 0\n",
-            "fi\n",
             "echo \"unexpected rig args: $*\" >&2\n",
             "exit 43\n",
         ),
@@ -329,9 +324,8 @@ fn run_with_exclude_newer_uses_platform_available_metadata_for_embedded_dates() 
 
     assert!(!out.status.success(), "{}", output_text(&out));
     assert!(
-        output_text(&out).contains(
-            "could not resolve R version `3.6` with available R versions before or on 2021-01-01"
-        ),
+        output_text(&out)
+            .contains("R 3.6.3 is required but is not installed. Run `rig install 3.6.3`."),
         "{}",
         output_text(&out)
     );
