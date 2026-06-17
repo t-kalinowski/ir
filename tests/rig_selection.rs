@@ -284,10 +284,11 @@ fn run_with_exclude_newer_preserves_available_patch_releases() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_uses_embedded_neutral_metadata_for_old_releases() {
+fn run_with_exclude_newer_verifies_old_neutral_releases_with_rig_available() {
     let cache_dir = unique_dir("ir-r-version-neutral-old-cache");
     let bin_dir = unique_dir("ir-r-version-neutral-old-bin");
     let script = unique_path("ir-r-version-neutral-old", "R");
+    let metadata_calls = unique_path("ir-r-version-neutral-old-calls", "txt");
 
     fs::write(
         &script,
@@ -307,6 +308,11 @@ fn run_with_exclude_newer_uses_embedded_neutral_metadata_for_old_releases() {
             "  printf '[]\\n'\n",
             "  exit 0\n",
             "fi\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--json\" ] && [ \"$3\" = \"--all\" ]; then\n",
+            "  printf 'metadata\\n' >> \"$IR_TEST_R_VERSION_METADATA_CALLS\"\n",
+            "  printf '%s\\n' '[{\"name\":\"4.1.0\",\"version\":\"4.1.0\",\"date\":\"2021-05-18T00:00:00Z\"}]'\n",
+            "  exit 0\n",
+            "fi\n",
             "echo \"unexpected rig args: $*\" >&2\n",
             "exit 43\n",
         ),
@@ -316,6 +322,7 @@ fn run_with_exclude_newer_uses_embedded_neutral_metadata_for_old_releases() {
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("PATH", path)
+        .env("IR_TEST_R_VERSION_METADATA_CALLS", &metadata_calls)
         .env_remove("IR_RSCRIPT")
         .arg("run")
         .arg(&script)
@@ -324,13 +331,20 @@ fn run_with_exclude_newer_uses_embedded_neutral_metadata_for_old_releases() {
 
     assert!(!out.status.success(), "{}", output_text(&out));
     assert!(
-        output_text(&out)
-            .contains("R 3.6.3 is required but is not installed. Run `rig install 3.6.3`."),
+        output_text(&out).contains(
+            "could not resolve R version `3.6` with available R versions before or on 2021-01-01"
+        ),
         "{}",
         output_text(&out)
     );
+    assert_eq!(
+        fs::read_to_string(&metadata_calls).unwrap().lines().count(),
+        1,
+        "old neutral releases should be verified against rig availability"
+    );
 
     let _ = fs::remove_file(&script);
+    let _ = fs::remove_file(&metadata_calls);
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
 }

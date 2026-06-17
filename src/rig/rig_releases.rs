@@ -7,6 +7,9 @@ use super::rig_client::{self, AvailableR};
 
 include!(concat!(env!("OUT_DIR"), "/r_version_releases.rs"));
 
+// Older neutral source releases are not uniformly available through rig binaries.
+const EMBEDDED_INSTALL_HINT_MIN_VERSION: [u64; 3] = [4, 1, 0];
+
 pub(crate) fn required_available_version(
     req: &str,
     requirement: &VersionRequirement,
@@ -14,12 +17,15 @@ pub(crate) fn required_available_version(
 ) -> Result<AvailableR, Box<dyn Error>> {
     if let Some(exclude_newer) = exclude_newer {
         if exclude_newer <= EMBEDDED_AVAILABLE_METADATA_DATE {
-            return required_available_version_from_candidates(
+            let embedded = required_available_version_from_candidates(
                 req,
                 requirement,
                 Some(exclude_newer),
                 EMBEDDED_R_RELEASES.iter().map(AvailableCandidate::from),
-            );
+            )?;
+            if embedded_install_hint_is_safe(&embedded.version) {
+                return Ok(embedded);
+            }
         }
 
         let available = cached_release_metadata()?;
@@ -80,6 +86,41 @@ fn download_available_json() -> Result<String, Box<dyn Error>> {
     }
 
     Ok(json)
+}
+
+fn embedded_install_hint_is_safe(version: &str) -> bool {
+    let Some(version) = parse_version(version) else {
+        return false;
+    };
+    compare_version_parts(&version, &EMBEDDED_INSTALL_HINT_MIN_VERSION).is_ge()
+}
+
+fn parse_version(value: &str) -> Option<Vec<u64>> {
+    let mut parts = Vec::new();
+    for part in value.split('.') {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        parts.push(part.parse().ok()?);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts)
+    }
+}
+
+fn compare_version_parts(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    let len = a.len().max(b.len());
+    for idx in 0..len {
+        let left = a.get(idx).copied().unwrap_or(0);
+        let right = b.get(idx).copied().unwrap_or(0);
+        match left.cmp(&right) {
+            std::cmp::Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
