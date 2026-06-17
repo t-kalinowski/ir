@@ -1,3 +1,6 @@
+#[cfg(unix)]
+mod support;
+
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -237,6 +240,74 @@ fn release_workflow_installs_rig_before_building_binaries() {
     assert!(workflow.contains("brew install --cask rig"));
     assert!(workflow.contains("apt-get install -y --no-install-recommends r-rig"));
     assert!(workflow.contains("choco install rig -y --no-progress"));
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_build_date_rscript_uses_vanilla() {
+    let bin_dir = support::unique_dir("ir-build-date-bin");
+    let target_dir = support::unique_dir("ir-build-date-target");
+    let rscript_args = support::unique_path("ir-build-date-rscript-args", "txt");
+
+    support::write_executable(
+        &bin_dir.join("rig"),
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--all\" ] && [ \"$3\" = \"--json\" ]; then\n",
+            "  printf '[{\"name\":\"4.6.0\",\"date\":\"2026-04-24T00:00:00Z\",\"version\":\"4.6.0\",\"type\":\"release\",\"url\":\"https://example.invalid/R-4.6.0.pkg\"}]\\n'\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo \"unexpected rig args: $*\" >&2\n",
+            "exit 43\n",
+        ),
+    );
+    support::write_executable(
+        &bin_dir.join("Rscript"),
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s\\n' \"$@\" > \"$IR_TEST_RSCRIPT_ARGS\"\n",
+            "for arg in \"$@\"; do\n",
+            "  if [ \"$arg\" = \"--vanilla\" ]; then\n",
+            "    printf '2026-06-17'\n",
+            "    exit 0\n",
+            "  fi\n",
+            "done\n",
+            "echo 'Rscript must be invoked with --vanilla' >&2\n",
+            "exit 64\n",
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = Command::new(cargo)
+        .current_dir(repo_root())
+        .env("PATH", path)
+        .env("IR_TEST_RSCRIPT_ARGS", &rscript_args)
+        .arg("check")
+        .arg("--quiet")
+        .arg("--locked")
+        .arg("--bin")
+        .arg("ir")
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_eq!(
+        fs::read_to_string(&rscript_args).unwrap(),
+        "--vanilla\n-e\ncat(as.character(Sys.Date()))\n"
+    );
+
+    let _ = fs::remove_file(&rscript_args);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&target_dir);
 }
 
 #[cfg(windows)]
