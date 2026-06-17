@@ -1,10 +1,10 @@
-use super::r_selection;
+use std::borrow::Cow;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ReleaseMetadata {
-    pub(crate) name: String,
-    pub(crate) version: String,
-    pub(crate) date: String,
+pub(crate) struct ReleaseMetadata<'a> {
+    pub(crate) name: Cow<'a, str>,
+    pub(crate) version: Cow<'a, str>,
+    pub(crate) date: Cow<'a, str>,
 }
 
 #[derive(serde::Deserialize)]
@@ -21,7 +21,7 @@ struct RVersionRelease {
 pub(crate) fn parse_release_metadata_json(
     json: &str,
     source: &str,
-) -> Result<Vec<ReleaseMetadata>, String> {
+) -> Result<Vec<ReleaseMetadata<'static>>, String> {
     let versions: Vec<RVersionRelease> =
         serde_json::from_str(json).map_err(|e| format!("failed to parse {source} JSON: {e}"))?;
     let mut releases = Vec::new();
@@ -38,7 +38,7 @@ pub(crate) fn parse_release_metadata_json(
         let Some(date) = version.date.as_deref() else {
             continue;
         };
-        let date = r_selection::iso_date_prefix(date)
+        let date = iso_date_prefix(date)
             .ok_or_else(|| {
                 format!(
                     "R version availability metadata returned invalid release date `{}` for R {}",
@@ -47,9 +47,9 @@ pub(crate) fn parse_release_metadata_json(
             })?
             .to_string();
         releases.push(ReleaseMetadata {
-            name: name.to_string(),
-            version: release_version,
-            date,
+            name: Cow::Owned(name.to_string()),
+            version: Cow::Owned(release_version),
+            date: Cow::Owned(date),
         });
     }
 
@@ -63,9 +63,42 @@ pub(crate) fn parse_release_metadata_json(
 }
 
 fn release_version(semver: &str) -> Option<String> {
-    if semver.split('.').count() == 3 && r_selection::parse_version(semver).is_some() {
-        Some(semver.to_string())
+    let mut parts = semver.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    for part in [major, minor, patch] {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
+
+    Some(semver.to_string())
+}
+
+fn iso_date_prefix(value: &str) -> Option<&str> {
+    let date = value.get(..10)?;
+    if is_iso_date(date) {
+        Some(date)
     } else {
         None
     }
+}
+
+fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+        && bytes[4] == b'-'
+        && bytes[5].is_ascii_digit()
+        && bytes[6].is_ascii_digit()
+        && bytes[7] == b'-'
+        && bytes[8].is_ascii_digit()
+        && bytes[9].is_ascii_digit()
 }

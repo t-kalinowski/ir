@@ -5,8 +5,12 @@ use super::r_selection::{self, AvailableCandidate, VersionRequirement};
 use super::release_metadata::{parse_release_metadata_json, ReleaseMetadata};
 use super::rig_client::{self, AvailableR};
 
-const EMBEDDED_AVAILABLE_METADATA_DATE: &str = include_str!("r-versions-fetched-at.txt");
-const EMBEDDED_R_RELEASES: &str = include_str!("r-versions.json");
+struct ReleaseMetadataIndex<'a> {
+    fetched_at: &'a str,
+    releases: &'a [ReleaseMetadata<'a>],
+}
+
+include!(concat!(env!("OUT_DIR"), "/r_version_releases.rs"));
 
 pub(crate) fn required_available_version(
     req: &str,
@@ -17,13 +21,15 @@ pub(crate) fn required_available_version(
         if requirement_uses_symbolic_name(requirement) {
             return required_available_version_from_host(req, requirement, Some(exclude_newer));
         }
-        if exclude_newer <= embedded_available_metadata_date()? {
-            let available = embedded_release_metadata()?;
+        if exclude_newer <= EMBEDDED_R_RELEASE_METADATA.fetched_at {
             let embedded = required_available_version_from_candidates(
                 req,
                 requirement,
                 Some(exclude_newer),
-                available.iter().map(AvailableCandidate::from),
+                EMBEDDED_R_RELEASE_METADATA
+                    .releases
+                    .iter()
+                    .map(AvailableCandidate::from),
             );
             embedded?;
         }
@@ -74,25 +80,7 @@ fn required_available_version_from_host(
     )
 }
 
-fn embedded_available_metadata_date() -> Result<&'static str, Box<dyn Error>> {
-    let date = EMBEDDED_AVAILABLE_METADATA_DATE.trim();
-    if r_selection::iso_date_prefix(date) != Some(date) {
-        return Err(
-            "embedded R version availability metadata date must be in YYYY-MM-DD format".into(),
-        );
-    }
-    Ok(date)
-}
-
-fn embedded_release_metadata() -> Result<Vec<ReleaseMetadata>, Box<dyn Error>> {
-    parse_release_metadata_json(
-        EMBEDDED_R_RELEASES,
-        "embedded R version availability metadata",
-    )
-    .map_err(|e| -> Box<dyn Error> { e.into() })
-}
-
-fn cached_release_metadata() -> Result<Vec<ReleaseMetadata>, Box<dyn Error>> {
+fn cached_release_metadata() -> Result<Vec<ReleaseMetadata<'static>>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("r-versions")
         .join("available.json");
@@ -138,12 +126,12 @@ impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
     }
 }
 
-impl<'a> From<&'a ReleaseMetadata> for AvailableCandidate<'a> {
-    fn from(value: &'a ReleaseMetadata) -> Self {
+impl<'a, 'b> From<&'a ReleaseMetadata<'b>> for AvailableCandidate<'a> {
+    fn from(value: &'a ReleaseMetadata<'b>) -> Self {
         Self {
-            name: &value.name,
-            version: &value.version,
-            date: Some(&value.date),
+            name: value.name.as_ref(),
+            version: value.version.as_ref(),
+            date: Some(value.date.as_ref()),
         }
     }
 }
