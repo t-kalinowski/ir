@@ -7,6 +7,9 @@ use std::process::{Command, Stdio};
 
 use crate::rig_releases::{EMBEDDED_AVAILABLE, EMBEDDED_AVAILABLE_BUILD_DATE};
 
+const MINIMUM_AUTOMATIC_R_VERSION: &str = "4.0.0";
+const MINIMUM_AUTOMATIC_R_RELEASE_DATE: &str = "2020-04-24";
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct AvailableR {
     name: String,
@@ -74,6 +77,14 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
 
 pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
     let exclude_newer = parse_iso_date_field("exclude-newer", exclude_newer)?;
+    if exclude_newer.as_str() < MINIMUM_AUTOMATIC_R_RELEASE_DATE {
+        return Err(format!(
+            "exclude-newer {} is before R {}, the oldest R version supported by ir's resolver. Use an exclude-newer date on or after {}.",
+            exclude_newer, MINIMUM_AUTOMATIC_R_VERSION, MINIMUM_AUTOMATIC_R_RELEASE_DATE
+        )
+        .into());
+    }
+
     let installed = rig_list()?;
     let available = available_for_exclude_newer(&exclude_newer, &installed)?;
 
