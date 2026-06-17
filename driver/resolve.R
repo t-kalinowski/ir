@@ -311,11 +311,107 @@ ir_renv_cache_lock_root <- function() {
   tools::R_user_dir("renv", "cache")
 }
 
+ir_ensure_dir <- function(path, label) {
+  if (dir.exists(path))
+    return(invisible(path))
+  if (dir.create(path, recursive = TRUE, showWarnings = FALSE) ||
+      dir.exists(path))
+    return(invisible(path))
+
+  stop("could not create ", label, " at ", path, call. = FALSE)
+}
+
+ir_write_renv_cache_lock_owner <- function(lock) {
+  owner <- file.path(lock, "owner")
+  ok <- tryCatch({
+    writeLines(c(
+      paste0("pid=", Sys.getpid()),
+      paste0("created_at=", unclass(Sys.time()))
+    ), owner)
+    TRUE
+  }, error = identity)
+
+  if (identical(ok, TRUE))
+    return(invisible(owner))
+
+  unlink(lock, recursive = TRUE, force = TRUE)
+  stop("could not write renv cache lock owner at ", owner, ": ",
+       conditionMessage(ok), call. = FALSE)
+}
+
+ir_renv_cache_lock_owner <- function(lock) {
+  owner <- file.path(lock, "owner")
+  if (!file.exists(owner))
+    return(list(pid = NULL, created_at = NULL))
+
+  lines <- tryCatch(readLines(owner, warn = FALSE), error = function(e) character())
+  pid <- NULL
+  created_at <- NULL
+
+  pid_line <- lines[startsWith(lines, "pid=")]
+  if (length(pid_line)) {
+    value <- suppressWarnings(as.integer(sub("^pid=", "", pid_line[[1L]])))
+    if (!is.na(value))
+      pid <- value
+  }
+
+  created_line <- lines[startsWith(lines, "created_at=")]
+  if (length(created_line)) {
+    value <- suppressWarnings(as.numeric(sub("^created_at=", "", created_line[[1L]])))
+    if (!is.na(value))
+      created_at <- as.POSIXct(value, origin = "1970-01-01")
+  }
+
+  list(pid = pid, created_at = created_at)
+}
+
+ir_process_running <- function(pid) {
+  if (is.null(pid) || is.na(pid) || pid <= 0)
+    return(FALSE)
+
+  running <- tryCatch(tools::pskill(pid, 0), error = function(e) NA)
+  if (is.na(running))
+    return(NULL)
+
+  isTRUE(running)
+}
+
+ir_renv_cache_lock_created_at <- function(lock, owner) {
+  if (!is.null(owner$created_at))
+    return(owner$created_at)
+
+  mtime <- file.info(lock)$mtime
+  if (length(mtime) && !is.na(mtime))
+    return(mtime)
+
+  NULL
+}
+
+ir_remove_stale_renv_cache_lock <- function(lock) {
+  owner <- ir_renv_cache_lock_owner(lock)
+  running <- if (is.null(owner$pid)) NULL else ir_process_running(owner$pid)
+  if (identical(running, FALSE)) {
+    unlink(lock, recursive = TRUE, force = TRUE)
+    return(!file.exists(lock))
+  }
+  if (identical(running, TRUE))
+    return(FALSE)
+
+  created_at <- ir_renv_cache_lock_created_at(lock, owner)
+  if (is.null(created_at))
+    return(FALSE)
+
+  stale_after <- 60 * 60
+  if (as.numeric(difftime(Sys.time(), created_at, units = "secs")) < stale_after)
+    return(FALSE)
+
+  unlink(lock, recursive = TRUE, force = TRUE)
+  !file.exists(lock)
+}
+
 ir_with_renv_cache_lock <- function(expr) {
   root <- ir_renv_cache_lock_root()
-  if (!dir.exists(root) &&
-      !dir.create(root, recursive = TRUE, showWarnings = FALSE))
-    stop("could not create renv cache lock root at ", root, call. = FALSE)
+  ir_ensure_dir(root, "renv cache lock root")
   if (!dir.exists(root))
     stop("renv cache lock root is not a directory: ", root, call. = FALSE)
 
@@ -324,9 +420,12 @@ ir_with_renv_cache_lock <- function(expr) {
 
   repeat {
     if (dir.create(lock, showWarnings = FALSE)) {
+      ir_write_renv_cache_lock_owner(lock)
       on.exit(unlink(lock, recursive = TRUE, force = TRUE), add = TRUE)
       return(force(expr))
     }
+
+    ir_remove_stale_renv_cache_lock(lock)
 
     if (Sys.time() >= deadline)
       stop("could not acquire renv cache lock at ", lock, call. = FALSE)

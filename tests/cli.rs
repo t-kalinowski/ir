@@ -1418,6 +1418,54 @@ cat("ir.fixture=transitive-source\n")
 }
 
 #[test]
+fn run_recovers_stale_renv_cache_lock() {
+    let cache_dir = unique_dir("ir-stale-renv-lock-cache");
+    let renv_cache = unique_dir("ir-stale-renv-cache");
+    let lock = renv_cache.join("ir-renv-cache.lock");
+    fs::create_dir_all(&lock).unwrap();
+    fs::write(lock.join("owner"), "pid=0\ncreated_at=0\n").unwrap();
+
+    let package_dir = unique_dir("ir-stale-renv-lock-packages");
+    let package = write_r_source_package(&package_dir, "irstalelock", &[]);
+    let script = unique_path("ir-stale-renv-lock", "R");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - local::{}
+
+library(irstalelock)
+cat("ir.fixture=stale-renv-lock\n")
+"#,
+            renviron_path(&package)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache)
+        .env_remove("R_PROFILE_USER")
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=stale-renv-lock");
+    assert!(
+        !lock.exists(),
+        "stale lock should be recovered and released"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&renv_cache);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
 fn run_frontmatter_local_ref_reruns_resolution_when_package_changes() {
     let cache_dir = unique_dir("ir-local-ref-cache");
     let package_dir = unique_dir("ir-local-ref-packages");
