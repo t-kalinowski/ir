@@ -3,8 +3,8 @@ use std::error::Error;
 use super::rig_client::InstalledR;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AvailableCandidate<'a> {
-    pub(crate) name: &'a str,
+pub(crate) struct RReleaseCandidate<'a> {
+    pub(crate) install_name: Option<&'a str>,
     pub(crate) version: &'a str,
     pub(crate) date: Option<&'a str>,
 }
@@ -73,12 +73,18 @@ pub(crate) fn select_available_candidate<'a>(
     req: &str,
     requirement: &VersionRequirement,
     exclude_newer: Option<&str>,
-    candidates: impl IntoIterator<Item = AvailableCandidate<'a>>,
-) -> Result<AvailableCandidate<'a>, Box<dyn Error>> {
+    candidates: impl IntoIterator<Item = RReleaseCandidate<'a>>,
+) -> Result<RReleaseCandidate<'a>, Box<dyn Error>> {
     candidates
         .into_iter()
         .filter(|version| released_before_or_on(version, exclude_newer))
-        .filter(|version| requirement.matches_candidate(version.name, version.version, &[]))
+        .filter(|version| {
+            requirement.matches_candidate(
+                version.install_name.unwrap_or(version.version),
+                version.version,
+                &[],
+            )
+        })
         .max_by(|a, b| compare_versions(a.version, b.version))
         .ok_or_else(|| {
             let suffix = exclude_newer
@@ -90,8 +96,8 @@ pub(crate) fn select_available_candidate<'a>(
 
 pub(crate) fn select_latest_available_candidate<'a>(
     exclude_newer: &str,
-    candidates: impl IntoIterator<Item = AvailableCandidate<'a>>,
-) -> Result<AvailableCandidate<'a>, Box<dyn Error>> {
+    candidates: impl IntoIterator<Item = RReleaseCandidate<'a>>,
+) -> Result<RReleaseCandidate<'a>, Box<dyn Error>> {
     candidates
         .into_iter()
         .filter(|version| released_before_or_on(version, Some(exclude_newer)))
@@ -123,7 +129,7 @@ pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
     }
 }
 
-fn released_before_or_on(version: &AvailableCandidate<'_>, exclude_newer: Option<&str>) -> bool {
+fn released_before_or_on(version: &RReleaseCandidate<'_>, exclude_newer: Option<&str>) -> bool {
     let Some(exclude_newer) = exclude_newer else {
         return true;
     };
