@@ -238,7 +238,7 @@ fn run_with_exclude_newer_uses_embedded_minor_release_dates() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_future_exclude_newer_caches_r_version_metadata_json() {
+fn run_with_exclude_newer_after_embedded_metadata_refreshes_release_dates() {
     let cache_dir = unique_dir("ir-r-version-future-available-cache");
     let bin_dir = unique_dir("ir-r-version-future-available-bin");
     let script = unique_path("ir-r-version-future-available", "R");
@@ -248,7 +248,7 @@ fn run_with_future_exclude_newer_caches_r_version_metadata_json() {
         &script,
         concat!(
             "#| r-version: \"4.7\"\n",
-            "#| exclude-newer: 2099-01-02\n",
+            "#| exclude-newer: 2026-06-04\n",
             "cat('unused')\n",
         ),
     )
@@ -273,7 +273,7 @@ fn run_with_future_exclude_newer_caches_r_version_metadata_json() {
             "if [ \"${4:-}\" = \"https://api.r-hub.io/rversions/r-versions\" ]; then\n",
             "  printf 'metadata\\n' >> \"$IR_TEST_R_VERSION_METADATA_CALLS\"\n",
             "  cat <<'JSON'\n",
-            "[{\"version\":\"4.7.0\",\"semver\":\"4.7.0\",\"date\":\"2099-01-01T00:00:00Z\",\"nickname\":\"Future R\"}]\n",
+            "[{\"version\":\"4.7.0\",\"semver\":\"4.7.0\",\"date\":\"2026-06-04T00:00:00Z\",\"nickname\":\"Future R\"}]\n",
             "JSON\n",
             "  exit 0\n",
             "fi\n",
@@ -314,7 +314,7 @@ fn run_with_future_exclude_newer_caches_r_version_metadata_json() {
     assert_eq!(
         calls.lines().count(),
         1,
-        "R version metadata should be cached after the first future-dated lookup"
+        "R version metadata should be cached after the first refreshed lookup"
     );
 
     let _ = fs::remove_file(&script);

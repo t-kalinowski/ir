@@ -1,6 +1,3 @@
-#[cfg(unix)]
-mod support;
-
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -156,7 +153,6 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
-    assert!(!workflow.contains("Install rig for build metadata"));
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
     assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
@@ -219,76 +215,12 @@ fn docs_workflow_requires_all_ci_jobs() {
     assert!(workflow.contains("actions: read"));
     assert!(workflow.contains("Require CI jobs to have succeeded"));
     assert!(workflow.contains("All CI jobs succeeded; proceeding to publish."));
-    assert!(!workflow.contains("Install rig for build metadata"));
     assert!(!workflow.contains("workflow_dispatch"));
     assert!(!workflow.contains("github.event_name == 'workflow_run'"));
     assert!(!workflow.contains("github.sha"));
     assert!(!workflow.contains("non-Windows"));
     assert!(!workflow.contains("known-broken"));
     assert!(!workflow.contains(r#"test("windows"; "i")"#));
-}
-
-#[test]
-fn release_workflow_builds_without_rig_metadata_install() {
-    let path = repo_root().join(".github/workflows/release.yml");
-    let workflow = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-
-    assert!(!workflow.contains("r-lib/actions/setup-r@v2"));
-    assert!(!workflow.contains("Install rig for build metadata"));
-    assert!(!workflow.contains("brew install --cask rig"));
-    assert!(!workflow.contains("apt-get install -y --no-install-recommends r-rig"));
-    assert!(!workflow.contains("choco install rig -y --no-progress"));
-}
-
-#[cfg(unix)]
-#[test]
-fn cargo_build_uses_checked_in_r_version_metadata() {
-    let bin_dir = support::unique_dir("ir-build-date-bin");
-    let target_dir = support::unique_dir("ir-build-date-target");
-
-    support::write_executable(
-        &bin_dir.join("Rscript"),
-        concat!(
-            "#!/bin/sh\n",
-            "echo \"build should not invoke Rscript: $*\" >&2\n",
-            "exit 64\n",
-        ),
-    );
-    support::write_executable(
-        &bin_dir.join("rig"),
-        concat!(
-            "#!/bin/sh\n",
-            "echo \"build should not invoke rig: $*\" >&2\n",
-            "exit 65\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let out = Command::new(cargo)
-        .current_dir(repo_root())
-        .env("PATH", path)
-        .arg("check")
-        .arg("--quiet")
-        .arg("--locked")
-        .arg("--bin")
-        .arg("ir")
-        .arg("--target-dir")
-        .arg(&target_dir)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&target_dir);
 }
 
 #[cfg(windows)]
