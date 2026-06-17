@@ -174,7 +174,7 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_preserves_embedded_patch_releases() {
+fn run_with_exclude_newer_preserves_available_patch_releases() {
     let cache_dir = unique_dir("ir-r-version-embedded-all-cache");
     let bin_dir = unique_dir("ir-r-version-embedded-all-bin");
     let script = unique_path("ir-r-version-embedded-all", "R");
@@ -197,22 +197,15 @@ fn run_with_exclude_newer_preserves_embedded_patch_releases() {
             "  printf '[]\\n'\n",
             "  exit 0\n",
             "fi\n",
-            "if [ \"$1\" = \"available\" ]; then\n",
-            "  echo 'unexpected rig available call' >&2\n",
-            "  exit 42\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--json\" ] && [ \"$3\" = \"--all\" ]; then\n",
+            "  printf '%s\\n' '[{\"name\":\"4.4.3\",\"version\":\"4.4.3\",\"date\":\"2025-02-28T00:00:00Z\"}]'\n",
+            "  exit 0\n",
             "fi\n",
             "echo \"unexpected rig args: $*\" >&2\n",
             "exit 43\n",
         ),
     );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
+    let path = std::env::join_paths([bin_dir.as_os_str().to_owned()]).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -227,6 +220,64 @@ fn run_with_exclude_newer_preserves_embedded_patch_releases() {
     assert!(
         output_text(&out)
             .contains("R 4.4.3 is required but is not installed. Run `rig install 4.4.3`."),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exclude_newer_uses_platform_available_metadata_for_embedded_dates() {
+    let cache_dir = unique_dir("ir-r-version-platform-available-cache");
+    let bin_dir = unique_dir("ir-r-version-platform-available-bin");
+    let script = unique_path("ir-r-version-platform-available", "R");
+
+    fs::write(
+        &script,
+        concat!(
+            "#| r-version: \"3.6\"\n",
+            "#| exclude-newer: 2021-01-01\n",
+            "cat('unused')\n",
+        ),
+    )
+    .unwrap();
+
+    write_executable(
+        &bin_dir.join("rig"),
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"$1\" = \"list\" ] && [ \"$2\" = \"--json\" ]; then\n",
+            "  printf '[]\\n'\n",
+            "  exit 0\n",
+            "fi\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--json\" ] && [ \"$3\" = \"--all\" ]; then\n",
+            "  printf '%s\\n' '[{\"name\":\"4.1\",\"version\":\"4.1.0\",\"date\":\"2021-05-18T00:00:00Z\"}]'\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo \"unexpected rig args: $*\" >&2\n",
+            "exit 43\n",
+        ),
+    );
+    let path = std::env::join_paths([bin_dir.as_os_str().to_owned()]).unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .arg("run")
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    assert!(
+        output_text(&out).contains(
+            "could not resolve R version `3.6` with available R versions before or on 2021-01-01"
+        ),
         "{}",
         output_text(&out)
     );

@@ -13,7 +13,9 @@ pub(crate) fn required_available_version(
     exclude_newer: Option<&str>,
 ) -> Result<AvailableR, Box<dyn Error>> {
     if let Some(exclude_newer) = exclude_newer {
-        if exclude_newer <= EMBEDDED_AVAILABLE_METADATA_DATE {
+        if exclude_newer <= EMBEDDED_AVAILABLE_METADATA_DATE
+            && embedded_release_metadata_matches_host()
+        {
             return required_available_version_from_candidates(
                 req,
                 requirement,
@@ -80,6 +82,52 @@ fn download_available_json() -> Result<String, Box<dyn Error>> {
     }
 
     Ok(json)
+}
+
+fn embedded_release_metadata_matches_host() -> bool {
+    EMBEDDED_AVAILABLE_METADATA_TARGET
+        .map(|target| current_rig_target().as_deref() == Some(target))
+        .unwrap_or(false)
+}
+
+fn current_rig_target() -> Option<String> {
+    let platform = match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        "linux" => return current_linux_rig_target(),
+        _ => return None,
+    }
+    .to_string();
+    let arch = match (platform.as_str(), std::env::consts::ARCH) {
+        ("macos", "aarch64" | "arm64") => "arm64",
+        (_, "arm64") => "aarch64",
+        (_, arch) => arch,
+    };
+
+    Some(format!("{platform}/{arch}"))
+}
+
+fn current_linux_rig_target() -> Option<String> {
+    let os_release = fs::read_to_string("/etc/os-release").ok()?;
+    let id = os_release_field(&os_release, "ID")?;
+    let version = os_release_field(&os_release, "VERSION_ID")?;
+    let arch = match std::env::consts::ARCH {
+        "arm64" => "aarch64",
+        arch => arch,
+    };
+
+    Some(format!("linux-{id}-{version}/{arch}"))
+}
+
+fn os_release_field(contents: &str, key: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        let (field, value) = line.split_once('=')?;
+        if field == key {
+            Some(value.trim_matches('"').to_string())
+        } else {
+            None
+        }
+    })
 }
 
 impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
