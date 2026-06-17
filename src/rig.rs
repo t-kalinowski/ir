@@ -2,6 +2,7 @@ use std::error::Error;
 use std::ffi::OsString;
 
 mod r_selection;
+mod release_metadata;
 mod rig_client;
 mod rig_releases;
 
