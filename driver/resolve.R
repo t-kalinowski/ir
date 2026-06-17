@@ -303,6 +303,66 @@ ir_install_specs <- function(res) {
 ir_materialize_lock_path <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "locks", "renv-materialize.lock")
 
+ir_materialize_lock_owner_file <- function(path)
+  file.path(path, "owner")
+
+ir_current_nodename <- function() {
+  nodename <- Sys.info()[["nodename"]]
+  if (length(nodename) != 1L || is.na(nodename)) "" else as.character(nodename)
+}
+
+ir_materialize_lock_owner <- function() {
+  c(
+    pid = as.character(Sys.getpid()),
+    nodename = ir_current_nodename()
+  )
+}
+
+ir_materialize_lock_write_owner <- function(path) {
+  owner <- ir_materialize_lock_owner()
+  writeLines(
+    paste(names(owner), owner, sep = "="),
+    ir_materialize_lock_owner_file(path)
+  )
+}
+
+ir_materialize_lock_read_owner <- function(path) {
+  owner_file <- ir_materialize_lock_owner_file(path)
+  if (!file.exists(owner_file)) return(NULL)
+
+  lines <- tryCatch(readLines(owner_file, warn = FALSE),
+                    error = function(e) character())
+  if (!length(lines)) return(NULL)
+  owner <- setNames(sub("^[^=]*=", "", lines), sub("=.*$", "", lines))
+  pid_value <- owner[["pid"]]
+  nodename <- owner[["nodename"]]
+  if (is.null(pid_value) || is.null(nodename)) return(NULL)
+
+  pid <- suppressWarnings(as.integer(pid_value))
+  if (is.na(pid) || is.na(nodename) || !nzchar(nodename)) return(NULL)
+
+  list(pid = pid, nodename = nodename)
+}
+
+ir_materialize_lock_owner_stale <- function(owner) {
+  if (!identical(owner$nodename, ir_current_nodename())) return(FALSE)
+
+  !tools::pskill(owner$pid, 0)
+}
+
+ir_materialize_lock_reclaim_stale <- function(path) {
+  owner <- ir_materialize_lock_read_owner(path)
+  if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
+    return(FALSE)
+
+  stale <- tempfile(paste0(basename(path), "-stale-"), dirname(path))
+  if (!suppressWarnings(file.rename(path, stale)))
+    return(FALSE)
+
+  unlink(stale, recursive = TRUE, force = TRUE)
+  TRUE
+}
+
 ir_materialize_lock_timeout_seconds <- function() {
   env <- Sys.getenv("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS")
   if (!nzchar(env)) return(3600)
@@ -315,12 +375,25 @@ ir_materialize_lock_timeout_seconds <- function() {
   seconds
 }
 
+ir_materialize_lock_create <- function(path) {
+  tmp <- tempfile(paste0(basename(path), "-"), dirname(path))
+  dir.create(tmp, mode = "0755", showWarnings = FALSE)
+
+  acquired <- FALSE
+  on.exit(if (!acquired) unlink(tmp, recursive = TRUE, force = TRUE), add = TRUE)
+  ir_materialize_lock_write_owner(tmp)
+  acquired <- suppressWarnings(file.rename(tmp, path))
+  acquired
+}
+
 ir_materialize_lock_acquire <- function(path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-
   started <- Sys.time()
   timeout <- ir_materialize_lock_timeout_seconds()
-  while (!dir.create(path, mode = "0755", showWarnings = FALSE)) {
+  while (!ir_materialize_lock_create(path)) {
+    if (ir_materialize_lock_reclaim_stale(path))
+      next
+
     elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
     if (elapsed >= timeout)
       stop("timed out waiting for resolver materialization lock: ", path,

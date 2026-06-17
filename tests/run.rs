@@ -1244,16 +1244,81 @@ fn run_passes_rust_owned_cache_dir_to_resolver() {
 }
 
 #[cfg(unix)]
-#[test]
-fn concurrent_resolvers_serialize_renv_materialization() {
-    let cache_dir = unique_dir("ir-renv-materialize-lock-cache");
-    let profile = unique_path("ir-renv-materialize-lock-profile", "R");
-    let active = unique_path("ir-renv-materialize-active", "");
-    let entered = unique_path("ir-renv-materialize-entered", "txt");
-    let overlap = unique_path("ir-renv-materialize-overlap", "txt");
+fn write_materialize_lock_profile(
+    profile: &Path,
+    active: Option<&Path>,
+    overlap: Option<&Path>,
+    entered: &Path,
+    seed_stale_lock: bool,
+    sleep_seconds: f64,
+) {
+    assert_eq!(active.is_some(), overlap.is_some());
+
+    let stale_lock_code = if seed_stale_lock {
+        r#"
+if (nzchar(Sys.getenv("IR_TEST_STALE_MATERIALIZE_LOCK")) &&
+    nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
+  lock <- file.path(Sys.getenv("IR_CACHE_DIR"), "locks", "renv-materialize.lock")
+  dir.create(lock, recursive = TRUE, showWarnings = FALSE)
+  writeLines(
+    c("pid=99999999", paste0("nodename=", Sys.info()[["nodename"]])),
+    file.path(lock, "owner")
+  )
+}
+"#
+    } else {
+        ""
+    };
+
+    let pak_code = paste_lines(&[
+        "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
+        "  refs <- as.character(refs)",
+        "  data.frame(",
+        "    status = rep('OK', length(refs)),",
+        "    ref = refs,",
+        "    package = sub('@.*$', '', refs),",
+        "    version = rep('0.0.1', length(refs)),",
+        "    type = rep('standard', length(refs)),",
+        "    priority = NA_character_,",
+        "    direct = TRUE,",
+        "    stringsAsFactors = FALSE",
+        "  )",
+        "}",
+    ]);
+
+    let mut renv_code =
+        String::from("use <- function(..., library, repos, attach, sandbox, isolate, verbose) {\n");
+    if let (Some(active), Some(overlap)) = (active, overlap) {
+        renv_code.push_str(&format!(
+            "  active <- {}\n\
+             if (!dir.create(active, recursive = TRUE, showWarnings = FALSE)) {{\n\
+               writeLines('overlap', {})\n\
+               stop('renv::use overlapped', call. = FALSE)\n\
+             }}\n\
+             on.exit(unlink(active, recursive = TRUE, force = TRUE), add = TRUE)\n",
+            r_string(active),
+            r_string(overlap)
+        ));
+    }
+    renv_code.push_str(&format!(
+        "  cat(Sys.getpid(), '\\n', file = {}, append = TRUE)\n",
+        r_string(entered)
+    ));
+    if sleep_seconds > 0.0 {
+        renv_code.push_str(&format!("  Sys.sleep({sleep_seconds})\n"));
+    }
+    renv_code.push_str(
+        "  specs <- unlist(list(...), use.names = FALSE)\n\
+         for (spec in specs) {\n\
+           pkg <- sub('@.*$', '', spec)\n\
+           dir.create(file.path(library, pkg), recursive = TRUE, showWarnings = FALSE)\n\
+         }\n\
+         invisible(TRUE)\n\
+         }\n",
+    );
 
     fs::write(
-        &profile,
+        profile,
         format!(
             r#"
 ir_test_write_pkg <- function(lib, pkg, namespace, code) {{
@@ -1272,6 +1337,7 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {{
   writeLines(namespace, file.path(path, "NAMESPACE"))
   writeLines(code, file.path(path, "R", pkg))
 }}
+{stale_lock_code}
 
 ir_test_private_lib <- file.path(
   Sys.getenv("IR_CACHE_DIR"),
@@ -1282,60 +1348,51 @@ ir_test_write_pkg(
   ir_test_private_lib,
   "secretbase",
   "export(sha256)",
-  "sha256 <- function(x) 'irlockhash'"
+  {secretbase_code}
 )
 ir_test_write_pkg(
   ir_test_private_lib,
   "pak",
   "export(pkg_deps)",
-  paste(
-    "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {{",
-    "  refs <- as.character(refs)",
-    "  data.frame(",
-    "    status = rep('OK', length(refs)),",
-    "    ref = refs,",
-    "    package = sub('@.*$', '', refs),",
-    "    version = rep('0.0.1', length(refs)),",
-    "    type = rep('standard', length(refs)),",
-    "    priority = NA_character_,",
-    "    direct = TRUE,",
-    "    stringsAsFactors = FALSE",
-    "  )",
-    "}}",
-    sep = "\n"
-  )
+  {pak_code}
 )
 ir_test_write_pkg(
   ir_test_private_lib,
   "renv",
   "export(use)",
-  paste(
-    "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {{",
-    paste0("  active <- ", deparse({})),
-    "  if (!dir.create(active, recursive = TRUE, showWarnings = FALSE)) {{",
-    paste0("    writeLines('overlap', ", deparse({}), ")"),
-    "    stop('renv::use overlapped', call. = FALSE)",
-    "  }}",
-    "  on.exit(unlink(active, recursive = TRUE, force = TRUE), add = TRUE)",
-    paste0("  cat(Sys.getpid(), '\\n', file = ", deparse({}), ", append = TRUE)"),
-    "  Sys.sleep(1)",
-    "  specs <- unlist(list(...), use.names = FALSE)",
-    "  for (spec in specs) {{",
-    "    pkg <- sub('@.*$', '', spec)",
-    "    dir.create(file.path(library, pkg), recursive = TRUE, showWarnings = FALSE)",
-    "  }}",
-    "  invisible(TRUE)",
-    "}}",
-    sep = "\n"
-  )
+  {renv_code}
 )
 "#,
-            r_string(&active),
-            r_string(&overlap),
-            r_string(&entered)
+            secretbase_code = serde_json::to_string("sha256 <- function(x) 'irlockhash'").unwrap(),
+            pak_code = serde_json::to_string(&pak_code).unwrap(),
+            renv_code = serde_json::to_string(&renv_code).unwrap(),
         ),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn paste_lines(lines: &[&str]) -> String {
+    lines.join("\n")
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_resolvers_serialize_renv_materialization() {
+    let cache_dir = unique_dir("ir-renv-materialize-lock-cache");
+    let profile = unique_path("ir-renv-materialize-lock-profile", "R");
+    let active = unique_path("ir-renv-materialize-active", "");
+    let entered = unique_path("ir-renv-materialize-entered", "txt");
+    let overlap = unique_path("ir-renv-materialize-overlap", "txt");
+
+    write_materialize_lock_profile(
+        &profile,
+        Some(&active),
+        Some(&overlap),
+        &entered,
+        false,
+        1.0,
+    );
 
     let mut first = ir();
     first
@@ -1404,6 +1461,51 @@ ir_test_write_pkg(
     let _ = fs::remove_file(&entered);
     let _ = fs::remove_file(&overlap);
     let _ = fs::remove_dir_all(&active);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn resolver_discards_stale_renv_materialization_lock() {
+    let cache_dir = unique_dir("ir-renv-materialize-stale-lock-cache");
+    let profile = unique_path("ir-renv-materialize-stale-lock-profile", "R");
+    let entered = unique_path("ir-renv-materialize-stale-lock-entered", "txt");
+
+    write_materialize_lock_profile(&profile, None, None, &entered, true, 0.0);
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_STALE_MATERIALIZE_LOCK", "1")
+        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=stale-lock\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=stale-lock");
+    assert!(
+        !cache_dir
+            .join("locks")
+            .join("renv-materialize.lock")
+            .exists(),
+        "stale lock should be replaced and released"
+    );
+
+    let entered = fs::read_to_string(&entered)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
+    assert_eq!(entered.lines().count(), 1);
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&entered);
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
