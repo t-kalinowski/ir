@@ -1270,6 +1270,37 @@ if (nzchar(Sys.getenv("IR_TEST_STALE_MATERIALIZE_LOCK")) &&
         ""
     };
 
+    let stale_reclaim_race_code = if let Some(active) = active {
+        format!(
+            r#"
+if (nzchar(Sys.getenv("IR_TEST_STALE_RECLAIM_RACE"))) {{
+  ir_test_base_file_rename <- base::file.rename
+  file.rename <- function(from, to) {{
+    lock <- file.path(Sys.getenv("IR_CACHE_DIR"), "locks", "renv-materialize.lock")
+    is_stale_reclaim <- identical(
+      normalizePath(from, winslash = "/", mustWork = FALSE),
+      normalizePath(lock, winslash = "/", mustWork = FALSE)
+    ) && grepl("-stale-", basename(to), fixed = TRUE)
+    claimed <- dir.exists(file.path(from, "reclaim"))
+    if (is_stale_reclaim && !claimed) {{
+      marker <- Sys.getenv("IR_TEST_STALE_RECLAIM_WAITING")
+      if (nzchar(marker) && !file.exists(marker)) {{
+        writeLines(as.character(Sys.getpid()), marker)
+        active <- {active}
+        deadline <- Sys.time() + 5
+        while (!dir.exists(active) && Sys.time() < deadline) Sys.sleep(0.02)
+      }}
+    }}
+    ir_test_base_file_rename(from, to)
+  }}
+}}
+"#,
+            active = r_string(active)
+        )
+    } else {
+        String::new()
+    };
+
     let pak_code = paste_lines(&[
         "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
         "  refs <- as.character(refs)",
@@ -1338,6 +1369,7 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {{
   writeLines(code, file.path(path, "R", pkg))
 }}
 {stale_lock_code}
+{stale_reclaim_race_code}
 
 ir_test_private_lib <- file.path(
   Sys.getenv("IR_CACHE_DIR"),
@@ -1374,6 +1406,22 @@ ir_test_write_pkg(
 #[cfg(unix)]
 fn paste_lines(lines: &[&str]) -> String {
     lines.join("\n")
+}
+
+#[cfg(unix)]
+fn seed_stale_materialize_lock(cache_dir: &Path) {
+    let lock = cache_dir.join("locks").join("renv-materialize.lock");
+    let r_expr = concat!(
+        "lock <- commandArgs(TRUE)[[1]]; ",
+        "dir.create(lock, recursive = TRUE, showWarnings = FALSE); ",
+        "writeLines(",
+        "c('pid=99999999', paste0('nodename=', Sys.info()[['nodename']])), ",
+        "file.path(lock, 'owner')",
+        ")"
+    );
+    let mut r = Command::new(rscript());
+    r.args(["--vanilla", "-e", r_expr]).arg(&lock);
+    assert_command_success(r, "seed stale materialization lock");
 }
 
 #[cfg(unix)]
@@ -1460,6 +1508,94 @@ fn concurrent_resolvers_serialize_renv_materialization() {
     let _ = fs::remove_file(&profile);
     let _ = fs::remove_file(&entered);
     let _ = fs::remove_file(&overlap);
+    let _ = fs::remove_dir_all(&active);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_stale_lock_reclaim_does_not_remove_fresh_lock() {
+    let cache_dir = unique_dir("ir-renv-materialize-stale-race-cache");
+    let profile = unique_path("ir-renv-materialize-stale-race-profile", "R");
+    let active = unique_path("ir-renv-materialize-stale-race-active", "");
+    let entered = unique_path("ir-renv-materialize-stale-race-entered", "txt");
+    let overlap = unique_path("ir-renv-materialize-stale-race-overlap", "txt");
+    let waiting = unique_path("ir-renv-materialize-stale-race-waiting", "txt");
+
+    seed_stale_materialize_lock(&cache_dir);
+    write_materialize_lock_profile(
+        &profile,
+        Some(&active),
+        Some(&overlap),
+        &entered,
+        false,
+        1.0,
+    );
+
+    let mut first = ir();
+    first
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_STALE_RECLAIM_RACE", "1")
+        .env("IR_TEST_STALE_RECLAIM_WAITING", &waiting)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=stale-race-one\\n')",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let first = first.spawn().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !waiting.exists() && !active.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        waiting.exists() || active.exists(),
+        "first resolver should reach stale reclaim or fake renv::use"
+    );
+
+    let second = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_STALE_RECLAIM_RACE", "1")
+        .env("IR_TEST_STALE_RECLAIM_WAITING", &waiting)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=stale-race-two\\n')",
+        ])
+        .output()
+        .unwrap();
+    let first = first.wait_with_output().unwrap();
+
+    assert_success(&first);
+    assert_success(&second);
+    assert_stdout_contains(&first, "ir.fixture=stale-race-one");
+    assert_stdout_contains(&second, "ir.fixture=stale-race-two");
+    assert!(!overlap.exists(), "renv::use should not overlap");
+
+    let entered = fs::read_to_string(&entered)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
+    assert_eq!(
+        entered.lines().count(),
+        1,
+        "second resolver should reuse the completed materialized library"
+    );
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&entered);
+    let _ = fs::remove_file(&overlap);
+    let _ = fs::remove_file(&waiting);
     let _ = fs::remove_dir_all(&active);
     let _ = fs::remove_dir_all(&cache_dir);
 }

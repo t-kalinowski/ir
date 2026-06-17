@@ -355,10 +355,26 @@ ir_materialize_lock_reclaim_stale <- function(path) {
   if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
     return(FALSE)
 
+  # Claim then re-read the directory before deleting it. Without this, another
+  # resolver can replace the stale lock with a fresh live lock between the stale
+  # owner check and the rename below.
+  claim <- file.path(path, "reclaim")
+  if (!dir.create(claim, mode = "0755", showWarnings = FALSE))
+    return(FALSE)
+
+  claimed <- TRUE
+  on.exit(if (claimed) unlink(claim, recursive = TRUE, force = TRUE),
+          add = TRUE)
+
+  owner <- ir_materialize_lock_read_owner(path)
+  if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
+    return(FALSE)
+
   stale <- tempfile(paste0(basename(path), "-stale-"), dirname(path))
   if (!suppressWarnings(file.rename(path, stale)))
     return(FALSE)
 
+  claimed <- FALSE
   unlink(stale, recursive = TRUE, force = TRUE)
   TRUE
 }
