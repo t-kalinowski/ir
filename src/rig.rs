@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use crate::rig_releases::{EMBEDDED_AVAILABLE, EMBEDDED_AVAILABLE_BUILD_DATE};
 
 const MINIMUM_AUTOMATIC_R_VERSION: &str = "4.0.0";
+const MINIMUM_AUTOMATIC_R_VERSION_PARTS: [u64; 3] = [4, 0, 0];
 const MINIMUM_AUTOMATIC_R_RELEASE_DATE: &str = "2020-04-24";
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -91,6 +92,7 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
     if let Some(installed) = installed
         .iter()
         .filter(|version| !installed_is_symbolic_prerelease(version))
+        .filter(|version| installed_version_supported_by_resolver(version))
         .filter(|version| {
             installed_minor_released_before_or_on(version, &available, &exclude_newer)
         })
@@ -297,6 +299,7 @@ fn latest_available_before_or_on(
         .iter()
         .map(AvailableCandidate::from)
         .filter(|version| released_before_or_on(version, Some(exclude_newer)))
+        .filter(|version| version_supported_by_resolver(version.version))
         .max_by(|a, b| compare_versions(a.version, b.version))
         .map(AvailableR::from)
         .ok_or_else(|| {
@@ -314,6 +317,16 @@ fn installed_is_symbolic_prerelease(installed: &InstalledR) -> bool {
 
 fn symbolic_prerelease_name(value: &str) -> bool {
     matches!(value, "devel" | "next")
+}
+
+fn installed_version_supported_by_resolver(installed: &InstalledR) -> bool {
+    version_supported_by_resolver(&installed.version)
+}
+
+fn version_supported_by_resolver(version: &str) -> bool {
+    parse_version(version)
+        .map(|version| compare_version_parts(&version, &MINIMUM_AUTOMATIC_R_VERSION_PARTS).is_ge())
+        .unwrap_or(false)
 }
 
 fn cached_rig_available_all() -> Result<Vec<AvailableR>, Box<dyn Error>> {
@@ -351,6 +364,7 @@ fn available_covers_installed_releases(available: &[AvailableR], installed: &[In
     for installed in installed
         .iter()
         .filter(|version| !installed_is_symbolic_prerelease(version))
+        .filter(|version| installed_version_supported_by_resolver(version))
     {
         has_installed_release = true;
         if !available.iter().any(|available| {
