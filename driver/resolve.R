@@ -168,6 +168,47 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
   missing
 }
 
+ir_tooling_lock_path <- function(cache_dir = ir_cache_dir())
+  file.path(cache_dir, "locks", "tooling-bootstrap.lock")
+
+ir_tooling_lock_timeout_seconds <- function() {
+  env <- Sys.getenv("IR_TOOLING_LOCK_TIMEOUT_SECONDS")
+  if (!nzchar(env)) return(3600)
+
+  seconds <- suppressWarnings(as.numeric(env))
+  if (is.na(seconds) || seconds <= 0)
+    stop("IR_TOOLING_LOCK_TIMEOUT_SECONDS must be a positive number",
+         call. = FALSE)
+
+  seconds
+}
+
+ir_dir_lock_acquire <- function(path, timeout_seconds, label) {
+  stopifnot(length(path) == 1L, length(timeout_seconds) == 1L,
+            length(label) == 1L)
+
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  started <- proc.time()[["elapsed"]]
+  repeat {
+    if (dir.create(path, showWarnings = FALSE))
+      return(invisible())
+
+    if ((proc.time()[["elapsed"]] - started) >= timeout_seconds)
+      stop("timed out waiting for ", label, " lock: ", path, call. = FALSE)
+
+    Sys.sleep(0.1)
+  }
+}
+
+ir_with_tooling_lock <- function(expr, cache_dir = ir_cache_dir()) {
+  lock <- ir_tooling_lock_path(cache_dir)
+  ir_dir_lock_acquire(lock, ir_tooling_lock_timeout_seconds(),
+                      "resolver tooling")
+  on.exit(unlink(lock, recursive = TRUE, force = TRUE), add = TRUE)
+
+  force(expr)
+}
+
 # Ensure resolver tooling is available. Any packages that are missing are
 # installed into the tooling library, which is then put first on the search path.
 ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
@@ -179,12 +220,17 @@ ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
   missing <- ir_missing_tooling(lib = lib)
   if (!length(missing)) return(invisible())
 
-  utils::install.packages(missing, lib = lib, repos = repos)
+  ir_with_tooling_lock({
+    missing <- ir_missing_tooling(lib = lib)
+    if (length(missing)) {
+      utils::install.packages(missing, lib = lib, repos = repos)
 
-  still_missing <- ir_missing_tooling(lib = lib)
-  if (length(still_missing))
-    stop("could not install resolver tooling into ", lib, ": ",
-         paste(still_missing, collapse = ", "), call. = FALSE)
+      still_missing <- ir_missing_tooling(lib = lib)
+      if (length(still_missing))
+        stop("could not install resolver tooling into ", lib, ": ",
+             paste(still_missing, collapse = ", "), call. = FALSE)
+    }
+  }, cache_dir = cache_dir)
   invisible()
 }
 
