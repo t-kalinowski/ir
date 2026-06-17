@@ -25,9 +25,7 @@ pub(crate) fn required_available_version(
                 Some(exclude_newer),
                 available.iter().map(AvailableCandidate::from),
             );
-            if embedded.is_err() {
-                return embedded;
-            }
+            embedded?;
         }
 
         return required_available_version_from_host(req, requirement, Some(exclude_newer));
