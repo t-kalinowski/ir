@@ -298,6 +298,55 @@ ir_install_specs <- function(res) {
                      character(1))))
 }
 
+## --- materialization lock ----------------------------------------------------
+
+ir_materialize_lock_path <- function(cache_dir = ir_cache_dir())
+  file.path(cache_dir, "locks", "renv-materialize.lock")
+
+ir_materialize_lock_timeout_seconds <- function() {
+  env <- Sys.getenv("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS")
+  if (!nzchar(env)) return(3600)
+
+  seconds <- suppressWarnings(as.numeric(env))
+  if (is.na(seconds) || seconds <= 0)
+    stop("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS must be a positive number",
+         call. = FALSE)
+
+  seconds
+}
+
+ir_materialize_lock_acquire <- function(path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+
+  started <- Sys.time()
+  timeout <- ir_materialize_lock_timeout_seconds()
+  while (!dir.create(path, mode = "0755", showWarnings = FALSE)) {
+    elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
+    if (elapsed >= timeout)
+      stop("timed out waiting for resolver materialization lock: ", path,
+           call. = FALSE)
+
+    Sys.sleep(0.1)
+  }
+
+  invisible(TRUE)
+}
+
+ir_with_materialize_lock <- function(expr, cache_dir = ir_cache_dir()) {
+  lock <- ir_materialize_lock_path(cache_dir)
+  ir_materialize_lock_acquire(lock)
+  on.exit(unlink(lock, recursive = TRUE, force = TRUE), add = TRUE)
+
+  force(expr)
+}
+
+ir_needs_materialize <- function(library_path, pkgs, has_source_ref) {
+  if (!length(pkgs)) return(FALSE)
+
+  have <- list.files(library_path)
+  has_source_ref || !all(pkgs %in% have)
+}
+
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
@@ -419,22 +468,25 @@ ir_resolve_main <- function() {
   # Skip when the library already holds every resolved package: repeat runs of
   # an unchanged script then cost nothing beyond resolution.
   dir.create(library_path, recursive = TRUE, showWarnings = FALSE)
-  have <- list.files(library_path)
-  if (length(pkgs) && (has_source_ref || !all(pkgs %in% have))) {
+  if (ir_needs_materialize(library_path, pkgs, has_source_ref)) {
     # renv::use() installs into the renv cache and links the packages into
     # `library` as symlinks. Because `library` lives in our cache (not the R
     # temp dir), renv leaves it in place when the session ends.
-    do.call(renv::use, c(
-      as.list(install_specs),
-      list(
-        library = library_path,
-        repos   = repos,
-        attach  = FALSE,
-        sandbox = FALSE,
-        isolate = TRUE,
-        verbose = TRUE
-      )
-    ))
+    ir_with_materialize_lock({
+      if (ir_needs_materialize(library_path, pkgs, has_source_ref)) {
+        do.call(renv::use, c(
+          as.list(install_specs),
+          list(
+            library = library_path,
+            repos   = repos,
+            attach  = FALSE,
+            sandbox = FALSE,
+            isolate = TRUE,
+            verbose = TRUE
+          )
+        ))
+      }
+    }, cache_dir = cache_dir)
   }
 
   ## 4b. Record the resolution so an identical request skips pak.
