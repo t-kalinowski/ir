@@ -6,7 +6,6 @@ use std::process::{Command, Stdio};
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct AvailableR {
-    #[serde(default)]
     pub(crate) name: String,
     pub(crate) version: String,
     pub(crate) date: Option<String>,

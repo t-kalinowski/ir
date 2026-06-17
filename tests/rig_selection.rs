@@ -174,7 +174,7 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_uses_embedded_all_r_release_dates() {
+fn run_with_exclude_newer_uses_embedded_minor_release_dates() {
     let cache_dir = unique_dir("ir-r-version-embedded-all-cache");
     let bin_dir = unique_dir("ir-r-version-embedded-all-bin");
     let script = unique_path("ir-r-version-embedded-all", "R");
@@ -226,7 +226,7 @@ fn run_with_exclude_newer_uses_embedded_all_r_release_dates() {
     assert!(!out.status.success(), "{}", output_text(&out));
     assert!(
         output_text(&out)
-            .contains("R 4.4.2 is required but is not installed. Run `rig install 4.4.2`."),
+            .contains("R 4.4 is required but is not installed. Run `rig install 4.4`."),
         "{}",
         output_text(&out)
     );
@@ -238,7 +238,7 @@ fn run_with_exclude_newer_uses_embedded_all_r_release_dates() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_future_exclude_newer_caches_available_all_json() {
+fn run_with_future_exclude_newer_caches_r_version_metadata_json() {
     let cache_dir = unique_dir("ir-r-version-future-available-cache");
     let bin_dir = unique_dir("ir-r-version-future-available-bin");
     let script = unique_path("ir-r-version-future-available", "R");
@@ -273,7 +273,7 @@ fn run_with_future_exclude_newer_caches_available_all_json() {
             "if [ \"${4:-}\" = \"https://api.r-hub.io/rversions/r-versions\" ]; then\n",
             "  printf 'metadata\\n' >> \"$IR_TEST_R_VERSION_METADATA_CALLS\"\n",
             "  cat <<'JSON'\n",
-            "[{\"version\":\"4.7.0\",\"date\":\"2099-01-01T00:00:00Z\",\"nickname\":\"Future R\"}]\n",
+            "[{\"version\":\"4.7.0\",\"semver\":\"4.7.0\",\"date\":\"2099-01-01T00:00:00Z\",\"nickname\":\"Future R\"}]\n",
             "JSON\n",
             "  exit 0\n",
             "fi\n",
@@ -304,7 +304,7 @@ fn run_with_future_exclude_newer_caches_available_all_json() {
         assert!(!out.status.success(), "{}", output_text(&out));
         assert!(
             output_text(&out)
-                .contains("R 4.7.0 is required but is not installed. Run `rig install 4.7.0`."),
+                .contains("R 4.7 is required but is not installed. Run `rig install 4.7`."),
             "{}",
             output_text(&out)
         );
