@@ -1,14 +1,11 @@
 use std::error::Error;
 use std::fs;
-use std::process::Command;
 
 use super::r_selection::{self, AvailableCandidate, VersionRequirement};
-use super::release_metadata::{parse_minor_releases_json, MinorRelease};
+use super::release_metadata::{parse_release_metadata_json, ReleaseMetadata};
 use super::rig_client::{self, AvailableR};
 
-const R_VERSIONS_URL: &str = "https://api.r-hub.io/rversions/r-versions";
-
-include!(concat!(env!("OUT_DIR"), "/r_version_minor_releases.rs"));
+include!(concat!(env!("OUT_DIR"), "/r_version_releases.rs"));
 
 pub(crate) fn required_available_version(
     req: &str,
@@ -21,11 +18,11 @@ pub(crate) fn required_available_version(
                 req,
                 requirement,
                 Some(exclude_newer),
-                EMBEDDED_MINOR_RELEASES.iter().map(AvailableCandidate::from),
+                EMBEDDED_R_RELEASES.iter().map(AvailableCandidate::from),
             );
         }
 
-        let available = cached_minor_releases()?;
+        let available = cached_release_metadata()?;
         return required_available_version_from_candidates(
             req,
             requirement,
@@ -53,19 +50,19 @@ fn required_available_version_from_candidates<'a>(
         .map(AvailableR::from)
 }
 
-fn cached_minor_releases() -> Result<Vec<MinorRelease<'static>>, Box<dyn Error>> {
+fn cached_release_metadata() -> Result<Vec<ReleaseMetadata<'static>>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("r-versions")
         .join("available.json");
     if path.exists() {
         let json = fs::read_to_string(&path)
             .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-        return parse_minor_releases_json(&json, "R version availability metadata cache")
+        return parse_release_metadata_json(&json, "R version availability metadata cache")
             .map_err(|e| -> Box<dyn Error> { e.into() });
     }
 
     let json = download_available_json()?;
-    let available = parse_minor_releases_json(&json, "R version availability metadata")
+    let available = parse_release_metadata_json(&json, "R version availability metadata")
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -76,30 +73,10 @@ fn cached_minor_releases() -> Result<Vec<MinorRelease<'static>>, Box<dyn Error>>
 }
 
 fn download_available_json() -> Result<String, Box<dyn Error>> {
-    let output = Command::new("Rscript")
-        .args([
-            "--vanilla",
-            "-e",
-            "cat(readLines(commandArgs(TRUE)[[1]], warn = FALSE), sep = \"\\n\")",
-            R_VERSIONS_URL,
-        ])
-        .output()
-        .map_err(|e| {
-            format!("failed to launch `Rscript` for R version availability metadata: {e}")
-        })?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "`Rscript --vanilla -e <read R version availability metadata>` failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-
-    let json = String::from_utf8(output.stdout)
-        .map_err(|e| format!("R version availability metadata response was not UTF-8: {e}"))?;
+    let json = String::from_utf8(rig_client::output(&["available", "--json", "--all"])?)
+        .map_err(|e| format!("`rig available --json --all` returned non-UTF-8 output: {e}"))?;
     if json.trim().is_empty() {
-        return Err("R version availability metadata response was empty".into());
+        return Err("`rig available --json --all` returned empty output".into());
     }
 
     Ok(json)
@@ -115,10 +92,10 @@ impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
     }
 }
 
-impl<'a, 'b> From<&'a MinorRelease<'b>> for AvailableCandidate<'a> {
-    fn from(value: &'a MinorRelease<'b>) -> Self {
+impl<'a, 'b> From<&'a ReleaseMetadata<'b>> for AvailableCandidate<'a> {
+    fn from(value: &'a ReleaseMetadata<'b>) -> Self {
         Self {
-            name: value.version.as_ref(),
+            name: value.name.as_ref(),
             version: value.version.as_ref(),
             date: Some(value.date.as_ref()),
         }

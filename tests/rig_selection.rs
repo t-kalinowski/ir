@@ -174,7 +174,7 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_uses_embedded_minor_release_dates() {
+fn run_with_exclude_newer_preserves_embedded_patch_releases() {
     let cache_dir = unique_dir("ir-r-version-embedded-all-cache");
     let bin_dir = unique_dir("ir-r-version-embedded-all-bin");
     let script = unique_path("ir-r-version-embedded-all", "R");
@@ -182,8 +182,8 @@ fn run_with_exclude_newer_uses_embedded_minor_release_dates() {
     fs::write(
         &script,
         concat!(
-            "#| r-version: \"4.4\"\n",
-            "#| exclude-newer: 2024-11-01\n",
+            "#| r-version: \"4.4.3\"\n",
+            "#| exclude-newer: 2026-06-01\n",
             "cat('unused')\n",
         ),
     )
@@ -226,7 +226,7 @@ fn run_with_exclude_newer_uses_embedded_minor_release_dates() {
     assert!(!out.status.success(), "{}", output_text(&out));
     assert!(
         output_text(&out)
-            .contains("R 4.4 is required but is not installed. Run `rig install 4.4`."),
+            .contains("R 4.4.3 is required but is not installed. Run `rig install 4.4.3`."),
         "{}",
         output_text(&out)
     );
@@ -262,33 +262,16 @@ fn run_with_exclude_newer_after_embedded_metadata_refreshes_release_dates() {
             "  printf '[]\\n'\n",
             "  exit 0\n",
             "fi\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--json\" ] && [ \"$3\" = \"--all\" ]; then\n",
+            "  printf 'metadata\\n' >> \"$IR_TEST_R_VERSION_METADATA_CALLS\"\n",
+            "  printf '%s\\n' '[{\"name\":\"4.7\",\"version\":\"4.7.0\",\"date\":\"2026-06-04T00:00:00Z\"}]'\n",
+            "  exit 0\n",
+            "fi\n",
             "echo \"unexpected rig args: $*\" >&2\n",
             "exit 43\n",
         ),
     );
-    write_executable(
-        &bin_dir.join("Rscript"),
-        concat!(
-            "#!/bin/sh\n",
-            "if [ \"${4:-}\" = \"https://api.r-hub.io/rversions/r-versions\" ]; then\n",
-            "  printf 'metadata\\n' >> \"$IR_TEST_R_VERSION_METADATA_CALLS\"\n",
-            "  cat <<'JSON'\n",
-            "[{\"version\":\"4.7.0\",\"semver\":\"4.7.0\",\"date\":\"2026-06-04T00:00:00Z\",\"nickname\":\"Future R\"}]\n",
-            "JSON\n",
-            "  exit 0\n",
-            "fi\n",
-            "echo \"unexpected Rscript args: $*\" >&2\n",
-            "exit 64\n",
-        ),
-    );
-
-    let path = std::env::join_paths(
-        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|path| path.into_os_string()),
-        ),
-    )
-    .unwrap();
+    let path = std::env::join_paths([bin_dir.as_os_str().to_owned()]).unwrap();
 
     for _ in 0..2 {
         let out = ir()
@@ -304,7 +287,7 @@ fn run_with_exclude_newer_after_embedded_metadata_refreshes_release_dates() {
         assert!(!out.status.success(), "{}", output_text(&out));
         assert!(
             output_text(&out)
-                .contains("R 4.7 is required but is not installed. Run `rig install 4.7`."),
+                .contains("R 4.7.0 is required but is not installed. Run `rig install 4.7`."),
             "{}",
             output_text(&out)
         );

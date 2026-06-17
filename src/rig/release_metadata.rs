@@ -1,58 +1,73 @@
 use std::borrow::Cow;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct MinorRelease<'a> {
+pub(crate) struct ReleaseMetadata<'a> {
+    pub(crate) name: Cow<'a, str>,
     pub(crate) version: Cow<'a, str>,
     pub(crate) date: Cow<'a, str>,
 }
 
 #[derive(serde::Deserialize)]
 struct RVersionRelease {
-    semver: String,
-    date: String,
+    #[serde(default)]
+    name: Option<String>,
+    version: String,
+    #[serde(default)]
+    semver: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
 }
 
-pub(crate) fn parse_minor_releases_json(
+pub(crate) fn parse_release_metadata_json(
     json: &str,
     source: &str,
-) -> Result<Vec<MinorRelease<'static>>, String> {
+) -> Result<Vec<ReleaseMetadata<'static>>, String> {
     let versions: Vec<RVersionRelease> =
         serde_json::from_str(json).map_err(|e| format!("failed to parse {source} JSON: {e}"))?;
     let mut releases = Vec::new();
 
     for version in versions {
-        let Some(minor) = minor_release(&version.semver) else {
+        let name = version.name.as_deref().unwrap_or(&version.version);
+        if matches!(name, "devel" | "next") {
             continue;
         };
-        let date = iso_date_prefix(&version.date)
+        let raw_version = version.semver.as_deref().unwrap_or(&version.version);
+        let Some(release_version) = release_version(raw_version) else {
+            continue;
+        };
+        let Some(date) = version.date.as_deref() else {
+            continue;
+        };
+        let date = iso_date_prefix(date)
             .ok_or_else(|| {
                 format!(
                     "R version availability metadata returned invalid release date `{}` for R {}",
-                    version.date, version.semver
+                    date, release_version
                 )
             })?
             .to_string();
-        releases.push(MinorRelease {
-            version: Cow::Owned(minor),
+        releases.push(ReleaseMetadata {
+            name: Cow::Owned(name.to_string()),
+            version: Cow::Owned(release_version),
             date: Cow::Owned(date),
         });
     }
 
     if releases.is_empty() {
         return Err(format!(
-            "R version availability metadata in {source} did not contain any minor releases"
+            "R version availability metadata in {source} did not contain any R releases"
         ));
     }
 
     Ok(releases)
 }
 
-fn minor_release(semver: &str) -> Option<String> {
+fn release_version(semver: &str) -> Option<String> {
     let mut parts = semver.split('.');
     let major = parts.next()?;
     let minor = parts.next()?;
     let patch = parts.next()?;
-    if parts.next().is_some() || patch != "0" {
+    if parts.next().is_some() {
         return None;
     }
     for part in [major, minor, patch] {
@@ -61,7 +76,7 @@ fn minor_release(semver: &str) -> Option<String> {
         }
     }
 
-    Some(format!("{major}.{minor}"))
+    Some(semver.to_string())
 }
 
 fn iso_date_prefix(value: &str) -> Option<&str> {
