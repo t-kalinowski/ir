@@ -366,6 +366,8 @@ ir_renv_cache_lock_owner <- function(lock) {
 }
 
 ir_process_running <- function(pid) {
+  if (.Platform$OS.type == "windows")
+    return(NULL)
   if (is.null(pid) || is.na(pid) || pid <= 0)
     return(FALSE)
 
@@ -425,7 +427,8 @@ ir_with_renv_cache_lock <- function(expr) {
       return(force(expr))
     }
 
-    ir_remove_stale_renv_cache_lock(lock)
+    if (ir_remove_stale_renv_cache_lock(lock))
+      next
 
     if (Sys.time() >= deadline)
       stop("could not acquire renv cache lock at ", lock, call. = FALSE)
