@@ -162,7 +162,7 @@ fn is_iso_date(value: &str) -> bool {
         && bytes[9].is_ascii_digit()
 }
 
-fn parse_version(value: &str) -> Option<Vec<u64>> {
+pub(crate) fn parse_version(value: &str) -> Option<Vec<u64>> {
     let mut parts = Vec::new();
     for part in value.split('.') {
         if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {

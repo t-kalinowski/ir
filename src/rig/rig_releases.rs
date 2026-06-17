@@ -5,7 +5,8 @@ use super::r_selection::{self, AvailableCandidate, VersionRequirement};
 use super::release_metadata::{parse_release_metadata_json, ReleaseMetadata};
 use super::rig_client::{self, AvailableR};
 
-include!(concat!(env!("OUT_DIR"), "/r_version_releases.rs"));
+const EMBEDDED_AVAILABLE_METADATA_DATE: &str = include_str!("r-versions-fetched-at.txt");
+const EMBEDDED_R_RELEASES: &str = include_str!("r-versions.json");
 
 pub(crate) fn required_available_version(
     req: &str,
@@ -13,17 +14,20 @@ pub(crate) fn required_available_version(
     exclude_newer: Option<&str>,
 ) -> Result<AvailableR, Box<dyn Error>> {
     if let Some(exclude_newer) = exclude_newer {
-        if exclude_newer <= EMBEDDED_AVAILABLE_METADATA_DATE {
+        if requirement_uses_symbolic_name(requirement) {
+            return required_available_version_from_host(req, requirement, Some(exclude_newer));
+        }
+        if exclude_newer <= embedded_available_metadata_date()? {
+            let available = embedded_release_metadata()?;
             let embedded = required_available_version_from_candidates(
                 req,
                 requirement,
                 Some(exclude_newer),
-                EMBEDDED_R_RELEASES.iter().map(AvailableCandidate::from),
+                available.iter().map(AvailableCandidate::from),
             );
-            if embedded.is_ok() || requirement_uses_symbolic_name(requirement) {
-                return required_available_version_from_host(req, requirement, Some(exclude_newer));
+            if embedded.is_err() {
+                return embedded;
             }
-            return embedded;
         }
 
         return required_available_version_from_host(req, requirement, Some(exclude_newer));
@@ -72,7 +76,25 @@ fn required_available_version_from_host(
     )
 }
 
-fn cached_release_metadata() -> Result<Vec<ReleaseMetadata<'static>>, Box<dyn Error>> {
+fn embedded_available_metadata_date() -> Result<&'static str, Box<dyn Error>> {
+    let date = EMBEDDED_AVAILABLE_METADATA_DATE.trim();
+    if r_selection::iso_date_prefix(date) != Some(date) {
+        return Err(
+            "embedded R version availability metadata date must be in YYYY-MM-DD format".into(),
+        );
+    }
+    Ok(date)
+}
+
+fn embedded_release_metadata() -> Result<Vec<ReleaseMetadata>, Box<dyn Error>> {
+    parse_release_metadata_json(
+        EMBEDDED_R_RELEASES,
+        "embedded R version availability metadata",
+    )
+    .map_err(|e| -> Box<dyn Error> { e.into() })
+}
+
+fn cached_release_metadata() -> Result<Vec<ReleaseMetadata>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("r-versions")
         .join("available.json");
@@ -105,22 +127,7 @@ fn download_available_json() -> Result<String, Box<dyn Error>> {
 }
 
 fn requirement_uses_symbolic_name(requirement: &VersionRequirement) -> bool {
-    matches!(requirement, VersionRequirement::Bare(req) if parse_version(req).is_none())
-}
-
-fn parse_version(value: &str) -> Option<Vec<u64>> {
-    let mut parts = Vec::new();
-    for part in value.split('.') {
-        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        parts.push(part.parse().ok()?);
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts)
-    }
+    matches!(requirement, VersionRequirement::Bare(req) if r_selection::parse_version(req).is_none())
 }
 
 impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
@@ -133,12 +140,12 @@ impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
     }
 }
 
-impl<'a, 'b> From<&'a ReleaseMetadata<'b>> for AvailableCandidate<'a> {
-    fn from(value: &'a ReleaseMetadata<'b>) -> Self {
+impl<'a> From<&'a ReleaseMetadata> for AvailableCandidate<'a> {
+    fn from(value: &'a ReleaseMetadata) -> Self {
         Self {
-            name: value.name.as_ref(),
-            version: value.version.as_ref(),
-            date: Some(value.date.as_ref()),
+            name: &value.name,
+            version: &value.version,
+            date: Some(&value.date),
         }
     }
 }
