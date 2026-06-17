@@ -473,6 +473,7 @@ ir_resolve_main <- function() {
     # `library` as symlinks. Because `library` lives in our cache (not the R
     # temp dir), renv leaves it in place when the session ends.
     ir_with_materialize_lock({
+      # Another resolver may have populated this library while we waited.
       if (ir_needs_materialize(library_path, pkgs, has_source_ref)) {
         do.call(renv::use, c(
           as.list(install_specs),
