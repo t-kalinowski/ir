@@ -104,6 +104,7 @@ pub(crate) fn renviron_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+#[cfg(unix)]
 pub(crate) fn r_string(path: &Path) -> String {
     serde_json::to_string(&renviron_path(path)).unwrap()
 }
