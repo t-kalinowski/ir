@@ -53,7 +53,7 @@ pub(crate) fn latest_minor_version_on(exclude_newer: &str) -> Result<String, Box
         return Ok(release.version.to_string());
     }
 
-    let available = refresh_all_available_cache()?;
+    let available = cached_all_available(exclude_newer)?;
     let available_minor_releases = available_minor_releases(&available)?;
     let release = r_selection::select_latest_available_candidate(
         exclude_newer,
@@ -79,17 +79,37 @@ fn required_available_version_from_candidates<'a>(
 fn cached_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let path = available_cache_path()?;
     if path.exists() {
-        let json = fs::read_to_string(&path)
-            .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-        return parse_available_json(&json);
+        return cached_available_from_path(&path);
     }
 
     fetch_available_into_cache(&path, &["available", "--json"])
 }
 
-fn refresh_all_available_cache() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+fn cached_all_available(exclude_newer: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let path = all_available_cache_path()?;
+    if path.exists() {
+        let available = cached_available_from_path(&path)?;
+        if available_cache_covers_date(&available, exclude_newer) {
+            return Ok(available);
+        }
+    }
+
     fetch_available_into_cache(&path, &["available", "--all", "--json"])
+}
+
+fn cached_available_from_path(path: &Path) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let json = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
+    parse_available_json(&json)
+}
+
+fn available_cache_covers_date(available: &[AvailableR], exclude_newer: &str) -> bool {
+    available
+        .iter()
+        .filter_map(|release| release.date.as_deref())
+        .max()
+        .map(|latest| latest >= exclude_newer)
+        .unwrap_or(false)
 }
 
 fn available_cache_path() -> Result<PathBuf, Box<dyn Error>> {
