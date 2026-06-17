@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct AvailableR {
     pub(crate) name: String,
     pub(crate) version: String,
