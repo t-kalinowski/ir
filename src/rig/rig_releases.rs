@@ -4,39 +4,9 @@ use std::fs;
 use super::r_selection::{self, AvailableCandidate, VersionRequirement};
 use super::rig_client::{self, AvailableR};
 
-const EMBEDDED_AVAILABLE_BUILD_DATE: &str = "2026-06-03";
-const EMBEDDED_AVAILABLE: &[AvailableCandidate<'static>] = &[
-    AvailableCandidate {
-        name: "4.1.3",
-        version: "4.1.3",
-        date: Some("2022-03-10"),
-    },
-    AvailableCandidate {
-        name: "4.2.3",
-        version: "4.2.3",
-        date: Some("2023-03-15"),
-    },
-    AvailableCandidate {
-        name: "4.3.3",
-        version: "4.3.3",
-        date: Some("2024-02-29"),
-    },
-    AvailableCandidate {
-        name: "4.4.3",
-        version: "4.4.3",
-        date: Some("2025-02-28"),
-    },
-    AvailableCandidate {
-        name: "4.5.3",
-        version: "4.5.3",
-        date: Some("2026-03-11"),
-    },
-    AvailableCandidate {
-        name: "4.6.0",
-        version: "4.6.0",
-        date: Some("2026-04-24"),
-    },
-];
+const EMBEDDED_AVAILABLE_BUILD_DATE: &str = env!("IR_RIG_AVAILABLE_BUILD_DATE");
+const EMBEDDED_AVAILABLE_JSON: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/rig_available_all.json"));
 
 pub(crate) fn required_available_version(
     req: &str,
@@ -44,16 +14,7 @@ pub(crate) fn required_available_version(
     exclude_newer: Option<&str>,
 ) -> Result<AvailableR, Box<dyn Error>> {
     if let Some(exclude_newer) = exclude_newer {
-        if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
-            return required_available_version_from_candidates(
-                req,
-                requirement,
-                Some(exclude_newer),
-                EMBEDDED_AVAILABLE.iter().copied(),
-            );
-        }
-
-        let available = cached_available()?;
+        let available = available_before_or_on(exclude_newer)?;
         return required_available_version_from_candidates(
             req,
             requirement,
@@ -71,6 +32,19 @@ pub(crate) fn required_available_version(
     )
 }
 
+pub(crate) fn available_before_or_on(
+    exclude_newer: &str,
+) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let mut available = if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
+        embedded_available()?
+    } else {
+        cached_available_all()?
+    };
+
+    retain_released_before_or_on(&mut available, exclude_newer);
+    Ok(available)
+}
+
 fn required_available_version_from_candidates<'a>(
     req: &str,
     requirement: &VersionRequirement,
@@ -81,21 +55,39 @@ fn required_available_version_from_candidates<'a>(
         .map(AvailableR::from)
 }
 
-fn cached_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+fn embedded_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let mut available = parse_available_json(
+        EMBEDDED_AVAILABLE_JSON,
+        "embedded `rig available --all --json`",
+    )?;
+    retain_released_before_or_on(&mut available, EMBEDDED_AVAILABLE_BUILD_DATE);
+    Ok(available)
+}
+
+fn retain_released_before_or_on(available: &mut Vec<AvailableR>, exclude_newer: &str) {
+    available.retain(|version| {
+        matches!(
+            version.date.as_deref(),
+            Some(date) if date <= exclude_newer
+        )
+    });
+}
+
+fn cached_available_all() -> Result<Vec<AvailableR>, Box<dyn Error>> {
     let path = crate::runtime::ir_cache_dir()?
         .join("rig")
-        .join("available.json");
+        .join("available-all.json");
     if path.exists() {
         let json = fs::read_to_string(&path)
             .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
-        return parse_available_json(&json);
+        return parse_available_json(&json, "`rig available --all --json` cache");
     }
 
-    let json = String::from_utf8(rig_client::output(&["available", "--json"])?)
-        .map_err(|e| format!("`rig available --json` returned non-UTF-8 output: {e}"))?;
-    let available = parse_available_json(&json)?;
+    let json = String::from_utf8(rig_client::output(&["available", "--all", "--json"])?)
+        .map_err(|e| format!("`rig available --all --json` returned non-UTF-8 output: {e}"))?;
+    let available = parse_available_json(&json, "`rig available --all --json`")?;
     let json = serde_json::to_string_pretty(&available)
-        .map_err(|e| format!("failed to serialize cached rig available JSON: {e}"))?;
+        .map_err(|e| format!("failed to serialize cached rig available --all JSON: {e}"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create `{}`: {e}", parent.display()))?;
@@ -104,9 +96,9 @@ fn cached_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
     Ok(available)
 }
 
-fn parse_available_json(json: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    let mut versions: Vec<AvailableR> = serde_json::from_str(json)
-        .map_err(|e| format!("failed to parse `rig available --json` JSON: {e}"))?;
+fn parse_available_json(json: &str, source: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let mut versions: Vec<AvailableR> =
+        serde_json::from_str(json).map_err(|e| format!("failed to parse {source} JSON: {e}"))?;
 
     for version in &mut versions {
         if let Some(date) = version.date.as_deref() {

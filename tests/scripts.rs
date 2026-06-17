@@ -153,6 +153,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
+    assert!(workflow.contains("Install rig for build metadata"));
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
     assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
@@ -215,12 +216,27 @@ fn docs_workflow_requires_all_ci_jobs() {
     assert!(workflow.contains("actions: read"));
     assert!(workflow.contains("Require CI jobs to have succeeded"));
     assert!(workflow.contains("All CI jobs succeeded; proceeding to publish."));
+    assert!(workflow.contains("Install rig for build metadata"));
     assert!(!workflow.contains("workflow_dispatch"));
     assert!(!workflow.contains("github.event_name == 'workflow_run'"));
     assert!(!workflow.contains("github.sha"));
     assert!(!workflow.contains("non-Windows"));
     assert!(!workflow.contains("known-broken"));
     assert!(!workflow.contains(r#"test("windows"; "i")"#));
+}
+
+#[test]
+fn release_workflow_installs_rig_before_building_binaries() {
+    let path = repo_root().join(".github/workflows/release.yml");
+    let workflow = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    assert!(workflow.contains("Install rig for build metadata (macOS)"));
+    assert!(workflow.contains("Install rig for build metadata (Linux)"));
+    assert!(workflow.contains("Install rig for build metadata (Windows)"));
+    assert!(workflow.contains("brew install --cask rig"));
+    assert!(workflow.contains("apt-get install -y --no-install-recommends r-rig"));
+    assert!(workflow.contains("choco install rig -y --no-progress"));
 }
 
 #[cfg(windows)]

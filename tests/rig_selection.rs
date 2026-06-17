@@ -174,6 +174,149 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_uses_embedded_all_r_release_dates() {
+    let cache_dir = unique_dir("ir-r-version-embedded-all-cache");
+    let bin_dir = unique_dir("ir-r-version-embedded-all-bin");
+    let script = unique_path("ir-r-version-embedded-all", "R");
+
+    fs::write(
+        &script,
+        concat!(
+            "#| r-version: \"4.4\"\n",
+            "#| exclude-newer: 2024-11-01\n",
+            "cat('unused')\n",
+        ),
+    )
+    .unwrap();
+
+    write_executable(
+        &bin_dir.join("rig"),
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"$1\" = \"list\" ] && [ \"$2\" = \"--json\" ]; then\n",
+            "  printf '[]\\n'\n",
+            "  exit 0\n",
+            "fi\n",
+            "if [ \"$1\" = \"available\" ]; then\n",
+            "  echo 'unexpected rig available call' >&2\n",
+            "  exit 42\n",
+            "fi\n",
+            "echo \"unexpected rig args: $*\" >&2\n",
+            "exit 43\n",
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .arg("run")
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    assert!(
+        output_text(&out)
+            .contains("R 4.4.2 is required but is not installed. Run `rig install 4.4.2`."),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_future_exclude_newer_caches_available_all_json() {
+    let cache_dir = unique_dir("ir-r-version-future-available-cache");
+    let bin_dir = unique_dir("ir-r-version-future-available-bin");
+    let script = unique_path("ir-r-version-future-available", "R");
+    let available_calls = unique_path("ir-r-version-future-available-calls", "txt");
+
+    fs::write(
+        &script,
+        concat!(
+            "#| r-version: \"4.7\"\n",
+            "#| exclude-newer: 2099-01-02\n",
+            "cat('unused')\n",
+        ),
+    )
+    .unwrap();
+
+    write_executable(
+        &bin_dir.join("rig"),
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"$1\" = \"list\" ] && [ \"$2\" = \"--json\" ]; then\n",
+            "  printf '[]\\n'\n",
+            "  exit 0\n",
+            "fi\n",
+            "if [ \"$1\" = \"available\" ] && [ \"$2\" = \"--all\" ] && [ \"$3\" = \"--json\" ]; then\n",
+            "  printf 'available\\n' >> \"$IR_TEST_RIG_AVAILABLE_CALLS\"\n",
+            "  cat <<'JSON'\n",
+            "[{\"name\":\"4.7.0\",\"date\":\"2099-01-01T00:00:00Z\",\"version\":\"4.7.0\",\"type\":\"release\",\"url\":\"https://example.invalid/R-4.7.0.pkg\"}]\n",
+            "JSON\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo \"unexpected rig args: $*\" >&2\n",
+            "exit 43\n",
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .env("PATH", &path)
+            .env("IR_TEST_RIG_AVAILABLE_CALLS", &available_calls)
+            .env_remove("IR_RSCRIPT")
+            .arg("run")
+            .arg(&script)
+            .output()
+            .unwrap();
+
+        assert!(!out.status.success(), "{}", output_text(&out));
+        assert!(
+            output_text(&out)
+                .contains("R 4.7.0 is required but is not installed. Run `rig install 4.7.0`."),
+            "{}",
+            output_text(&out)
+        );
+    }
+
+    let calls = fs::read_to_string(&available_calls).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "`rig available --all --json` should be cached after the first future-dated lookup"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_file(&available_calls);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_without_r_version_uses_rscript_on_path_when_rig_has_default() {
     let cache_dir = unique_dir("ir-path-rscript-cache");
     let bin_dir = unique_dir("ir-path-rscript-bin");
