@@ -149,7 +149,7 @@ pub(crate) fn latest_minor_version_on(exclude_newer: &str) -> Result<String, Box
         return Ok(release.version.to_string());
     }
 
-    let available = refresh_available_cache()?;
+    let available = refresh_all_available_cache()?;
     let available_minor_releases = available_minor_releases(&available)?;
     let release = r_selection::select_latest_available_candidate(
         exclude_newer,
@@ -183,12 +183,12 @@ fn cached_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
         return parse_available_json(&json);
     }
 
-    fetch_available_into_cache(&path)
+    fetch_available_into_cache(&path, &["available", "--json"])
 }
 
-fn refresh_available_cache() -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    let path = available_cache_path()?;
-    fetch_available_into_cache(&path)
+fn refresh_all_available_cache() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let path = all_available_cache_path()?;
+    fetch_available_into_cache(&path, &["available", "--all", "--json"])
 }
 
 fn available_cache_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -197,9 +197,18 @@ fn available_cache_path() -> Result<PathBuf, Box<dyn Error>> {
         .join("available.json"))
 }
 
-fn fetch_available_into_cache(path: &Path) -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    let json = String::from_utf8(rig_client::output(&["available", "--json"])?)
-        .map_err(|e| format!("`rig available --json` returned non-UTF-8 output: {e}"))?;
+fn all_available_cache_path() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(crate::runtime::ir_cache_dir()?
+        .join("rig")
+        .join("available-all.json"))
+}
+
+fn fetch_available_into_cache(
+    path: &Path,
+    args: &[&str],
+) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let json = String::from_utf8(rig_client::output(args)?)
+        .map_err(|e| format!("`rig {}` returned non-UTF-8 output: {e}", args.join(" ")))?;
     let available = parse_available_json(&json)?;
     let json = serde_json::to_string_pretty(&available)
         .map_err(|e| format!("failed to serialize cached rig available JSON: {e}"))?;
@@ -214,15 +223,28 @@ fn fetch_available_into_cache(path: &Path) -> Result<Vec<AvailableR>, Box<dyn Er
 fn available_minor_releases(available: &[AvailableR]) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     available
         .iter()
-        .map(|release| {
-            let version = r_selection::major_minor_version(&release.version)?;
-            Ok(AvailableR {
-                name: version.clone(),
-                version,
-                date: release.date.clone(),
-            })
+        .filter_map(|release| {
+            if release.name != release.version || !is_minor_zero_release(&release.version) {
+                return None;
+            }
+
+            Some(
+                r_selection::major_minor_version(&release.version).map(|version| AvailableR {
+                    name: version.clone(),
+                    version,
+                    date: release.date.clone(),
+                }),
+            )
         })
         .collect()
+}
+
+fn is_minor_zero_release(version: &str) -> bool {
+    let mut parts = version.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(_), Some(_), Some("0"), None)
+    )
 }
 
 fn parse_available_json(json: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
