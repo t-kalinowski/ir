@@ -12,6 +12,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 fn ir() -> Command {
@@ -41,6 +43,7 @@ fn rx_bin_name() -> String {
 fn rscript() -> OsString {
     std::env::var_os("IR_RSCRIPT")
         .filter(|value| !value.is_empty())
+        .or_else(|| support::command_on_path("Rscript"))
         .unwrap_or_else(|| "Rscript".into())
 }
 
@@ -2451,6 +2454,84 @@ fn r_version_selection_covers_render_flag_and_run_frontmatter() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_r_version_selects_highest_matching_installed_r() {
+    let cache_dir = unique_dir("ir-r-version-cache");
+    let bin_dir = unique_dir("ir-r-version-bin");
+    let old_r_dir = unique_dir("ir-r-version-old");
+    let new_r_dir = unique_dir("ir-r-version-new");
+
+    let old_binary = old_r_dir.join("R");
+    let old_rscript = old_r_dir.join("Rscript");
+    write_executable(
+        &old_rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=old\n",
+        ),
+    );
+
+    let new_binary = new_r_dir.join("R");
+    let new_rscript = new_r_dir.join("Rscript");
+    write_executable(
+        &new_rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=new\n",
+        ),
+    );
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "cat <<'JSON'\n",
+                r#"[
+{{"name":"4.4.2","version":"4.4.2","aliases":[],"binary":"{}"}},
+{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+            ),
+            old_binary.display(),
+            new_binary.display()
+        ),
+    );
+
+    let path = std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--r-version", "4.4", "-e", "cat('ignored')"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=new");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&old_r_dir);
+    let _ = fs::remove_dir_all(&new_r_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_without_r_version_uses_rscript_on_path_when_rig_has_default() {
     let cache_dir = unique_dir("ir-path-rscript-cache");
     let bin_dir = unique_dir("ir-path-rscript-bin");
@@ -3981,6 +4062,7 @@ fn tool_install_with_path_rscript_symlink_records_target() {
         concat!(
             "#!/bin/sh\n",
             "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
             "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
             "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
             "  exit 0\n",

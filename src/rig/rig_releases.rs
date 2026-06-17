@@ -1,0 +1,147 @@
+use std::error::Error;
+use std::fs;
+
+use super::r_selection::{self, AvailableCandidate, VersionRequirement};
+use super::rig_client::{self, AvailableR};
+
+const EMBEDDED_AVAILABLE_BUILD_DATE: &str = "2026-06-03";
+const EMBEDDED_AVAILABLE: &[AvailableCandidate<'static>] = &[
+    AvailableCandidate {
+        name: "4.1.3",
+        version: "4.1.3",
+        date: Some("2022-03-10"),
+    },
+    AvailableCandidate {
+        name: "4.2.3",
+        version: "4.2.3",
+        date: Some("2023-03-15"),
+    },
+    AvailableCandidate {
+        name: "4.3.3",
+        version: "4.3.3",
+        date: Some("2024-02-29"),
+    },
+    AvailableCandidate {
+        name: "4.4.3",
+        version: "4.4.3",
+        date: Some("2025-02-28"),
+    },
+    AvailableCandidate {
+        name: "4.5.3",
+        version: "4.5.3",
+        date: Some("2026-03-11"),
+    },
+    AvailableCandidate {
+        name: "4.6.0",
+        version: "4.6.0",
+        date: Some("2026-04-24"),
+    },
+];
+
+pub(crate) fn required_available_version(
+    req: &str,
+    requirement: &VersionRequirement,
+    exclude_newer: Option<&str>,
+) -> Result<AvailableR, Box<dyn Error>> {
+    if let Some(exclude_newer) = exclude_newer {
+        if exclude_newer <= EMBEDDED_AVAILABLE_BUILD_DATE {
+            return required_available_version_from_candidates(
+                req,
+                requirement,
+                Some(exclude_newer),
+                EMBEDDED_AVAILABLE.iter().copied(),
+            );
+        }
+
+        let available = cached_available()?;
+        return required_available_version_from_candidates(
+            req,
+            requirement,
+            Some(exclude_newer),
+            available.iter().map(AvailableCandidate::from),
+        );
+    }
+
+    let available = rig_client::available()?;
+    required_available_version_from_candidates(
+        req,
+        requirement,
+        None,
+        available.iter().map(AvailableCandidate::from),
+    )
+}
+
+fn required_available_version_from_candidates<'a>(
+    req: &str,
+    requirement: &VersionRequirement,
+    exclude_newer: Option<&str>,
+    candidates: impl IntoIterator<Item = AvailableCandidate<'a>>,
+) -> Result<AvailableR, Box<dyn Error>> {
+    r_selection::select_available_candidate(req, requirement, exclude_newer, candidates)
+        .map(AvailableR::from)
+}
+
+fn cached_available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let path = crate::runtime::ir_cache_dir()?
+        .join("rig")
+        .join("available.json");
+    if path.exists() {
+        let json = fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
+        return parse_available_json(&json);
+    }
+
+    let json = String::from_utf8(rig_client::output(&["available", "--json"])?)
+        .map_err(|e| format!("`rig available --json` returned non-UTF-8 output: {e}"))?;
+    let available = parse_available_json(&json)?;
+    let json = serde_json::to_string_pretty(&available)
+        .map_err(|e| format!("failed to serialize cached rig available JSON: {e}"))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create `{}`: {e}", parent.display()))?;
+    }
+    fs::write(&path, json).map_err(|e| format!("failed to write `{}`: {e}", path.display()))?;
+    Ok(available)
+}
+
+fn parse_available_json(json: &str) -> Result<Vec<AvailableR>, Box<dyn Error>> {
+    let mut versions: Vec<AvailableR> = serde_json::from_str(json)
+        .map_err(|e| format!("failed to parse `rig available --json` JSON: {e}"))?;
+
+    for version in &mut versions {
+        if let Some(date) = version.date.as_deref() {
+            version.date = Some(
+                r_selection::iso_date_prefix(date)
+                    .ok_or_else(|| {
+                        format!(
+                            "rig available returned invalid release date `{}` for R {}",
+                            date, version.version
+                        )
+                    })?
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(versions)
+}
+
+impl<'a> From<&'a AvailableR> for AvailableCandidate<'a> {
+    fn from(value: &'a AvailableR) -> Self {
+        Self {
+            name: &value.name,
+            version: &value.version,
+            date: value.date.as_deref(),
+        }
+    }
+}
+
+impl From<AvailableCandidate<'_>> for AvailableR {
+    fn from(value: AvailableCandidate<'_>) -> Self {
+        Self {
+            name: value.name.to_string(),
+            version: value.version.to_string(),
+            date: value.date.map(str::to_string),
+        }
+    }
+}
