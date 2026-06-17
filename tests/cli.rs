@@ -4062,6 +4062,7 @@ fn tool_install_with_path_rscript_symlink_records_target() {
         concat!(
             "#!/bin/sh\n",
             "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
             "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
             "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
             "  exit 0\n",
