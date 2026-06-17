@@ -1537,6 +1537,47 @@ fn concurrent_resolvers_serialize_tooling_bootstrap_install() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
+#[test]
+fn resolver_reclaims_stale_tooling_bootstrap_lock() {
+    let cache_dir = unique_dir("ir-tooling-bootstrap-stale-lock-cache");
+    let user_library = unique_dir("ir-tooling-bootstrap-stale-user-library");
+    let profile = unique_path("ir-tooling-bootstrap-stale-lock-profile", "R");
+    let active = unique_path("ir-tooling-bootstrap-stale-active", "");
+    let overlap = unique_path("ir-tooling-bootstrap-stale-overlap", "txt");
+    let lock = cache_dir.join("locks").join("tooling-bootstrap.lock");
+
+    fs::create_dir_all(&lock).unwrap();
+    fs::write(lock.join("owner.pid"), "999999999\n").unwrap();
+    write_tooling_install_lock_profile(&profile, &active, &overlap);
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &user_library)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TOOLING_LOCK_TIMEOUT_SECONDS", "0.2")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=stale-tooling-lock\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=stale-tooling-lock");
+    assert!(!lock.exists(), "tooling bootstrap lock should be released");
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&overlap);
+    let _ = fs::remove_dir_all(&active);
+    let _ = fs::remove_dir_all(&user_library);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
 fn spawn_materialize_lock_holder(cache_dir: &Path, marker: &Path) -> std::process::Child {
     let lock = cache_dir.join("locks").join("renv-materialize.lock");
     let r_expr = concat!(

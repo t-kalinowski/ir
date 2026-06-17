@@ -171,6 +171,9 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
 ir_tooling_lock_path <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "locks", "tooling-bootstrap.lock")
 
+ir_dir_lock_owner_path <- function(path)
+  file.path(path, "owner.pid")
+
 ir_tooling_lock_timeout_seconds <- function() {
   env <- Sys.getenv("IR_TOOLING_LOCK_TIMEOUT_SECONDS")
   if (!nzchar(env)) return(3600)
@@ -183,6 +186,49 @@ ir_tooling_lock_timeout_seconds <- function() {
   seconds
 }
 
+ir_process_alive <- function(pid) {
+  pid <- suppressWarnings(as.integer(pid))
+  if (length(pid) != 1L || is.na(pid) || pid <= 0L) return(FALSE)
+
+  isTRUE(tryCatch(tools::pskill(pid, 0), error = function(e) FALSE))
+}
+
+ir_dir_lock_owner_pid <- function(path) {
+  owner <- ir_dir_lock_owner_path(path)
+  if (!file.exists(owner)) return(NA_integer_)
+
+  pid <- suppressWarnings(as.integer(readLines(owner, n = 1L, warn = FALSE)))
+  if (length(pid) != 1L) return(NA_integer_)
+  pid
+}
+
+ir_dir_lock_age_seconds <- function(path) {
+  info <- file.info(path)
+  if (is.na(info$mtime)) return(NA_real_)
+
+  as.numeric(difftime(Sys.time(), info$mtime, units = "secs"))
+}
+
+ir_dir_lock_stale <- function(path) {
+  pid <- ir_dir_lock_owner_pid(path)
+  if (!is.na(pid)) return(!ir_process_alive(pid))
+
+  age <- ir_dir_lock_age_seconds(path)
+  !is.na(age) && age >= 5
+}
+
+ir_dir_lock_write_owner <- function(path, label) {
+  owner <- ir_dir_lock_owner_path(path)
+  tryCatch(
+    writeLines(as.character(Sys.getpid()), owner),
+    error = function(e) {
+      unlink(path, recursive = TRUE, force = TRUE)
+      stop("could not write ", label, " lock owner: ", conditionMessage(e),
+           call. = FALSE)
+    }
+  )
+}
+
 ir_dir_lock_acquire <- function(path, timeout_seconds, label) {
   stopifnot(length(path) == 1L, length(timeout_seconds) == 1L,
             length(label) == 1L)
@@ -190,8 +236,15 @@ ir_dir_lock_acquire <- function(path, timeout_seconds, label) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   started <- proc.time()[["elapsed"]]
   repeat {
-    if (dir.create(path, showWarnings = FALSE))
+    if (dir.create(path, showWarnings = FALSE)) {
+      ir_dir_lock_write_owner(path, label)
       return(invisible())
+    }
+
+    if (ir_dir_lock_stale(path)) {
+      unlink(path, recursive = TRUE, force = TRUE)
+      next
+    }
 
     if ((proc.time()[["elapsed"]] - started) >= timeout_seconds)
       stop("timed out waiting for ", label, " lock: ", path, call. = FALSE)
