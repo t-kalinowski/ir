@@ -5,6 +5,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=IR_RIG_AVAILABLE_REFRESH");
+
     let output = Command::new("rig")
         .args(["available", "--all", "--json"])
         .output()
