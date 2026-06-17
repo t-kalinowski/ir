@@ -337,7 +337,8 @@ fn cached_rig_available_all_refreshing_for_installed(
     installed: &[InstalledR],
 ) -> Result<Vec<AvailableR>, Box<dyn Error>> {
     cached_rig_available_all_refreshing_if(|available| {
-        !available_covers_installed_releases(available, installed)
+        relevant_installed_releases(installed)
+            .any(|installed| !installed_release_covered_by_available(available, installed))
     })
 }
 
@@ -361,20 +362,30 @@ fn cached_rig_available_all_refreshing_if(
 
 fn available_covers_installed_releases(available: &[AvailableR], installed: &[InstalledR]) -> bool {
     let mut has_installed_release = false;
-    for installed in installed
-        .iter()
-        .filter(|version| !installed_is_symbolic_prerelease(version))
-        .filter(|version| installed_version_supported_by_resolver(version))
-    {
+    for installed in relevant_installed_releases(installed) {
         has_installed_release = true;
-        if !available.iter().any(|available| {
-            available.date.is_some() && available_matches_installed(available, installed)
-        }) {
+        if !installed_release_covered_by_available(available, installed) {
             return false;
         }
     }
 
     has_installed_release
+}
+
+fn relevant_installed_releases(installed: &[InstalledR]) -> impl Iterator<Item = &InstalledR> {
+    installed
+        .iter()
+        .filter(|version| !installed_is_symbolic_prerelease(version))
+        .filter(|version| installed_version_supported_by_resolver(version))
+}
+
+fn installed_release_covered_by_available(
+    available: &[AvailableR],
+    installed: &InstalledR,
+) -> bool {
+    available.iter().any(|available| {
+        available.date.is_some() && available_matches_installed(available, installed)
+    })
 }
 
 fn refresh_cached_rig_available_all(path: &Path) -> Result<Vec<AvailableR>, Box<dyn Error>> {

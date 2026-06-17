@@ -299,9 +299,26 @@ ir_install_specs <- function(res) {
 }
 
 # Concurrent resolver runs share renv's binary and package caches.
+ir_renv_cache_lock_root <- function() {
+  env <- Sys.getenv("RENV_PATHS_CACHE")
+  if (nzchar(env)) {
+    roots <- strsplit(env, .Platform$path.sep, fixed = TRUE)[[1L]]
+    roots <- roots[nzchar(roots)]
+    if (length(roots))
+      return(normalizePath(roots[[1L]], winslash = "/", mustWork = FALSE))
+  }
+
+  tools::R_user_dir("renv", "cache")
+}
+
 ir_with_renv_cache_lock <- function(expr) {
-  root <- tools::R_user_dir("renv", "cache")
-  dir.create(root, recursive = TRUE, showWarnings = FALSE)
+  root <- ir_renv_cache_lock_root()
+  if (!dir.exists(root) &&
+      !dir.create(root, recursive = TRUE, showWarnings = FALSE))
+    stop("could not create renv cache lock root at ", root, call. = FALSE)
+  if (!dir.exists(root))
+    stop("renv cache lock root is not a directory: ", root, call. = FALSE)
+
   lock <- file.path(root, "ir-renv-cache.lock")
   deadline <- Sys.time() + 10 * 60
 
