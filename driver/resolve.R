@@ -67,9 +67,10 @@ ir_cache_dir <- function() {
 ## --- resolver tooling bootstrap ---------------------------------------------
 
 # Packages the resolver itself needs. pak resolves dependencies, renv
-# materialises the library, secretbase hashes the cache keys. They are
-# installed into a dedicated tooling library so users need not pre-install them.
-ir_tooling_packages <- function() c("pak", "renv", "secretbase")
+# materialises the library, secretbase hashes the cache keys, and filelock
+# serializes materialization. They are installed into a dedicated tooling library
+# so users need not pre-install them.
+ir_tooling_packages <- function() c("pak", "renv", "secretbase", "filelock")
 
 # Repository for tooling installs: always the latest PPM snapshot, independent
 # of the user's `exclude-newer`. ir's own tooling is not pinned to a user's
@@ -167,8 +168,8 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
   missing
 }
 
-# Ensure pak/renv/secretbase are available. Any that are missing are installed
-# into the tooling library, which is then put first on the search path.
+# Ensure resolver tooling is available. Any packages that are missing are
+# installed into the tooling library, which is then put first on the search path.
 ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
                               repos = ir_tooling_repos()) {
   lib <- ir_tooling_lib(cache_dir)
@@ -303,137 +304,6 @@ ir_install_specs <- function(res) {
 ir_materialize_lock_path <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "locks", "renv-materialize.lock")
 
-ir_materialize_lock_owner_file <- function(path)
-  file.path(path, "owner")
-
-ir_current_nodename <- function() {
-  nodename <- Sys.info()[["nodename"]]
-  if (length(nodename) != 1L || is.na(nodename)) "" else as.character(nodename)
-}
-
-ir_materialize_lock_owner <- function() {
-  c(
-    pid = as.character(Sys.getpid()),
-    nodename = ir_current_nodename()
-  )
-}
-
-ir_materialize_lock_write_owner <- function(path) {
-  owner <- ir_materialize_lock_owner()
-  writeLines(
-    paste(names(owner), owner, sep = "="),
-    ir_materialize_lock_owner_file(path)
-  )
-}
-
-ir_materialize_lock_read_owner <- function(path) {
-  owner_file <- ir_materialize_lock_owner_file(path)
-  if (!file.exists(owner_file)) return(NULL)
-
-  lines <- tryCatch(readLines(owner_file, warn = FALSE),
-                    error = function(e) character())
-  if (!length(lines)) return(NULL)
-  owner <- setNames(sub("^[^=]*=", "", lines), sub("=.*$", "", lines))
-  pid_value <- owner[["pid"]]
-  nodename <- owner[["nodename"]]
-  if (is.null(pid_value) || is.null(nodename)) return(NULL)
-
-  pid <- suppressWarnings(as.integer(pid_value))
-  if (is.na(pid) || is.na(nodename) || !nzchar(nodename)) return(NULL)
-
-  list(pid = pid, nodename = nodename)
-}
-
-ir_process_exists <- function(pid) {
-  stopifnot(length(pid) == 1L, !is.na(pid), pid > 0)
-
-  if (identical(.Platform$OS.type, "windows")) {
-    tasklist <- Sys.which("tasklist")
-    if (!nzchar(tasklist))
-      stop("could not find tasklist for Windows process checks",
-           call. = FALSE)
-
-    out <- suppressWarnings(system2(
-      tasklist,
-      c("/FI", shQuote(sprintf("PID eq %d", pid), type = "cmd"),
-        "/FO", "CSV", "/NH"),
-      stdout = TRUE,
-      stderr = FALSE
-    ))
-    status <- attr(out, "status")
-    if (!is.null(status) && status != 0)
-      stop("tasklist failed while checking resolver materialization lock owner",
-           call. = FALSE)
-
-    pid_line <- sprintf('^"[^"]+","%d",', pid)
-    return(any(grepl(pid_line, out)))
-  }
-
-  tools::pskill(pid, 0)
-}
-
-ir_materialize_lock_owner_stale <- function(owner) {
-  if (!identical(owner$nodename, ir_current_nodename())) return(FALSE)
-
-  !ir_process_exists(owner$pid)
-}
-
-ir_materialize_lock_reclaim_claim <- function(path) {
-  claim <- file.path(path, "reclaim")
-  tmp <- tempfile("reclaim-", path)
-  if (!dir.create(tmp, mode = "0755", showWarnings = FALSE))
-    return(FALSE)
-
-  moved <- FALSE
-  on.exit(if (!moved) unlink(tmp, recursive = TRUE, force = TRUE), add = TRUE)
-  ir_materialize_lock_write_owner(tmp)
-  if (suppressWarnings(file.rename(tmp, claim))) {
-    moved <- TRUE
-    return(TRUE)
-  }
-
-  owner <- ir_materialize_lock_read_owner(path)
-  claim_owner <- ir_materialize_lock_read_owner(claim)
-  if (!is.null(owner) &&
-      ir_materialize_lock_owner_stale(owner) &&
-      (is.null(claim_owner) || ir_materialize_lock_owner_stale(claim_owner))) {
-    unlink(claim, recursive = TRUE, force = TRUE)
-  }
-
-  FALSE
-}
-
-ir_materialize_lock_reclaim_stale <- function(path) {
-  owner <- ir_materialize_lock_read_owner(path)
-  if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
-    return(FALSE)
-
-  # Claim then re-read the directory before deleting it. Without this, another
-  # resolver can replace the stale lock with a fresh live lock between the stale
-  # owner check and the rename below.
-  claim <- file.path(path, "reclaim")
-  if (!ir_materialize_lock_reclaim_claim(path))
-    return(FALSE)
-
-  claimed <- TRUE
-  on.exit(if (claimed) unlink(claim, recursive = TRUE, force = TRUE),
-          add = TRUE)
-
-  owner <- ir_materialize_lock_read_owner(path)
-  if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
-    return(FALSE)
-  if (!dir.exists(claim))
-    return(FALSE)
-
-  stale <- tempfile(paste0(basename(path), "-stale-"), dirname(path))
-  if (!suppressWarnings(file.rename(path, stale)))
-    return(FALSE)
-
-  claimed <- FALSE
-  unlink(stale, recursive = TRUE, force = TRUE)
-  TRUE
-}
-
 ir_materialize_lock_timeout_seconds <- function() {
   env <- Sys.getenv("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS")
   if (!nzchar(env)) return(3600)
@@ -446,40 +316,21 @@ ir_materialize_lock_timeout_seconds <- function() {
   seconds
 }
 
-ir_materialize_lock_create <- function(path) {
-  tmp <- tempfile(paste0(basename(path), "-"), dirname(path))
-  dir.create(tmp, mode = "0755", showWarnings = FALSE)
-
-  acquired <- FALSE
-  on.exit(if (!acquired) unlink(tmp, recursive = TRUE, force = TRUE), add = TRUE)
-  ir_materialize_lock_write_owner(tmp)
-  acquired <- suppressWarnings(file.rename(tmp, path))
-  acquired
-}
-
 ir_materialize_lock_acquire <- function(path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  started <- Sys.time()
-  timeout <- ir_materialize_lock_timeout_seconds()
-  while (!ir_materialize_lock_create(path)) {
-    if (ir_materialize_lock_reclaim_stale(path))
-      next
+  lock <- filelock::lock(path,
+                         timeout = ir_materialize_lock_timeout_seconds() * 1000)
+  if (is.null(lock))
+    stop("timed out waiting for resolver materialization lock: ", path,
+         call. = FALSE)
 
-    elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
-    if (elapsed >= timeout)
-      stop("timed out waiting for resolver materialization lock: ", path,
-           call. = FALSE)
-
-    Sys.sleep(0.1)
-  }
-
-  invisible(TRUE)
+  lock
 }
 
 ir_with_materialize_lock <- function(expr, cache_dir = ir_cache_dir()) {
   lock <- ir_materialize_lock_path(cache_dir)
-  ir_materialize_lock_acquire(lock)
-  on.exit(unlink(lock, recursive = TRUE, force = TRUE), add = TRUE)
+  handle <- ir_materialize_lock_acquire(lock)
+  on.exit(filelock::unlock(handle), add = TRUE)
 
   force(expr)
 }
@@ -495,8 +346,8 @@ ir_needs_materialize <- function(library_path, pkgs, has_source_ref) {
 
 ir_resolve_main <- function() {
 
-  ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
-  ## before any secretbase/pak/renv use below.
+  ## 0. Ensure the resolver's own tooling is available before any tooling use
+  ## below.
   ir_ensure_tooling()
 
   deps        <- readLines(file("stdin"), warn = FALSE)

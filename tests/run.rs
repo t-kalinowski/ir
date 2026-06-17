@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 fn ci_dependencies_are_available() {
     let r_expr = concat!(
         "pkgs <- c(",
-        "'pak', 'renv', 'secretbase', 'cli', 'glue', 'jsonlite', ",
+        "'pak', 'renv', 'secretbase', 'filelock', 'cli', 'glue', 'jsonlite', ",
         "'dplyr', 'tidyr', 'reticulate', 'knitr', 'rmarkdown', 'quarto', ",
         "'btw', 'Rapp', 'docopt', 'pkgsearch', 'prettyunits', 'fansi', ",
         "'htmltools'); ",
@@ -1248,57 +1248,9 @@ fn write_materialize_lock_profile(
     active: Option<&Path>,
     overlap: Option<&Path>,
     entered: &Path,
-    seed_stale_lock: bool,
     sleep_seconds: f64,
 ) {
     assert_eq!(active.is_some(), overlap.is_some());
-
-    let stale_lock_code = if seed_stale_lock {
-        r#"
-if (nzchar(Sys.getenv("IR_TEST_STALE_MATERIALIZE_LOCK")) &&
-    nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
-  lock <- file.path(Sys.getenv("IR_CACHE_DIR"), "locks", "renv-materialize.lock")
-  dir.create(lock, recursive = TRUE, showWarnings = FALSE)
-  writeLines(
-    c("pid=99999999", paste0("nodename=", Sys.info()[["nodename"]])),
-    file.path(lock, "owner")
-  )
-}
-"#
-    } else {
-        ""
-    };
-
-    let stale_reclaim_race_code = if let Some(active) = active {
-        format!(
-            r#"
-if (nzchar(Sys.getenv("IR_TEST_STALE_RECLAIM_RACE"))) {{
-  ir_test_base_file_rename <- base::file.rename
-  file.rename <- function(from, to) {{
-    lock <- file.path(Sys.getenv("IR_CACHE_DIR"), "locks", "renv-materialize.lock")
-    is_stale_reclaim <- identical(
-      normalizePath(from, winslash = "/", mustWork = FALSE),
-      normalizePath(lock, winslash = "/", mustWork = FALSE)
-    ) && grepl("-stale-", basename(to), fixed = TRUE)
-    claimed <- dir.exists(file.path(from, "reclaim"))
-    if (is_stale_reclaim && !claimed) {{
-      marker <- Sys.getenv("IR_TEST_STALE_RECLAIM_WAITING")
-      if (nzchar(marker) && !file.exists(marker)) {{
-        writeLines(as.character(Sys.getpid()), marker)
-        active <- {active}
-        deadline <- Sys.time() + 5
-        while (!dir.exists(active) && Sys.time() < deadline) Sys.sleep(0.02)
-      }}
-    }}
-    ir_test_base_file_rename(from, to)
-  }}
-}}
-"#,
-            active = r_string(active)
-        )
-    } else {
-        String::new()
-    };
 
     let pak_code = paste_lines(&[
         "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
@@ -1367,8 +1319,6 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {{
   writeLines(namespace, file.path(path, "NAMESPACE"))
   writeLines(code, file.path(path, "R", pkg))
 }}
-{stale_lock_code}
-{stale_reclaim_race_code}
 
 ir_test_private_lib <- file.path(
   Sys.getenv("IR_CACHE_DIR"),
@@ -1406,39 +1356,27 @@ fn paste_lines(lines: &[&str]) -> String {
     lines.join("\n")
 }
 
-#[cfg(windows)]
-fn seed_materialize_lock_owner(cache_dir: &Path, pid: u32) {
+fn spawn_materialize_lock_holder(cache_dir: &Path, marker: &Path) -> std::process::Child {
     let lock = cache_dir.join("locks").join("renv-materialize.lock");
     let r_expr = concat!(
-        "lock <- commandArgs(TRUE)[[1]]; ",
-        "pid <- commandArgs(TRUE)[[2]]; ",
-        "dir.create(lock, recursive = TRUE, showWarnings = FALSE); ",
-        "writeLines(",
-        "c(paste0('pid=', pid), paste0('nodename=', Sys.info()[['nodename']])), ",
-        "file.path(lock, 'owner')",
-        ")"
+        "args <- commandArgs(TRUE); ",
+        "lock <- args[[1]]; ",
+        "marker <- args[[2]]; ",
+        "dir.create(dirname(lock), recursive = TRUE, showWarnings = FALSE); ",
+        "handle <- filelock::lock(lock, timeout = 5000); ",
+        "if (is.null(handle)) stop('could not acquire test lock', call. = FALSE); ",
+        "writeLines('locked', marker); ",
+        "Sys.sleep(30)"
     );
     let mut r = Command::new(rscript());
     r.args(["--vanilla", "-e", r_expr])
         .arg(&lock)
-        .arg(pid.to_string());
-    assert_command_success(r, "seed live materialization lock");
-}
-
-#[cfg(unix)]
-fn seed_stale_materialize_lock(cache_dir: &Path) {
-    let lock = cache_dir.join("locks").join("renv-materialize.lock");
-    let r_expr = concat!(
-        "lock <- commandArgs(TRUE)[[1]]; ",
-        "dir.create(lock, recursive = TRUE, showWarnings = FALSE); ",
-        "writeLines(",
-        "c('pid=99999999', paste0('nodename=', Sys.info()[['nodename']])), ",
-        "file.path(lock, 'owner')",
-        ")"
-    );
-    let mut r = Command::new(rscript());
-    r.args(["--vanilla", "-e", r_expr]).arg(&lock);
-    assert_command_success(r, "seed stale materialization lock");
+        .arg(marker)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
 }
 
 #[cfg(unix)]
@@ -1450,14 +1388,7 @@ fn concurrent_resolvers_serialize_renv_materialization() {
     let entered = unique_path("ir-renv-materialize-entered", "txt");
     let overlap = unique_path("ir-renv-materialize-overlap", "txt");
 
-    write_materialize_lock_profile(
-        &profile,
-        Some(&active),
-        Some(&overlap),
-        &entered,
-        false,
-        1.0,
-    );
+    write_materialize_lock_profile(&profile, Some(&active), Some(&overlap), &entered, 1.0);
 
     let mut first = ir();
     first
@@ -1529,32 +1460,21 @@ fn concurrent_resolvers_serialize_renv_materialization() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
-#[cfg(unix)]
 #[test]
-fn concurrent_stale_lock_reclaim_does_not_remove_fresh_lock() {
-    let cache_dir = unique_dir("ir-renv-materialize-stale-race-cache");
-    let profile = unique_path("ir-renv-materialize-stale-race-profile", "R");
-    let active = unique_path("ir-renv-materialize-stale-race-active", "");
-    let entered = unique_path("ir-renv-materialize-stale-race-entered", "txt");
-    let overlap = unique_path("ir-renv-materialize-stale-race-overlap", "txt");
-    let waiting = unique_path("ir-renv-materialize-stale-race-waiting", "txt");
+fn resolver_ignores_leftover_materialization_lock_file() {
+    let cache_dir = unique_dir("ir-renv-materialize-leftover-lock-cache");
+    let profile = unique_path("ir-renv-materialize-leftover-lock-profile", "R");
+    let entered = unique_path("ir-renv-materialize-leftover-lock-entered", "txt");
+    let lock = cache_dir.join("locks").join("renv-materialize.lock");
 
-    seed_stale_materialize_lock(&cache_dir);
-    write_materialize_lock_profile(
-        &profile,
-        Some(&active),
-        Some(&overlap),
-        &entered,
-        false,
-        1.0,
-    );
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    fs::write(&lock, "leftover\n").unwrap();
+    write_materialize_lock_profile(&profile, None, None, &entered, 0.0);
 
-    let mut first = ir();
-    first
+    let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_PROFILE_USER", &profile)
-        .env("IR_TEST_STALE_RECLAIM_RACE", "1")
-        .env("IR_TEST_STALE_RECLAIM_WAITING", &waiting)
+        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
         .args([
             "run",
             "--isolated",
@@ -1562,84 +1482,45 @@ fn concurrent_stale_lock_reclaim_does_not_remove_fresh_lock() {
             "cli",
             "--vanilla",
             "-e",
-            "cat('ir.fixture=stale-race-one\\n')",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let first = first.spawn().unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !waiting.exists() && !active.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(
-        waiting.exists() || active.exists(),
-        "first resolver should reach stale reclaim or fake renv::use"
-    );
-
-    let second = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("R_PROFILE_USER", &profile)
-        .env("IR_TEST_STALE_RECLAIM_RACE", "1")
-        .env("IR_TEST_STALE_RECLAIM_WAITING", &waiting)
-        .args([
-            "run",
-            "--isolated",
-            "--with",
-            "cli",
-            "--vanilla",
-            "-e",
-            "cat('ir.fixture=stale-race-two\\n')",
+            "cat('ir.fixture=leftover-lock\\n')",
         ])
         .output()
         .unwrap();
-    let first = first.wait_with_output().unwrap();
 
-    assert_success(&first);
-    assert_success(&second);
-    assert_stdout_contains(&first, "ir.fixture=stale-race-one");
-    assert_stdout_contains(&second, "ir.fixture=stale-race-two");
-    assert!(!overlap.exists(), "renv::use should not overlap");
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=leftover-lock");
 
     let entered = fs::read_to_string(&entered)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
-    assert_eq!(
-        entered.lines().count(),
-        1,
-        "second resolver should reuse the completed materialized library"
-    );
+    assert_eq!(entered.lines().count(), 1);
 
     let _ = fs::remove_file(&profile);
     let _ = fs::remove_file(&entered);
-    let _ = fs::remove_file(&overlap);
-    let _ = fs::remove_file(&waiting);
-    let _ = fs::remove_dir_all(&active);
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
-#[cfg(windows)]
 #[test]
-fn live_materialization_lock_owner_is_not_terminated() {
+fn resolver_times_out_when_materialization_lock_is_held() {
     let cache_dir = unique_dir("ir-renv-materialize-live-lock-cache");
     let profile = unique_path("ir-renv-materialize-live-lock-profile", "R");
     let entered = unique_path("ir-renv-materialize-live-lock-entered", "txt");
+    let locked = unique_path("ir-renv-materialize-live-lock-held", "txt");
 
-    write_materialize_lock_profile(&profile, None, None, &entered, false, 0.0);
+    write_materialize_lock_profile(&profile, None, None, &entered, 0.0);
 
-    let mut owner = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "Start-Sleep -Seconds 30",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    seed_materialize_lock_owner(&cache_dir, owner.id());
+    let mut owner = spawn_materialize_lock_holder(&cache_dir, &locked);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !locked.exists() && Instant::now() < deadline {
+        if owner.try_wait().unwrap().is_some() {
+            let owner = owner.wait_with_output().unwrap();
+            panic!(
+                "lock holder exited before acquiring lock\n{}",
+                output_text(&owner)
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(locked.exists(), "lock holder should acquire the test lock");
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -1658,10 +1539,13 @@ fn live_materialization_lock_owner_is_not_terminated() {
         .unwrap();
 
     let owner_alive = owner.try_wait().unwrap().is_none();
-    let _ = owner.kill();
+    if owner_alive {
+        let _ = owner.kill();
+    }
     let _ = owner.wait();
     let _ = fs::remove_file(&profile);
     let _ = fs::remove_file(&entered);
+    let _ = fs::remove_file(&locked);
     let _ = fs::remove_dir_all(&cache_dir);
 
     assert!(
@@ -1678,92 +1562,6 @@ fn live_materialization_lock_owner_is_not_terminated() {
         owner_alive,
         "lock owner process should still be alive after the resolver checks it"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn resolver_discards_stale_renv_materialization_lock() {
-    let cache_dir = unique_dir("ir-renv-materialize-stale-lock-cache");
-    let profile = unique_path("ir-renv-materialize-stale-lock-profile", "R");
-    let entered = unique_path("ir-renv-materialize-stale-lock-entered", "txt");
-
-    write_materialize_lock_profile(&profile, None, None, &entered, true, 0.0);
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("R_PROFILE_USER", &profile)
-        .env("IR_TEST_STALE_MATERIALIZE_LOCK", "1")
-        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
-        .args([
-            "run",
-            "--isolated",
-            "--with",
-            "cli",
-            "--vanilla",
-            "-e",
-            "cat('ir.fixture=stale-lock\\n')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=stale-lock");
-    assert!(
-        !cache_dir
-            .join("locks")
-            .join("renv-materialize.lock")
-            .exists(),
-        "stale lock should be replaced and released"
-    );
-
-    let entered = fs::read_to_string(&entered)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
-    assert_eq!(entered.lines().count(), 1);
-
-    let _ = fs::remove_file(&profile);
-    let _ = fs::remove_file(&entered);
-    let _ = fs::remove_dir_all(&cache_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn resolver_discards_stale_renv_materialization_lock_with_orphaned_reclaim_marker() {
-    let cache_dir = unique_dir("ir-renv-materialize-orphan-reclaim-cache");
-    let profile = unique_path("ir-renv-materialize-orphan-reclaim-profile", "R");
-    let entered = unique_path("ir-renv-materialize-orphan-reclaim-entered", "txt");
-
-    seed_stale_materialize_lock(&cache_dir);
-    let lock = cache_dir.join("locks").join("renv-materialize.lock");
-    fs::create_dir(lock.join("reclaim")).unwrap();
-    write_materialize_lock_profile(&profile, None, None, &entered, false, 0.0);
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("R_PROFILE_USER", &profile)
-        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
-        .args([
-            "run",
-            "--isolated",
-            "--with",
-            "cli",
-            "--vanilla",
-            "-e",
-            "cat('ir.fixture=orphan-reclaim\\n')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=orphan-reclaim");
-    assert!(!lock.exists(), "stale lock should be replaced and released");
-
-    let entered = fs::read_to_string(&entered)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
-    assert_eq!(entered.lines().count(), 1);
-
-    let _ = fs::remove_file(&profile);
-    let _ = fs::remove_file(&entered);
-    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[cfg(unix)]
@@ -1862,6 +1660,16 @@ ir_test_write_pkg(
     "  }}",
     "  invisible(TRUE)",
     "}}",
+    sep = "\n"
+  )
+)
+ir_test_write_pkg(
+  Sys.getenv("R_LIBS_USER"),
+  "filelock",
+  "export(lock)\nexport(unlock)",
+  paste(
+    "lock <- function(path, exclusive = TRUE, timeout = Inf) list(path = path)",
+    "unlock <- function(lock) TRUE",
     sep = "\n"
   )
 )
@@ -2027,6 +1835,16 @@ ir_test_write_pkg(
     "  }}",
     "  invisible(TRUE)",
     "}}",
+    sep = "\n"
+  )
+)
+ir_test_write_pkg(
+  ir_test_private_lib,
+  "filelock",
+  "export(lock)\nexport(unlock)",
+  paste(
+    "lock <- function(path, exclusive = TRUE, timeout = Inf) list(path = path)",
+    "unlock <- function(lock) TRUE",
     sep = "\n"
   )
 )
