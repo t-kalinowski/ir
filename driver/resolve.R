@@ -344,10 +344,38 @@ ir_materialize_lock_read_owner <- function(path) {
   list(pid = pid, nodename = nodename)
 }
 
+ir_process_exists <- function(pid) {
+  stopifnot(length(pid) == 1L, !is.na(pid), pid > 0)
+
+  if (identical(.Platform$OS.type, "windows")) {
+    tasklist <- Sys.which("tasklist")
+    if (!nzchar(tasklist))
+      stop("could not find tasklist for Windows process checks",
+           call. = FALSE)
+
+    out <- suppressWarnings(system2(
+      tasklist,
+      c("/FI", shQuote(sprintf("PID eq %d", pid), type = "cmd"),
+        "/FO", "CSV", "/NH"),
+      stdout = TRUE,
+      stderr = FALSE
+    ))
+    status <- attr(out, "status")
+    if (!is.null(status) && status != 0)
+      stop("tasklist failed while checking resolver materialization lock owner",
+           call. = FALSE)
+
+    pid_line <- sprintf('^"[^"]+","%d",', pid)
+    return(any(grepl(pid_line, out)))
+  }
+
+  tools::pskill(pid, 0)
+}
+
 ir_materialize_lock_owner_stale <- function(owner) {
   if (!identical(owner$nodename, ir_current_nodename())) return(FALSE)
 
-  !tools::pskill(owner$pid, 0)
+  !ir_process_exists(owner$pid)
 }
 
 ir_materialize_lock_reclaim_stale <- function(path) {

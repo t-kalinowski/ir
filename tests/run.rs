@@ -1243,7 +1243,6 @@ fn run_passes_rust_owned_cache_dir_to_resolver() {
     let _ = fs::remove_dir_all(&xdg_cache_home);
 }
 
-#[cfg(unix)]
 fn write_materialize_lock_profile(
     profile: &Path,
     active: Option<&Path>,
@@ -1403,9 +1402,27 @@ ir_test_write_pkg(
     .unwrap();
 }
 
-#[cfg(unix)]
 fn paste_lines(lines: &[&str]) -> String {
     lines.join("\n")
+}
+
+#[cfg(windows)]
+fn seed_materialize_lock_owner(cache_dir: &Path, pid: u32) {
+    let lock = cache_dir.join("locks").join("renv-materialize.lock");
+    let r_expr = concat!(
+        "lock <- commandArgs(TRUE)[[1]]; ",
+        "pid <- commandArgs(TRUE)[[2]]; ",
+        "dir.create(lock, recursive = TRUE, showWarnings = FALSE); ",
+        "writeLines(",
+        "c(paste0('pid=', pid), paste0('nodename=', Sys.info()[['nodename']])), ",
+        "file.path(lock, 'owner')",
+        ")"
+    );
+    let mut r = Command::new(rscript());
+    r.args(["--vanilla", "-e", r_expr])
+        .arg(&lock)
+        .arg(pid.to_string());
+    assert_command_success(r, "seed live materialization lock");
 }
 
 #[cfg(unix)]
@@ -1598,6 +1615,69 @@ fn concurrent_stale_lock_reclaim_does_not_remove_fresh_lock() {
     let _ = fs::remove_file(&waiting);
     let _ = fs::remove_dir_all(&active);
     let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn live_materialization_lock_owner_is_not_terminated() {
+    let cache_dir = unique_dir("ir-renv-materialize-live-lock-cache");
+    let profile = unique_path("ir-renv-materialize-live-lock-profile", "R");
+    let entered = unique_path("ir-renv-materialize-live-lock-entered", "txt");
+
+    write_materialize_lock_profile(&profile, None, None, &entered, false, 0.0);
+
+    let mut owner = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    seed_materialize_lock_owner(&cache_dir, owner.id());
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=live-lock\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    let owner_alive = owner.try_wait().unwrap().is_none();
+    let _ = owner.kill();
+    let _ = owner.wait();
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&entered);
+    let _ = fs::remove_dir_all(&cache_dir);
+
+    assert!(
+        !out.status.success(),
+        "live materialization lock should time out\n{}",
+        output_text(&out)
+    );
+    assert!(
+        output_text(&out).contains("timed out waiting for resolver materialization lock"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
+        owner_alive,
+        "lock owner process should still be alive after the resolver checks it"
+    );
 }
 
 #[cfg(unix)]
