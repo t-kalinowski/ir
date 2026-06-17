@@ -1727,6 +1727,47 @@ fn resolver_discards_stale_renv_materialization_lock() {
 
 #[cfg(unix)]
 #[test]
+fn resolver_discards_stale_renv_materialization_lock_with_orphaned_reclaim_marker() {
+    let cache_dir = unique_dir("ir-renv-materialize-orphan-reclaim-cache");
+    let profile = unique_path("ir-renv-materialize-orphan-reclaim-profile", "R");
+    let entered = unique_path("ir-renv-materialize-orphan-reclaim-entered", "txt");
+
+    seed_stale_materialize_lock(&cache_dir);
+    let lock = cache_dir.join("locks").join("renv-materialize.lock");
+    fs::create_dir(lock.join("reclaim")).unwrap();
+    write_materialize_lock_profile(&profile, None, None, &entered, false, 0.0);
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_MATERIALIZE_LOCK_TIMEOUT_SECONDS", "0.2")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=orphan-reclaim\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=orphan-reclaim");
+    assert!(!lock.exists(), "stale lock should be replaced and released");
+
+    let entered = fs::read_to_string(&entered)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()));
+    assert_eq!(entered.lines().count(), 1);
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&entered);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn resolver_tooling_uses_compatible_user_library_packages() {
     let cache_dir = unique_dir("ir-compatible-tooling-cache");
     let user_library = unique_dir("ir-compatible-tooling-user-library");

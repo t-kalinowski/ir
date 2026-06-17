@@ -378,6 +378,31 @@ ir_materialize_lock_owner_stale <- function(owner) {
   !ir_process_exists(owner$pid)
 }
 
+ir_materialize_lock_reclaim_claim <- function(path) {
+  claim <- file.path(path, "reclaim")
+  tmp <- tempfile("reclaim-", path)
+  if (!dir.create(tmp, mode = "0755", showWarnings = FALSE))
+    return(FALSE)
+
+  moved <- FALSE
+  on.exit(if (!moved) unlink(tmp, recursive = TRUE, force = TRUE), add = TRUE)
+  ir_materialize_lock_write_owner(tmp)
+  if (suppressWarnings(file.rename(tmp, claim))) {
+    moved <- TRUE
+    return(TRUE)
+  }
+
+  owner <- ir_materialize_lock_read_owner(path)
+  claim_owner <- ir_materialize_lock_read_owner(claim)
+  if (!is.null(owner) &&
+      ir_materialize_lock_owner_stale(owner) &&
+      (is.null(claim_owner) || ir_materialize_lock_owner_stale(claim_owner))) {
+    unlink(claim, recursive = TRUE, force = TRUE)
+  }
+
+  FALSE
+}
+
 ir_materialize_lock_reclaim_stale <- function(path) {
   owner <- ir_materialize_lock_read_owner(path)
   if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
@@ -387,7 +412,7 @@ ir_materialize_lock_reclaim_stale <- function(path) {
   # resolver can replace the stale lock with a fresh live lock between the stale
   # owner check and the rename below.
   claim <- file.path(path, "reclaim")
-  if (!dir.create(claim, mode = "0755", showWarnings = FALSE))
+  if (!ir_materialize_lock_reclaim_claim(path))
     return(FALSE)
 
   claimed <- TRUE
@@ -396,6 +421,8 @@ ir_materialize_lock_reclaim_stale <- function(path) {
 
   owner <- ir_materialize_lock_read_owner(path)
   if (is.null(owner) || !ir_materialize_lock_owner_stale(owner))
+    return(FALSE)
+  if (!dir.exists(claim))
     return(FALSE)
 
   stale <- tempfile(paste0(basename(path), "-stale-"), dirname(path))
