@@ -79,9 +79,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-9aa68caa1778ee5759e263c3b2f4abf3.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-7fb2366ea9cfc589a5fa427510273c33.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -385,7 +385,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <ul>
 <li>Declare package requirements in script frontmatter and run the file directly with <code>ir run</code>.</li>
 <li>Resolve packages once, then reuse content-addressed cached libraries on later runs.</li>
-<li>Pin CRAN resolution to a Posit Package Manager snapshot with <code>exclude-newer</code>.</li>
+<li>Pin CRAN resolution to a Posit Package Manager snapshot with <code>--exclude-newer</code>, <code>IR_EXCLUDE_NEWER</code>, or frontmatter <code>exclude-newer</code>.</li>
 <li>Select installed R versions with <code>--r-version</code> or frontmatter <code>r-version</code>.</li>
 <li>Evaluate inline expressions with <code>ir run -e</code> and add command-line packages with <code>--with</code>.</li>
 <li>Render Quarto documents and Quarto-formatted R scripts through <code>ir render</code>, using the same package metadata model with <code>rmarkdown</code> seeded automatically for the knitr engine.</li>
@@ -400,6 +400,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="common-commands">Common commands</h2>
 <pre class="console"><code>$ ir run script.R
 $ ir run --with cli -e 'cli::cli_alert_success("hi")'
+$ ir run --exclude-newer 2024-01-15 script.R
 $ ir render --r-version 4.5 report.qmd --to html
 $ rx btw --help
 $ ir tool run --from btw btw --help

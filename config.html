@@ -44,9 +44,9 @@ ul.task-list li input[type="checkbox"] {
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-9aa68caa1778ee5759e263c3b2f4abf3.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-7fb2366ea9cfc589a5fa427510273c33.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -377,51 +377,56 @@ ul.task-list li input[type="checkbox"] {
 <td><code>86400</code> seconds</td>
 </tr>
 <tr class="odd">
+<td><code>IR_EXCLUDE_NEWER</code></td>
+<td><code>ir run</code> and <code>ir render</code> package snapshot date</td>
+<td>unset</td>
+</tr>
+<tr class="even">
 <td><code>IR_RSCRIPT</code></td>
 <td>runs without <code>r-version</code></td>
 <td><code>Rscript</code> on <code>PATH</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>IR_QUARTO</code></td>
 <td>Quarto rendering</td>
 <td><code>quarto</code> on <code>PATH</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>IR_TOOL_BIN_DIR</code></td>
 <td><code>ir tool install</code></td>
 <td>first launcher-directory override</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>IR_NO_MODIFY_PATH</code></td>
 <td>install scripts, <code>ir tool install</code></td>
 <td>disables automatic PATH setup when nonempty</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>RAPP_BIN_DIR</code></td>
 <td><code>ir tool install</code></td>
 <td>second launcher-directory override</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>RAPP_NO_MODIFY_PATH</code></td>
 <td><code>ir tool install</code></td>
 <td>also disables automatic launcher PATH setup when nonempty</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>XDG_BIN_HOME</code></td>
 <td><code>ir tool install</code> on Unix</td>
 <td>third launcher-directory override</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>XDG_DATA_HOME</code></td>
 <td><code>ir tool install</code> on Unix</td>
 <td><code>&lt;parent of XDG_DATA_HOME&gt;/bin</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>LOCALAPPDATA</code></td>
 <td><code>ir tool install</code> on Windows</td>
 <td><code>%LOCALAPPDATA%\Programs\R\ir\bin</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>USERPROFILE</code></td>
 <td><code>ir tool install</code> on Windows</td>
 <td>fallback under <code>%USERPROFILE%\AppData</code></td>
@@ -429,7 +434,7 @@ ul.task-list li input[type="checkbox"] {
 </tbody>
 </table>
 <p>The default cache directory is computed before launching R. <code>IR_CACHE_DIR</code> is authoritative; otherwise <code>ir</code> uses the process <code>R_USER_CACHE_DIR</code>, process <code>XDG_CACHE_HOME</code>, or a platform default and appends <code>R/ir</code>. The selected path is passed to the resolver R session, so R startup files do not redirect the <code>ir</code> cache.</p>
-<p><code>IR_RSCRIPT</code> is ignored when <code>r-version</code> is set, because version selection is resolved through <code>rig</code>. <code>--bin-dir &lt;dir&gt;</code> overrides the launcher-directory environment variables for <code>ir tool install</code>. On macOS, <code>ir tool install</code> adds the default <code>~/.local/bin</code> directory to the zsh profile when needed. On Windows, it adds the default or environment-selected launcher directory to the user <code>Path</code>.</p>
+<p>Package snapshot date precedence for <code>ir run</code> and <code>ir render</code> is <code>--exclude-newer</code>, then <code>IR_EXCLUDE_NEWER</code>, then frontmatter <code>exclude-newer</code>. <code>IR_EXCLUDE_NEWER</code> is ignored when <code>--exclude-newer</code> is supplied. Set <code>--exclude-newer</code> or <code>IR_EXCLUDE_NEWER</code> to an empty string to override frontmatter <code>exclude-newer</code> and resolve latest packages. Future snapshot dates also resolve latest packages. <code>IR_RSCRIPT</code> is ignored when <code>r-version</code> is set, because version selection is resolved through <code>rig</code>. <code>--bin-dir &lt;dir&gt;</code> overrides the launcher-directory environment variables for <code>ir tool install</code>. On macOS, <code>ir tool install</code> adds the default <code>~/.local/bin</code> directory to the zsh profile when needed. On Windows, it adds the default or environment-selected launcher directory to the user <code>Path</code>.</p>
 
 
 </section>
