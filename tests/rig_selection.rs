@@ -523,6 +523,50 @@ fn run_with_exclude_newer_frontmatter_errors_when_implicit_r_minor_is_missing() 
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_before_supported_r_release_floor_does_not_select_older_r() {
+    let cache_dir = unique_dir("ir-exclude-newer-old-r-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-old-r-bin");
+    let script = unique_path("ir-exclude-newer-old-r", "R");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        concat!(
+            "#!/bin/sh\n",
+            "case \"$1 $2\" in\n",
+            "  \"list --json\") echo '[]' ;;\n",
+            "  *) exit 64 ;;\n",
+            "esac\n",
+        ),
+    );
+
+    fs::write(&script, "#| exclude-newer: 2020-01-01\ncat('ignored')\n").unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["run", script.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr
+            .contains("could not resolve latest R minor version available before or on 2020-01-01"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(!stderr.contains("r-version: 3.6"), "{}", output_text(&out));
+    assert!(!stderr.contains("rig install 3.6"), "{}", output_text(&out));
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_file(&script);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_future_exclude_newer_uses_earliest_patch_release_date() {
     let cache_dir = unique_dir("ir-exclude-newer-minor-zero-date-cache");
     let bin_dir = unique_dir("ir-exclude-newer-minor-zero-date-bin");
