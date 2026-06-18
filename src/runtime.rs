@@ -179,7 +179,10 @@ fn resolve_library_inner(
         .env("IR_CACHE_DIR", &cache_dir)
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
-        .env("R_PKG_SHOW_PROGRESS", "true");
+        .env("R_PKG_SHOW_PROGRESS", "true")
+        // The RuntimeSpec owns snapshot selection. Do not let unsupported
+        // commands accidentally reach the resolver through ambient process env.
+        .env_remove("IR_EXCLUDE_NEWER");
     if let Some(paths) = &resolution_cache_paths {
         cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
     }
