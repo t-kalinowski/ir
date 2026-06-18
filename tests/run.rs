@@ -751,36 +751,77 @@ cat("ir.fixture=cli-exclude-newer-precedence\n")
 }
 
 #[test]
-fn run_rejects_blank_cli_exclude_newer() {
+fn run_empty_cli_exclude_newer_overrides_frontmatter_with_latest() {
+    let cache_dir = unique_dir("ir-empty-cli-exclude-newer-cache");
+    let script = unique_path("ir-empty-cli-exclude-newer", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| exclude-newer: 2024-01-01
+
+cat("ir.fixture=empty-cli-exclude-newer\n")
+"#,
+    )
+    .unwrap();
+
     let out = ir()
-        .args([
-            "run",
-            "--exclude-newer",
-            " \t ",
-            "--vanilla",
-            "-e",
-            "cat('ir.fixture=blank-cli-exclude-newer-ran\\n')",
-        ])
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--exclude-newer", " \t ", "--vanilla"])
+        .arg(&script)
         .output()
         .unwrap();
 
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=empty-cli-exclude-newer");
+
+    let marker_text = only_resolution_marker_text(&cache_dir);
     assert!(
-        !out.status.success(),
-        "blank --exclude-newer unexpectedly succeeded\n{}",
-        output_text(&out)
+        marker_text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("latest: ")),
+        "{marker_text}"
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--exclude-newer"), "{}", output_text(&out));
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_future_cli_exclude_newer_overrides_frontmatter_with_latest() {
+    let cache_dir = unique_dir("ir-future-cli-exclude-newer-cache");
+    let script = unique_path("ir-future-cli-exclude-newer", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| exclude-newer: 2024-01-01
+
+cat("ir.fixture=future-cli-exclude-newer\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--exclude-newer", "2999-01-01", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=future-cli-exclude-newer");
+
+    let marker_text = only_resolution_marker_text(&cache_dir);
     assert!(
-        stderr.contains("must not be empty"),
-        "{}",
-        output_text(&out)
+        marker_text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("latest: ")),
+        "{marker_text}"
     );
-    assert!(
-        !stdout(&out).contains("ir.fixture=blank-cli-exclude-newer-ran"),
-        "{}",
-        output_text(&out)
-    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[cfg(unix)]
@@ -878,6 +919,44 @@ cat("ir.fixture=empty-env-exclude-newer\n")
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=empty-env-exclude-newer");
+
+    let marker_text = only_resolution_marker_text(&cache_dir);
+    assert!(
+        marker_text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("latest: ")),
+        "{marker_text}"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn run_future_env_exclude_newer_overrides_frontmatter_with_latest() {
+    let cache_dir = unique_dir("ir-future-env-exclude-newer-cache");
+    let script = unique_path("ir-future-env-exclude-newer", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| exclude-newer: 2024-01-01
+
+cat("ir.fixture=future-env-exclude-newer\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXCLUDE_NEWER", "2999-01-01")
+        .args(["run", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=future-env-exclude-newer");
 
     let marker_text = only_resolution_marker_text(&cache_dir);
     assert!(
