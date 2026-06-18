@@ -972,6 +972,118 @@ cat("ir.fixture=future-env-exclude-newer\n")
 }
 
 #[test]
+fn run_future_frontmatter_exclude_newer_resolves_latest() {
+    let cache_dir = unique_dir("ir-future-frontmatter-exclude-newer-cache");
+    let script = unique_path("ir-future-frontmatter-exclude-newer", "R");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| exclude-newer: 2999-01-01
+
+cat("ir.fixture=future-frontmatter-exclude-newer\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=future-frontmatter-exclude-newer");
+
+    let marker_text = only_resolution_marker_text(&cache_dir);
+    assert!(
+        marker_text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("latest: ")),
+        "{marker_text}"
+    );
+
+    let _ = fs::remove_file(&script);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn render_future_frontmatter_exclude_newer_resolves_latest() {
+    let cache_dir = unique_dir("ir-render-future-frontmatter-exclude-newer-cache");
+    let library = unique_dir("ir-render-future-frontmatter-exclude-newer-library");
+    let doc = unique_path("ir-render-future-frontmatter-exclude-newer", "qmd");
+    let profile = unique_path("ir-render-future-frontmatter-exclude-newer-profile", "R");
+    let quarto = unique_path("ir-render-future-frontmatter-exclude-newer-quarto", "");
+    fs::write(
+        &doc,
+        r#"---
+title: Future frontmatter exclude newer
+ir:
+  exclude-newer: 2999-01-01
+---
+
+```{r}
+cat("ir.fixture=render-future-frontmatter-exclude-newer\n")
+```
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &profile,
+        r#"
+if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
+  library <- Sys.getenv("IR_TEST_LIBRARY")
+  dir.create(library, recursive = TRUE, showWarnings = FALSE)
+  marker <- Sys.getenv("IR_RESOLUTION_MARKER")
+  if (nzchar(marker)) {
+    dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
+    source <- if (nzchar(Sys.getenv("IR_EXCLUDE_NEWER"))) {
+      paste("exclude-newer:", Sys.getenv("IR_EXCLUDE_NEWER"))
+    } else {
+      "latest: 0"
+    }
+    writeLines(c(source, library), marker)
+  }
+  writeLines(library, Sys.getenv("IR_RESOLVE_RESULT_FILE"))
+  q(save = "no", status = 0)
+}
+"#,
+    )
+    .unwrap();
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .env("IR_RSCRIPT", rscript())
+        .env("IR_TEST_LIBRARY", &library)
+        .env("R_PROFILE_USER", &profile)
+        .args(["render"])
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+
+    let marker_text = only_resolution_marker_text(&cache_dir);
+    assert!(
+        marker_text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("latest: ")),
+        "{marker_text}"
+    );
+
+    let _ = fs::remove_file(&doc);
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_file(&quarto);
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
 fn run_frontmatter_github_ref_installs_github_package() {
     let cache_dir = unique_dir("ir-github-ref-cache");
     let script = unique_path("ir-github-ref", "R");

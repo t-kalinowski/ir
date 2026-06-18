@@ -106,6 +106,11 @@ fn apply_exclude_newer_override(
     if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
         let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
         spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
+        return Ok(());
+    }
+
+    if let Some(exclude_newer) = spec.exclude_newer.take() {
+        spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
     }
 
     Ok(())
