@@ -1101,6 +1101,72 @@ fn tool_install_recovery_command_preserves_ir_exclude_newer() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_command_uses_cmd_env_syntax_for_ir_exclude_newer() {
+    let cache_dir = unique_dir("ir-tool-install-windows-exclude-newer-cache");
+    let bin_dir = unique_dir("ir-tool-install-windows-exclude-newer-bin");
+    let rscript_dir = unique_dir("ir-tool-install-windows-exclude-newer-rscript");
+    let library = unique_dir("ir-tool-install-windows-exclude-newer-library");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("hello.R"),
+        "#!/usr/bin/env Rscript\r\ncat('hello\\n')\r\n",
+    )
+    .unwrap();
+
+    let rscript = rscript_dir.join("Rscript.bat");
+    fs::write(
+        &rscript,
+        concat!(
+            "@echo off\r\n",
+            "if not \"%IR_RESOLVE_RESULT_FILE%\"==\"\" (\r\n",
+            "  powershell -NoProfile -Command \"Set-Content -LiteralPath $env:IR_RESOLVE_RESULT_FILE -Value $env:IR_TEST_LIBRARY; Set-Content -LiteralPath $env:IR_RESOLVE_PACKAGE_RESULT_FILE -Value 'irfake'\"\r\n",
+            "  exit /B %ERRORLEVEL%\r\n",
+            ")\r\n",
+            "echo selected-rscript\r\n",
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXCLUDE_NEWER", "2024-06-01")
+        .env("IR_RSCRIPT", &rscript)
+        .env("IR_TEST_LIBRARY", &library)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    fs::remove_dir_all(&library).unwrap();
+    let out = Command::new(launcher_path(&bin_dir, "hello"))
+        .env_remove("IR_EXCLUDE_NEWER")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains(
+            "ir: run `set \"IR_EXCLUDE_NEWER=2024-06-01\" && ir tool install --force irfake`"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("IR_EXCLUDE_NEWER=2024-06-01 ir tool install"),
+        "{text}"
+    );
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn tool_install_with_rscript_wrapper_records_primary_package_marker() {

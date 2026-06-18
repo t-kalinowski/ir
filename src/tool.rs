@@ -1019,11 +1019,22 @@ fn tool_install_recovery_command(install: &ToolInstallArgs, exclude_newer: Optio
     words.push(command_word(&install.package_ref));
     let command = words.join(" ");
     match exclude_newer {
-        Some(exclude_newer) => {
-            format!("IR_EXCLUDE_NEWER={} {command}", command_word(exclude_newer))
-        }
+        Some(exclude_newer) => recovery_command_with_exclude_newer(&command, exclude_newer),
         None => command,
     }
+}
+
+#[cfg(unix)]
+fn recovery_command_with_exclude_newer(command: &str, exclude_newer: &str) -> String {
+    format!("IR_EXCLUDE_NEWER={} {command}", command_word(exclude_newer))
+}
+
+#[cfg(not(unix))]
+fn recovery_command_with_exclude_newer(command: &str, exclude_newer: &str) -> String {
+    format!(
+        "set \"IR_EXCLUDE_NEWER={}\" && {command}",
+        exclude_newer.replace('"', "\"\"")
+    )
 }
 
 fn command_word(value: &str) -> String {
@@ -1033,8 +1044,18 @@ fn command_word(value: &str) -> String {
     {
         value.to_string()
     } else {
-        sh_quote_str(value)
+        quoted_command_word(value)
     }
+}
+
+#[cfg(unix)]
+fn quoted_command_word(value: &str) -> String {
+    sh_quote_str(value)
+}
+
+#[cfg(not(unix))]
+fn quoted_command_word(value: &str) -> String {
+    cmd_quote_str(value)
 }
 
 #[cfg(unix)]
@@ -1145,6 +1166,9 @@ fn installed_launcher_contents(
     if let Some(path_assignment) = cmd_path_prefix_assignment(path_prefix)? {
         env_lines.push(path_assignment);
     }
+    let recovery_message = cmd_echo_text(&format!(
+        "ir: run `{recovery_command}` to recreate this launcher after `ir cache clean`."
+    ));
 
     Ok(format!(
         "@echo off\r\n\
@@ -1153,13 +1177,13 @@ fn installed_launcher_contents(
          set \"IR_LIBRARY={}\"\r\n\
          if not exist \"%IR_LIBRARY%\" (\r\n\
          echo ir: missing ir cache library: %IR_LIBRARY% 1>&2\r\n\
-         echo ir: run `{}` to recreate this launcher after `ir cache clean`. 1>&2\r\n\
+         echo {} 1>&2\r\n\
          exit /b 1\r\n\
          )\r\n\
          {}\r\n\
          {}\r\n",
         library,
-        recovery_command,
+        recovery_message,
         env_lines.join("\r\n"),
         cmd.join(" ")
     ))
@@ -1195,13 +1219,14 @@ fn sh_quote_os(value: &OsStr) -> String {
     sh_quote_str(&value.to_string_lossy())
 }
 
-fn sh_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 #[cfg(not(unix))]
 fn cmd_quote_path(path: &Path) -> Result<String, Box<dyn Error>> {
     Ok(cmd_quote_str(&launcher_path_str(path)?))
+}
+
+#[cfg(unix)]
+fn sh_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn launcher_path_str(path: &Path) -> Result<String, Box<dyn Error>> {
@@ -1237,6 +1262,19 @@ fn cmd_path_prefix_assignment(path_prefix: &[PathBuf]) -> Result<Option<String>,
     } else {
         Ok(Some(format!(r#"set "PATH={};%PATH%""#, paths.join(";"))))
     }
+}
+
+#[cfg(not(unix))]
+fn cmd_echo_text(value: &str) -> String {
+    value
+        .replace('%', "%%")
+        .replace('^', "^^")
+        .replace('&', "^&")
+        .replace('|', "^|")
+        .replace('<', "^<")
+        .replace('>', "^>")
+        .replace('(', "^(")
+        .replace(')', "^)")
 }
 
 fn executable_spawn_error(program: &OsStr, err: io::Error) -> String {

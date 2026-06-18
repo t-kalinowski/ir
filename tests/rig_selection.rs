@@ -544,7 +544,9 @@ fn run_with_future_exclude_newer_uses_earliest_patch_release_date() {
                 r#"[
 {{"name":"4.6.0","version":"4.6.0","date":"2027-03-11"}},
 {{"name":"4.7.1","version":"4.7.1","date":"2027-04-24"}},
-{{"name":"4.7.2","version":"4.7.2","date":"2027-07-01"}}
+{{"name":"4.7.2","version":"4.7.2","date":"2027-07-01"}},
+{{"name":"devel","version":"4.8.0","date":"2027-04-01"}},
+{{"name":"next","version":"4.9.0","date":"2027-04-01"}}
 ]"#,
                 "\nJSON\n",
                 "    ;;\n",

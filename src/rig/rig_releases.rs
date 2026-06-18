@@ -18,6 +18,8 @@ struct RMinorRelease<'a> {
 
 #[derive(serde::Deserialize)]
 struct RigAvailableRelease {
+    #[serde(default)]
+    name: Option<String>,
     version: String,
     date: Option<String>,
 }
@@ -82,6 +84,10 @@ fn available_minor_releases(
 fn minor_release_from_available(
     release: &RigAvailableRelease,
 ) -> Result<Option<RMinorRelease<'_>>, Box<dyn Error>> {
+    let name = release.name.as_deref().unwrap_or(&release.version);
+    if matches!(name, "devel" | "next") {
+        return Ok(None);
+    }
     let Some((major, minor)) = minor_version(&release.version) else {
         return Ok(None);
     };
