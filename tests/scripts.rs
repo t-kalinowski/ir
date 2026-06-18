@@ -191,6 +191,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 fn cli_tests_do_not_use_global_e2e_lock() {
     let tests = [
         "tests/run.rs",
+        "tests/resolver_lock.rs",
         "tests/rig_selection.rs",
         "tests/render.rs",
         "tests/tool.rs",
