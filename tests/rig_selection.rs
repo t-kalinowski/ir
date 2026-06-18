@@ -172,6 +172,96 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_major_r_version_selects_highest_installed_minor() {
+    let cache_dir = unique_dir("ir-major-version-cache");
+    let bin_dir = unique_dir("ir-major-version-bin");
+    let r43_dir = unique_dir("ir-major-version-r43");
+    let r45_dir = unique_dir("ir-major-version-r45");
+
+    let r43_binary = selected_r_binary(&r43_dir, "r43");
+    let r45_binary = selected_r_binary(&r45_dir, "r45");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "cat <<'JSON'\n",
+                r#"[
+{{"name":"4.3.3","version":"4.3.3","aliases":[],"binary":"{}"}},
+{{"name":"4.5.0","version":"4.5.0","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+            ),
+            r43_binary.display(),
+            r45_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--r-version", "4", "-e", "cat('ignored')"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r45");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r43_dir);
+    let _ = fs::remove_dir_all(&r45_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exact_major_r_version_selects_highest_installed_minor() {
+    let cache_dir = unique_dir("ir-exact-major-highest-cache");
+    let bin_dir = unique_dir("ir-exact-major-highest-bin");
+    let r43_dir = unique_dir("ir-exact-major-highest-r43");
+    let r45_dir = unique_dir("ir-exact-major-highest-r45");
+
+    let r43_binary = selected_r_binary(&r43_dir, "r43");
+    let r45_binary = selected_r_binary(&r45_dir, "r45");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "cat <<'JSON'\n",
+                r#"[
+{{"name":"4.3.3","version":"4.3.3","aliases":[],"binary":"{}"}},
+{{"name":"4.5.0","version":"4.5.0","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+            ),
+            r43_binary.display(),
+            r45_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--r-version", "== 4", "-e", "cat('ignored')"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r45");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r43_dir);
+    let _ = fs::remove_dir_all(&r45_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_exact_minor_r_version_selects_highest_installed_patch() {
     let cache_dir = unique_dir("ir-exact-minor-highest-cache");
     let bin_dir = unique_dir("ir-exact-minor-highest-bin");
@@ -319,6 +409,72 @@ fn run_with_exact_minor_r_version_errors_when_no_installed_patch_matches() {
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r43_dir);
     let _ = fs::remove_dir_all(&r45_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exact_major_r_version_errors_when_no_installed_minor_matches() {
+    let cache_dir = unique_dir("ir-exact-major-missing-cache");
+    let bin_dir = unique_dir("ir-exact-major-missing-bin");
+    let r3_dir = unique_dir("ir-exact-major-missing-r3");
+    let r5_dir = unique_dir("ir-exact-major-missing-r5");
+
+    let r3_binary = selected_r_binary(&r3_dir, "r3");
+    let r5_binary = selected_r_binary(&r5_dir, "r5");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1 $2\" in\n",
+                "  \"list --json\")\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"3.6.3","version":"3.6.3","aliases":[],"binary":"{}"}},
+{{"name":"5.0.0","version":"5.0.0","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  \"available --json\") echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r3_binary.display(),
+            r5_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["run", "--r-version", "== 4", "-e", "cat('ignored')"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("R == 4 is required"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
+        stderr.contains("Run `rig install 4`"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
+        !stderr.contains("unexpected available"),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r3_dir);
+    let _ = fs::remove_dir_all(&r5_dir);
 }
 
 #[cfg(unix)]
