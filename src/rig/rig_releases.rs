@@ -18,6 +18,16 @@ struct RMinorRelease<'a> {
     date: &'a str,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RPatchRelease<'a> {
+    name: &'a str,
+    version: &'a str,
+    major: u64,
+    minor: u64,
+    patch: u64,
+    date: &'a str,
+}
+
 #[derive(serde::Deserialize)]
 struct RigAvailableRelease {
     #[serde(default)]
@@ -38,6 +48,24 @@ pub(crate) fn latest_minor_version_on(exclude_newer: &str) -> Result<String, Box
     let available = all_available_releases()?;
     let release = latest_minor_release_on(exclude_newer, available_minor_releases(&available)?)?;
     Ok(release.version())
+}
+
+pub(crate) fn required_available_version(
+    req: &str,
+    requirement: &r_selection::VersionRequirement,
+    exclude_newer: &str,
+) -> Result<String, Box<dyn Error>> {
+    let available = all_available_releases()?;
+    available_patch_releases(&available)?
+        .into_iter()
+        .filter(|release| release.date <= exclude_newer)
+        .filter(|release| requirement.matches_release(release.name, release.version))
+        .max_by_key(|release| (release.major, release.minor, release.patch))
+        .map(|release| release.version.to_string())
+        .ok_or_else(|| {
+            format!("could not resolve R version `{req}` with available R versions before or on {exclude_newer}")
+                .into()
+        })
 }
 
 fn latest_minor_release_on<'a>(
@@ -87,11 +115,37 @@ fn available_minor_releases(
 fn minor_release_from_available(
     release: &RigAvailableRelease,
 ) -> Result<Option<RMinorRelease<'_>>, Box<dyn Error>> {
+    let Some(release) = patch_release_from_available(release)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(RMinorRelease {
+        major: release.major,
+        minor: release.minor,
+        date: release.date,
+    }))
+}
+
+fn available_patch_releases(
+    available: &[RigAvailableRelease],
+) -> Result<Vec<RPatchRelease<'_>>, Box<dyn Error>> {
+    let mut releases = Vec::new();
+    for release in available {
+        if let Some(release) = patch_release_from_available(release)? {
+            releases.push(release);
+        }
+    }
+    Ok(releases)
+}
+
+fn patch_release_from_available(
+    release: &RigAvailableRelease,
+) -> Result<Option<RPatchRelease<'_>>, Box<dyn Error>> {
     let name = release.name.as_deref().unwrap_or(&release.version);
     if matches!(name, "devel" | "next") {
         return Ok(None);
     }
-    let Some((major, minor)) = minor_version(&release.version) else {
+    let Some((major, minor, patch)) = version_parts(&release.version) else {
         return Ok(None);
     };
     let Some(date) = release.date.as_deref() else {
@@ -104,19 +158,26 @@ fn minor_release_from_available(
         )
     })?;
 
-    Ok(Some(RMinorRelease { major, minor, date }))
+    Ok(Some(RPatchRelease {
+        name,
+        version: &release.version,
+        major,
+        minor,
+        patch,
+        date,
+    }))
 }
 
-fn minor_version(version: &str) -> Option<(u64, u64)> {
+fn version_parts(version: &str) -> Option<(u64, u64, u64)> {
     let mut parts = version.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse().ok()?;
     if parts.next().is_some() {
         return None;
     }
 
-    Some((major, minor))
+    Some((major, minor, patch))
 }
 
 impl RMinorRelease<'_> {

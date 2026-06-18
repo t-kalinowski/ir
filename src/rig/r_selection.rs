@@ -84,6 +84,10 @@ pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
 }
 
 impl VersionRequirement {
+    pub(crate) fn matches_release(&self, name: &str, version: &str) -> bool {
+        self.matches_candidate(name, version, &[])
+    }
+
     fn matches_installed(&self, installed: &InstalledR) -> bool {
         self.matches_candidate(&installed.name, &installed.version, &installed.aliases)
     }
@@ -116,6 +120,9 @@ impl VersionRequirement {
                     VersionOp::Gte => compare_version_parts(&candidate, required_version).is_ge(),
                     VersionOp::Lt => compare_version_parts(&candidate, required_version).is_lt(),
                     VersionOp::Lte => compare_version_parts(&candidate, required_version).is_le(),
+                    VersionOp::Eq if required_version.len() < 3 => {
+                        candidate.starts_with(required_version)
+                    }
                     VersionOp::Eq => compare_version_parts(&candidate, required_version).is_eq(),
                 }
             }
