@@ -28,6 +28,7 @@ pub(crate) fn cmd_run(
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
+    apply_env_overrides(&mut spec)?;
     spec.dependencies.extend(with_deps.iter().cloned());
     if let Some(req) = r_requirement {
         spec.r_requirement = Some(req.to_string());
@@ -62,6 +63,7 @@ pub(crate) fn cmd_render(
     vanilla: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
+    apply_env_overrides(&mut spec)?;
     spec.dependencies.extend(with_deps.iter().cloned());
     spec.quarto_render = true;
     if let Some(req) = r_requirement {
@@ -88,6 +90,15 @@ pub(crate) fn rscript_for_spec(spec: &RuntimeSpec) -> Result<OsString, Box<dyn E
     };
 
     rig::resolve_rscript(req, spec.exclude_newer.as_deref())
+}
+
+fn apply_env_overrides(spec: &mut RuntimeSpec) -> Result<(), Box<dyn Error>> {
+    if let Some(exclude_newer) = nonempty_env("IR_EXCLUDE_NEWER") {
+        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
+        spec.exclude_newer = Some(exclude_newer.trim().to_string());
+    }
+
+    Ok(())
 }
 
 /// Return a cached materialised library path, or run the embedded driver in a
@@ -592,6 +603,12 @@ pub(crate) fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
 
 pub(crate) fn nonempty_env(name: &str) -> Option<OsString> {
     env::var_os(name).filter(|value| !value.is_empty())
+}
+
+fn env_string(name: &str, value: OsString) -> Result<String, Box<dyn Error>> {
+    value
+        .into_string()
+        .map_err(|_| format!("`{name}` must be valid UTF-8").into())
 }
 
 fn r_user_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
