@@ -501,6 +501,40 @@ fn cache_dir_ignores_r_user_cache_dir_from_r_environ_user() {
 }
 
 #[test]
+fn run_with_ir_cache_dir_does_not_require_home_cache_env_for_resolver_lock() {
+    let cache_dir = unique_dir("ir-cache-lock-override");
+    let profile = unique_path("ir-cache-lock-override-profile", "R");
+    fs::write(
+        &profile,
+        r#"
+if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
+  writeLines("", Sys.getenv("IR_RESOLVE_RESULT_FILE"))
+  q("no", status = 0L, runLast = FALSE)
+}
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env_remove("R_USER_CACHE_DIR")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("HOME")
+        .env_remove("LOCALAPPDATA")
+        .env_remove("USERPROFILE")
+        .args(["run", "--isolated", "--vanilla", "-e"])
+        .arg("cat('ir.fixture=cache-lock-override\n')")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=cache-lock-override");
+
+    let _ = fs::remove_file(&profile);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
 fn cache_clean_removes_cache_dir() {
     let cache_dir = unique_dir("ir-cache-clean");
     let library = cache_dir.join("libraries").join("library");
