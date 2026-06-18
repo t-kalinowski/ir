@@ -9,10 +9,9 @@ use std::process::Command;
 use saphyr::Yaml;
 
 use crate::cli::{is_package_executable_name, ToolInstallArgs, ToolRunArgs};
-#[cfg(any(target_os = "macos", not(unix)))]
-use crate::runtime::nonempty_env;
 use crate::runtime::{
-    apply_env_overrides, resolve_library_and_primary_package, rscript_for_spec, spawn_error,
+    apply_env_overrides, nonempty_env, resolve_library_and_primary_package, rscript_for_spec,
+    spawn_error,
 };
 use crate::spec::{load_first_yaml_document, RuntimeSpec};
 
@@ -72,7 +71,12 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript)?;
-    let reinstall_command = tool_install_recovery_command(install, spec.exclude_newer.as_deref());
+    let rscript_env = nonempty_env("IR_RSCRIPT");
+    let reinstall_command = tool_install_recovery_command(
+        install,
+        spec.exclude_newer.as_deref(),
+        rscript_env.as_deref(),
+    );
     for executable in &executables {
         let target = launcher_target_path(&install.bin_dir, &executable.name);
         if target.exists() && !install.force {
@@ -1001,7 +1005,11 @@ fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn tool_install_recovery_command(install: &ToolInstallArgs, exclude_newer: Option<&str>) -> String {
+fn tool_install_recovery_command(
+    install: &ToolInstallArgs,
+    exclude_newer: Option<&str>,
+    rscript: Option<&OsStr>,
+) -> String {
     let mut words = vec![
         "ir".to_string(),
         "tool".to_string(),
@@ -1018,23 +1026,53 @@ fn tool_install_recovery_command(install: &ToolInstallArgs, exclude_newer: Optio
     }
     words.push(command_word(&install.package_ref));
     let command = words.join(" ");
-    match exclude_newer {
-        Some(exclude_newer) => recovery_command_with_exclude_newer(&command, exclude_newer),
-        None => command,
-    }
+    recovery_command_with_env(&command, exclude_newer, rscript)
 }
 
 #[cfg(unix)]
-fn recovery_command_with_exclude_newer(command: &str, exclude_newer: &str) -> String {
-    format!("IR_EXCLUDE_NEWER={} {command}", command_word(exclude_newer))
+fn recovery_command_with_env(
+    command: &str,
+    exclude_newer: Option<&str>,
+    rscript: Option<&OsStr>,
+) -> String {
+    let mut assignments = Vec::new();
+    if let Some(exclude_newer) = exclude_newer {
+        assignments.push(format!("IR_EXCLUDE_NEWER={}", command_word(exclude_newer)));
+    }
+    if let Some(rscript) = rscript {
+        assignments.push(format!(
+            "IR_RSCRIPT={}",
+            command_word(&rscript.to_string_lossy())
+        ));
+    }
+
+    if assignments.is_empty() {
+        command.to_string()
+    } else {
+        format!("{} {command}", assignments.join(" "))
+    }
 }
 
 #[cfg(not(unix))]
-fn recovery_command_with_exclude_newer(command: &str, exclude_newer: &str) -> String {
-    format!(
-        "set \"IR_EXCLUDE_NEWER={}\" && {command}",
-        exclude_newer.replace('"', "\"\"")
-    )
+fn recovery_command_with_env(
+    command: &str,
+    exclude_newer: Option<&str>,
+    rscript: Option<&OsStr>,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(exclude_newer) = exclude_newer {
+        parts.push(cmd_set_env("IR_EXCLUDE_NEWER", exclude_newer));
+    }
+    if let Some(rscript) = rscript {
+        parts.push(cmd_set_env("IR_RSCRIPT", &rscript.to_string_lossy()));
+    }
+    parts.push(command.to_string());
+    parts.join(" && ")
+}
+
+#[cfg(not(unix))]
+fn cmd_set_env(name: &str, value: &str) -> String {
+    format!("set \"{name}={}\"", value.replace('"', "\"\""))
 }
 
 fn command_word(value: &str) -> String {

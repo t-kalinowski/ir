@@ -1101,6 +1101,69 @@ fn tool_install_recovery_command_preserves_ir_exclude_newer() {
     let _ = fs::remove_dir_all(&cache_dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn tool_install_recovery_command_preserves_ir_rscript_with_ir_exclude_newer() {
+    let cache_dir = unique_dir("ir-tool-install-env-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-env-rscript-bin");
+    let rscript_dir = unique_dir("ir-tool-install-env-rscript-r");
+    let library = unique_dir("ir-tool-install-env-rscript-library");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(
+        &exec_dir.join("hello.R"),
+        "#!/usr/bin/env Rscript\ncat('hello\\n')\n",
+    );
+
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected-rscript\n",
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXCLUDE_NEWER", "2024-06-01")
+        .env("IR_RSCRIPT", &rscript)
+        .env("IR_TEST_LIBRARY", &library)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    fs::remove_dir_all(&library).unwrap();
+    let out = Command::new(launcher_path(&bin_dir, "hello"))
+        .env_remove("IR_EXCLUDE_NEWER")
+        .env_remove("IR_RSCRIPT")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains(&format!(
+            "ir: run `IR_EXCLUDE_NEWER=2024-06-01 IR_RSCRIPT={} ir tool install --force irfake`",
+            rscript.display()
+        )),
+        "{text}"
+    );
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
 #[cfg(windows)]
 #[test]
 fn tool_install_recovery_command_uses_cmd_env_syntax_for_ir_exclude_newer() {
@@ -1151,9 +1214,10 @@ fn tool_install_recovery_command_uses_cmd_env_syntax_for_ir_exclude_newer() {
     assert!(!out.status.success(), "{}", output_text(&out));
     let text = output_text(&out);
     assert!(
-        text.contains(
-            "ir: run `set \"IR_EXCLUDE_NEWER=2024-06-01\" && ir tool install --force irfake`"
-        ),
+        text.contains(&format!(
+            "ir: run `set \"IR_EXCLUDE_NEWER=2024-06-01\" && set \"IR_RSCRIPT={}\" && ir tool install --force irfake`",
+            rscript.display()
+        )),
         "{text}"
     );
     assert!(
