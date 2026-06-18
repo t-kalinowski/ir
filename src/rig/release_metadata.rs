@@ -1,10 +1,7 @@
-use std::borrow::Cow;
-
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ReleaseMetadata<'a> {
-    pub(crate) name: Cow<'a, str>,
-    pub(crate) version: Cow<'a, str>,
-    pub(crate) date: Cow<'a, str>,
+pub(crate) struct ReleaseMetadata {
+    pub(crate) version: String,
+    pub(crate) date: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -21,7 +18,7 @@ struct RVersionRelease {
 pub(crate) fn parse_release_metadata_json(
     json: &str,
     source: &str,
-) -> Result<Vec<ReleaseMetadata<'static>>, String> {
+) -> Result<Vec<ReleaseMetadata>, String> {
     let versions: Vec<RVersionRelease> =
         serde_json::from_str(json).map_err(|e| format!("failed to parse {source} JSON: {e}"))?;
     let mut releases = Vec::new();
@@ -47,9 +44,8 @@ pub(crate) fn parse_release_metadata_json(
             })?
             .to_string();
         releases.push(ReleaseMetadata {
-            name: Cow::Owned(name.to_string()),
-            version: Cow::Owned(release_version),
-            date: Cow::Owned(date),
+            version: release_version,
+            date,
         });
     }
 

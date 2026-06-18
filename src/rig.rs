@@ -6,7 +6,7 @@ mod rig_client;
 mod rig_releases;
 
 pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsString, Box<dyn Error>> {
-    let exclude_newer = exclude_newer
+    exclude_newer
         .map(|value| r_selection::parse_iso_date_field("exclude-newer", value))
         .transpose()?;
     let requirement = r_selection::parse_version_requirement(req)?;
@@ -16,13 +16,7 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
         return installed.rscript();
     }
 
-    let required =
-        rig_releases::required_available_version(req, &requirement, exclude_newer.as_deref())?;
-    Err(format!(
-        "R {} is required but is not installed. Run `rig install {}`.",
-        required.version, required.name
-    )
-    .into())
+    Err(missing_r_version_error(req, &requirement).into())
 }
 
 pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
@@ -39,4 +33,14 @@ pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString
         "`exclude-newer` {exclude_newer} implies `r-version: {req}` because R {req} was the latest R minor version available on that date, but no matching R is installed. Run `rig install {req}`, or specify `r-version` or `--r-version` to use a different installed R."
     )
     .into())
+}
+
+fn missing_r_version_error(req: &str, requirement: &r_selection::VersionRequirement) -> String {
+    if let Some(version) = r_selection::rig_install_hint(requirement) {
+        return format!("R {req} is required but is not installed. Run `rig install {version}`.");
+    }
+
+    format!(
+        "R {req} is required but no matching R is installed. Install a matching R with `rig install`, or specify a different `r-version` or `--r-version`."
+    )
 }

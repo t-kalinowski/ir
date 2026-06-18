@@ -2,13 +2,6 @@ use std::error::Error;
 
 use super::rig_client::InstalledR;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RReleaseCandidate<'a> {
-    pub(crate) install_name: Option<&'a str>,
-    pub(crate) version: &'a str,
-    pub(crate) date: Option<&'a str>,
-}
-
 #[derive(Debug)]
 pub(crate) enum VersionRequirement {
     Bare(String),
@@ -69,55 +62,16 @@ pub(crate) fn select_installed_r<'a>(
         .max_by(|a, b| compare_versions(&a.version, &b.version))
 }
 
-pub(crate) fn select_available_candidate<'a>(
-    req: &str,
-    requirement: &VersionRequirement,
-    exclude_newer: Option<&str>,
-    candidates: impl IntoIterator<Item = RReleaseCandidate<'a>>,
-) -> Result<RReleaseCandidate<'a>, Box<dyn Error>> {
-    candidates
-        .into_iter()
-        .filter(|version| released_before_or_on(version, exclude_newer))
-        .filter(|version| {
-            requirement.matches_candidate(
-                version.install_name.unwrap_or(version.version),
-                version.version,
-                &[],
-            )
-        })
-        .max_by(|a, b| compare_versions(a.version, b.version))
-        .ok_or_else(|| {
-            let suffix = exclude_newer
-                .map(|date| format!(" before or on {date}"))
-                .unwrap_or_default();
-            format!("could not resolve R version `{req}` with available R versions{suffix}").into()
-        })
-}
-
-pub(crate) fn select_latest_available_candidate<'a>(
-    exclude_newer: &str,
-    candidates: impl IntoIterator<Item = RReleaseCandidate<'a>>,
-) -> Result<RReleaseCandidate<'a>, Box<dyn Error>> {
-    candidates
-        .into_iter()
-        .filter(|version| released_before_or_on(version, Some(exclude_newer)))
-        .max_by(|a, b| compare_versions(a.version, b.version))
-        .ok_or_else(|| {
-            format!("could not resolve latest R version available before or on {exclude_newer}")
-                .into()
-        })
-}
-
-pub(crate) fn major_minor_version(version: &str) -> Result<String, Box<dyn Error>> {
-    let parts = parse_version(version)
-        .ok_or_else(|| format!("R version `{version}` is not a numeric version"))?;
-    if parts.len() < 2 {
-        return Err(
-            format!("R version `{version}` does not include a major and minor version").into(),
-        );
+pub(crate) fn rig_install_hint(requirement: &VersionRequirement) -> Option<&str> {
+    match requirement {
+        VersionRequirement::Bare(req) => Some(req),
+        VersionRequirement::Comparison {
+            op: VersionOp::Eq,
+            raw,
+            ..
+        } => Some(raw),
+        VersionRequirement::Comparison { .. } => None,
     }
-
-    Ok(format!("{}.{}", parts[0], parts[1]))
 }
 
 pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
@@ -127,16 +81,6 @@ pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-fn released_before_or_on(version: &RReleaseCandidate<'_>, exclude_newer: Option<&str>) -> bool {
-    let Some(exclude_newer) = exclude_newer else {
-        return true;
-    };
-    let Some(date) = version.date.and_then(iso_date_prefix) else {
-        return false;
-    };
-    date <= exclude_newer
 }
 
 impl VersionRequirement {

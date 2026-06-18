@@ -4,13 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub(crate) struct AvailableR {
-    pub(crate) name: String,
-    pub(crate) version: String,
-    pub(crate) date: Option<String>,
-}
-
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct InstalledR {
     pub(crate) name: String,
@@ -18,10 +11,6 @@ pub(crate) struct InstalledR {
     #[serde(default)]
     pub(crate) aliases: Vec<String>,
     binary: PathBuf,
-}
-
-pub(crate) fn available() -> Result<Vec<AvailableR>, Box<dyn Error>> {
-    rig_json(&["available", "--json"])
 }
 
 pub(crate) fn list() -> Result<Vec<InstalledR>, Box<dyn Error>> {
