@@ -1016,6 +1016,93 @@ fn tool_install_with_path_rscript_symlink_records_target() {
 
 #[cfg(unix)]
 #[test]
+fn tool_install_recovery_command_preserves_ir_exclude_newer() {
+    let cache_dir = unique_dir("ir-tool-install-exclude-newer-cache");
+    let bin_dir = unique_dir("ir-tool-install-exclude-newer-bin");
+    let rig_dir = unique_dir("ir-tool-install-exclude-newer-rig");
+    let r_dir = unique_dir("ir-tool-install-exclude-newer-r");
+    let library = unique_dir("ir-tool-install-exclude-newer-library");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(
+        &exec_dir.join("hello.R"),
+        "#!/usr/bin/env Rscript\ncat('hello\\n')\n",
+    );
+
+    let r_binary = r_dir.join("R");
+    let rscript = r_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected-rscript\n",
+        ),
+    );
+    write_executable(
+        &rig_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1 $2\" in\n",
+                "  \"list --json\")\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r_binary.display(),
+        ),
+    );
+    let path = std::env::join_paths(
+        std::iter::once(rig_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXCLUDE_NEWER", "2024-06-01")
+        .env("IR_TEST_LIBRARY", &library)
+        .env("PATH", path)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    fs::remove_dir_all(&library).unwrap();
+    let out = Command::new(launcher_path(&bin_dir, "hello"))
+        .env_remove("IR_EXCLUDE_NEWER")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains("ir: run `IR_EXCLUDE_NEWER=2024-06-01 ir tool install --force irfake`"),
+        "{text}"
+    );
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&r_dir);
+    let _ = fs::remove_dir_all(&rig_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn tool_install_with_rscript_wrapper_records_primary_package_marker() {
     let cache_dir = unique_dir("ir-wrapper-tool-install-cache");
     let bin_dir = unique_dir("ir-wrapper-tool-install-bin");

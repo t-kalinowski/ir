@@ -72,7 +72,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript)?;
-    let reinstall_command = tool_install_recovery_command(install);
+    let reinstall_command = tool_install_recovery_command(install, spec.exclude_newer.as_deref());
     for executable in &executables {
         let target = launcher_target_path(&install.bin_dir, &executable.name);
         if target.exists() && !install.force {
@@ -1001,7 +1001,7 @@ fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
+fn tool_install_recovery_command(install: &ToolInstallArgs, exclude_newer: Option<&str>) -> String {
     let mut words = vec![
         "ir".to_string(),
         "tool".to_string(),
@@ -1017,7 +1017,13 @@ fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
         words.push(command_word(req));
     }
     words.push(command_word(&install.package_ref));
-    words.join(" ")
+    let command = words.join(" ");
+    match exclude_newer {
+        Some(exclude_newer) => {
+            format!("IR_EXCLUDE_NEWER={} {command}", command_word(exclude_newer))
+        }
+        None => command,
+    }
 }
 
 fn command_word(value: &str) -> String {
