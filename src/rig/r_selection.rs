@@ -2,6 +2,13 @@ use std::error::Error;
 
 use super::rig_client::InstalledR;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AvailableCandidate<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) date: Option<&'a str>,
+}
+
 #[derive(Debug)]
 pub(crate) enum VersionRequirement {
     Bare(String),
@@ -62,6 +69,25 @@ pub(crate) fn select_installed_r<'a>(
         .max_by(|a, b| compare_versions(&a.version, &b.version))
 }
 
+pub(crate) fn select_available_candidate<'a>(
+    req: &str,
+    requirement: &VersionRequirement,
+    exclude_newer: Option<&str>,
+    candidates: impl IntoIterator<Item = AvailableCandidate<'a>>,
+) -> Result<AvailableCandidate<'a>, Box<dyn Error>> {
+    candidates
+        .into_iter()
+        .filter(|version| released_before_or_on(version, exclude_newer))
+        .filter(|version| requirement.matches_candidate(version.name, version.version, &[]))
+        .max_by(|a, b| compare_versions(a.version, b.version))
+        .ok_or_else(|| {
+            let suffix = exclude_newer
+                .map(|date| format!(" before or on {date}"))
+                .unwrap_or_default();
+            format!("could not resolve R version `{req}` with available R versions{suffix}").into()
+        })
+}
+
 pub(crate) fn rig_install_hint(requirement: &VersionRequirement) -> Option<&str> {
     match requirement {
         VersionRequirement::Bare(req) => Some(req),
@@ -83,11 +109,17 @@ pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
     }
 }
 
-impl VersionRequirement {
-    pub(crate) fn matches_release(&self, name: &str, version: &str) -> bool {
-        self.matches_candidate(name, version, &[])
-    }
+fn released_before_or_on(version: &AvailableCandidate<'_>, exclude_newer: Option<&str>) -> bool {
+    let Some(exclude_newer) = exclude_newer else {
+        return true;
+    };
+    let Some(date) = version.date.and_then(iso_date_prefix) else {
+        return false;
+    };
+    date <= exclude_newer
+}
 
+impl VersionRequirement {
     fn matches_installed(&self, installed: &InstalledR) -> bool {
         self.matches_candidate(&installed.name, &installed.version, &installed.aliases)
     }

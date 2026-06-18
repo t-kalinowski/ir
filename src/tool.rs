@@ -9,10 +9,9 @@ use std::process::Command;
 use saphyr::Yaml;
 
 use crate::cli::{is_package_executable_name, ToolInstallArgs, ToolRunArgs};
-use crate::runtime::{
-    apply_env_overrides, nonempty_env, resolve_library_and_primary_package, rscript_for_spec,
-    spawn_error,
-};
+#[cfg(any(target_os = "macos", not(unix)))]
+use crate::runtime::nonempty_env;
+use crate::runtime::{resolve_library_and_primary_package, rscript_for_spec, spawn_error};
 use crate::spec::{load_first_yaml_document, RuntimeSpec};
 
 pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
@@ -22,7 +21,6 @@ pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
         dependencies: deps,
         ..RuntimeSpec::default()
     };
-    apply_env_overrides(&mut spec)?;
     if let Some(req) = &run.r_requirement {
         spec.r_requirement = Some(req.clone());
     }
@@ -46,7 +44,6 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
         ..RuntimeSpec::default()
     };
     spec.dependencies.extend(install.with_deps.iter().cloned());
-    apply_env_overrides(&mut spec)?;
     if let Some(req) = &install.r_requirement {
         spec.r_requirement = Some(req.clone());
     }
@@ -71,12 +68,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript)?;
-    let rscript_env = nonempty_env("IR_RSCRIPT");
-    let reinstall_command = tool_install_recovery_command(
-        install,
-        spec.exclude_newer.as_deref(),
-        rscript_env.as_deref(),
-    );
+    let reinstall_command = tool_install_recovery_command(install);
     for executable in &executables {
         let target = launcher_target_path(&install.bin_dir, &executable.name);
         if target.exists() && !install.force {
@@ -1005,11 +997,7 @@ fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn tool_install_recovery_command(
-    install: &ToolInstallArgs,
-    exclude_newer: Option<&str>,
-    rscript: Option<&OsStr>,
-) -> String {
+fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
     let mut words = vec![
         "ir".to_string(),
         "tool".to_string(),
@@ -1025,54 +1013,7 @@ fn tool_install_recovery_command(
         words.push(command_word(req));
     }
     words.push(command_word(&install.package_ref));
-    let command = words.join(" ");
-    recovery_command_with_env(&command, exclude_newer, rscript)
-}
-
-#[cfg(unix)]
-fn recovery_command_with_env(
-    command: &str,
-    exclude_newer: Option<&str>,
-    rscript: Option<&OsStr>,
-) -> String {
-    let mut assignments = Vec::new();
-    if let Some(exclude_newer) = exclude_newer {
-        assignments.push(format!("IR_EXCLUDE_NEWER={}", command_word(exclude_newer)));
-    }
-    if let Some(rscript) = rscript {
-        assignments.push(format!(
-            "IR_RSCRIPT={}",
-            command_word(&rscript.to_string_lossy())
-        ));
-    }
-
-    if assignments.is_empty() {
-        command.to_string()
-    } else {
-        format!("{} {command}", assignments.join(" "))
-    }
-}
-
-#[cfg(not(unix))]
-fn recovery_command_with_env(
-    command: &str,
-    exclude_newer: Option<&str>,
-    rscript: Option<&OsStr>,
-) -> String {
-    let mut parts = Vec::new();
-    if let Some(exclude_newer) = exclude_newer {
-        parts.push(cmd_set_env("IR_EXCLUDE_NEWER", exclude_newer));
-    }
-    if let Some(rscript) = rscript {
-        parts.push(cmd_set_env("IR_RSCRIPT", &rscript.to_string_lossy()));
-    }
-    parts.push(command.to_string());
-    parts.join(" && ")
-}
-
-#[cfg(not(unix))]
-fn cmd_set_env(name: &str, value: &str) -> String {
-    format!("set \"{name}={}\"", value.replace('"', "\"\""))
+    words.join(" ")
 }
 
 fn command_word(value: &str) -> String {
@@ -1082,18 +1023,8 @@ fn command_word(value: &str) -> String {
     {
         value.to_string()
     } else {
-        quoted_command_word(value)
+        sh_quote_str(value)
     }
-}
-
-#[cfg(unix)]
-fn quoted_command_word(value: &str) -> String {
-    sh_quote_str(value)
-}
-
-#[cfg(not(unix))]
-fn quoted_command_word(value: &str) -> String {
-    cmd_quote_str(value)
 }
 
 #[cfg(unix)]
@@ -1204,9 +1135,6 @@ fn installed_launcher_contents(
     if let Some(path_assignment) = cmd_path_prefix_assignment(path_prefix)? {
         env_lines.push(path_assignment);
     }
-    let recovery_message = cmd_echo_text(&format!(
-        "ir: run `{recovery_command}` to recreate this launcher after `ir cache clean`."
-    ));
 
     Ok(format!(
         "@echo off\r\n\
@@ -1215,13 +1143,13 @@ fn installed_launcher_contents(
          set \"IR_LIBRARY={}\"\r\n\
          if not exist \"%IR_LIBRARY%\" (\r\n\
          echo ir: missing ir cache library: %IR_LIBRARY% 1>&2\r\n\
-         echo {} 1>&2\r\n\
+         echo ir: run `{}` to recreate this launcher after `ir cache clean`. 1>&2\r\n\
          exit /b 1\r\n\
          )\r\n\
          {}\r\n\
          {}\r\n",
         library,
-        recovery_message,
+        recovery_command,
         env_lines.join("\r\n"),
         cmd.join(" ")
     ))
@@ -1257,14 +1185,13 @@ fn sh_quote_os(value: &OsStr) -> String {
     sh_quote_str(&value.to_string_lossy())
 }
 
+fn sh_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[cfg(not(unix))]
 fn cmd_quote_path(path: &Path) -> Result<String, Box<dyn Error>> {
     Ok(cmd_quote_str(&launcher_path_str(path)?))
-}
-
-#[cfg(unix)]
-fn sh_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn launcher_path_str(path: &Path) -> Result<String, Box<dyn Error>> {
@@ -1300,19 +1227,6 @@ fn cmd_path_prefix_assignment(path_prefix: &[PathBuf]) -> Result<Option<String>,
     } else {
         Ok(Some(format!(r#"set "PATH={};%PATH%""#, paths.join(";"))))
     }
-}
-
-#[cfg(not(unix))]
-fn cmd_echo_text(value: &str) -> String {
-    value
-        .replace('%', "%%")
-        .replace('^', "^^")
-        .replace('&', "^&")
-        .replace('|', "^|")
-        .replace('<', "^<")
-        .replace('>', "^>")
-        .replace('(', "^(")
-        .replace(')', "^)")
 }
 
 fn executable_spawn_error(program: &OsStr, err: io::Error) -> String {

@@ -553,21 +553,132 @@ fn run_with_missing_r_version_does_not_query_available_releases() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exact_minor_r_version_and_exclude_newer_uses_patch_release_hint() {
-    let cache_dir = unique_dir("ir-exact-minor-exclude-newer-cache");
-    let bin_dir = unique_dir("ir-exact-minor-exclude-newer-bin");
+fn run_with_exclude_newer_selects_latest_available_minor_r() {
+    let cache_dir = unique_dir("ir-exclude-newer-r-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-bin");
+    let r43_dir = unique_dir("ir-exclude-newer-r43");
+    let r44_dir = unique_dir("ir-exclude-newer-r44");
+
+    let r43_binary = selected_r_binary(&r43_dir, "r43");
+    let r44_binary = selected_r_binary(&r44_dir, "r44");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.3.3","version":"4.3.3","aliases":[],"binary":"{}"}},
+{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available)\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.3.0","version":"4.3.0","date":"2023-04-21T07:06:14Z"}},
+{{"name":"4.4.0","version":"4.4.0","date":"2024-04-24T04:07:56Z"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r43_binary.display(),
+            r44_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            "2024-03-15",
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r43");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r43_dir);
+    let _ = fs::remove_dir_all(&r44_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_ir_rscript_and_exclude_newer_skips_rig_selection() {
+    let cache_dir = unique_dir("ir-env-rscript-exclude-newer-cache");
+    let bin_dir = unique_dir("ir-env-rscript-exclude-newer-bin");
+    let rscript_dir = unique_dir("ir-env-rscript-exclude-newer-r");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        concat!("#!/bin/sh\n", "echo unexpected rig >&2\n", "exit 65\n",),
+    );
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  : > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=env-rscript\n",
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_EXCLUDE_NEWER", "2024-03-15")
+        .env("IR_RSCRIPT", &rscript)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .args(["run", "-e", "cat('ignored')"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=env-rscript");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("unexpected rig"),
+        "{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&rscript_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_minor_r_version_with_exclude_newer_reports_available_patch() {
+    let cache_dir = unique_dir("ir-exclude-newer-missing-r-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-missing-r-bin");
 
     write_executable(
         &bin_dir.join("rig"),
         concat!(
             "#!/bin/sh\n",
-            "case \"$1 $2 $3\" in\n",
-            "  \"list --json \") echo '[]' ;;\n",
-            "  \"available --all --json\")\n",
+            "case \"$1\" in\n",
+            "  list) echo '[]' ;;\n",
+            "  available)\n",
             "    cat <<'JSON'\n",
             r#"[
-{"name":"4.4.1","version":"4.4.1","date":"2024-06-14"},
-{"name":"4.4.3","version":"4.4.3","date":"2025-02-28"}
+{"name":"4.4.0","version":"4.4.0","date":"2024-04-24T04:07:56Z"},
+{"name":"4.4.1","version":"4.4.1","date":"2024-06-14T07:08:17Z"},
+{"name":"4.4.2","version":"4.4.2","date":"2024-10-31T08:09:02Z"}
 ]"#,
             "\nJSON\n",
             "    ;;\n",
@@ -579,26 +690,28 @@ fn run_with_exact_minor_r_version_and_exclude_newer_uses_patch_release_hint() {
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("PATH", path_with_bin_dir(&bin_dir))
-        .env("IR_EXCLUDE_NEWER", "2024-06-15")
         .env_remove("IR_RSCRIPT")
-        .args(["run", "--r-version", "== 4.4", "-e", "cat('ignored')"])
+        .args([
+            "run",
+            "--r-version",
+            "4.4",
+            "--exclude-newer",
+            "2024-06-20",
+            "-e",
+            "cat('ignored')",
+        ])
         .output()
         .unwrap();
 
     assert!(!out.status.success(), "{}", output_text(&out));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("R 4.4.1 is required"),
+        stderr.contains("R 4.4.1 is required but is not installed"),
         "{}",
         output_text(&out)
     );
     assert!(
         stderr.contains("Run `rig install 4.4.1`"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(
-        !stderr.contains("R 4.4.3 is required"),
         "{}",
         output_text(&out)
     );
@@ -675,348 +788,6 @@ fn run_without_r_version_uses_rscript_on_path_when_rig_has_default() {
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&rig_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_frontmatter_selects_implicit_r_minor() {
-    let cache_dir = unique_dir("ir-exclude-newer-r-version-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r-version-bin");
-    let r43_dir = unique_dir("ir-exclude-newer-r43");
-    let r44_dir = unique_dir("ir-exclude-newer-r44");
-    let script = unique_path("ir-exclude-newer-r-version", "R");
-
-    selected_r_binary(&bin_dir, "path");
-    let r43_binary = selected_r_binary(&r43_dir, "r43");
-    let r44_binary = selected_r_binary(&r44_dir, "r44");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "cat <<'JSON'\n",
-                r#"[
-{{"name":"4.3.2","version":"4.3.2","aliases":[],"binary":"{}"}},
-{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-            ),
-            r43_binary.display(),
-            r44_binary.display(),
-        ),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2024-01-15\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r43");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r43_dir);
-    let _ = fs::remove_dir_all(&r44_dir);
-    let _ = fs::remove_file(&script);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_uses_ir_rscript_when_set() {
-    let cache_dir = unique_dir("ir-exclude-newer-ir-rscript-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-ir-rscript-bin");
-    let r_dir = unique_dir("ir-exclude-newer-ir-rscript-r");
-    let script = unique_path("ir-exclude-newer-ir-rscript", "R");
-
-    selected_r_binary(&r_dir, "custom");
-    let rscript = r_dir.join("Rscript");
-    write_executable(
-        &bin_dir.join("rig"),
-        concat!("#!/bin/sh\n", "echo unexpected rig >&2\n", "exit 65\n",),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2024-01-15\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env("IR_RSCRIPT", &rscript)
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=custom");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r_dir);
-    let _ = fs::remove_file(&script);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_ir_exclude_newer_overrides_frontmatter_for_implicit_r() {
-    let cache_dir = unique_dir("ir-env-exclude-newer-cache");
-    let bin_dir = unique_dir("ir-env-exclude-newer-bin");
-    let r43_dir = unique_dir("ir-env-exclude-newer-r43");
-    let r44_dir = unique_dir("ir-env-exclude-newer-r44");
-    let script = unique_path("ir-env-exclude-newer", "R");
-
-    let r43_binary = selected_r_binary(&r43_dir, "r43");
-    let r44_binary = selected_r_binary(&r44_dir, "r44");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "cat <<'JSON'\n",
-                r#"[
-{{"name":"4.3.3","version":"4.3.3","aliases":[],"binary":"{}"}},
-{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-            ),
-            r43_binary.display(),
-            r44_binary.display(),
-        ),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2024-01-15\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env("IR_EXCLUDE_NEWER", "2024-06-01")
-        .env_remove("IR_RSCRIPT")
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r44");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r43_dir);
-    let _ = fs::remove_dir_all(&r44_dir);
-    let _ = fs::remove_file(&script);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_cli_r_version_overrides_ir_exclude_newer_for_r_selection() {
-    let cache_dir = unique_dir("ir-cli-r-version-env-exclude-newer-cache");
-    let bin_dir = unique_dir("ir-cli-r-version-env-exclude-newer-bin");
-    let r43_dir = unique_dir("ir-cli-r-version-env-exclude-newer-r43");
-    let r44_dir = unique_dir("ir-cli-r-version-env-exclude-newer-r44");
-
-    let r43_binary = selected_r_binary(&r43_dir, "r43");
-    let r44_binary = selected_r_binary(&r44_dir, "r44");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "cat <<'JSON'\n",
-                r#"[
-{{"name":"4.3.3","version":"4.3.3","aliases":[],"binary":"{}"}},
-{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-            ),
-            r43_binary.display(),
-            r44_binary.display(),
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env("IR_EXCLUDE_NEWER", "2024-06-01")
-        .env_remove("IR_RSCRIPT")
-        .args(["run", "--r-version", "4.3", "-e", "cat('ignored')"])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r43");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r43_dir);
-    let _ = fs::remove_dir_all(&r44_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_frontmatter_errors_when_implicit_r_minor_is_missing() {
-    let cache_dir = unique_dir("ir-exclude-newer-missing-r-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-missing-r-bin");
-    let r44_dir = unique_dir("ir-exclude-newer-missing-r44");
-    let script = unique_path("ir-exclude-newer-missing-r", "R");
-
-    let r44_binary = selected_r_binary(&r44_dir, "r44");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "cat <<'JSON'\n",
-                r#"[{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}]"#,
-                "\nJSON\n",
-            ),
-            r44_binary.display()
-        ),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2024-01-15\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("`exclude-newer` 2024-01-15 implies `r-version: 4.3`"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(
-        stderr.contains("Run `rig install 4.3`"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(stderr.contains("`--r-version`"), "{}", output_text(&out));
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r44_dir);
-    let _ = fs::remove_file(&script);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_before_supported_r_release_floor_does_not_select_older_r() {
-    let cache_dir = unique_dir("ir-exclude-newer-old-r-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-old-r-bin");
-    let script = unique_path("ir-exclude-newer-old-r", "R");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$1 $2\" in\n",
-            "  \"list --json\") echo '[]' ;;\n",
-            "  *) exit 64 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2020-01-01\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr
-            .contains("could not resolve latest R minor version available before or on 2020-01-01"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(!stderr.contains("r-version: 3.6"), "{}", output_text(&out));
-    assert!(!stderr.contains("rig install 3.6"), "{}", output_text(&out));
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_file(&script);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_future_exclude_newer_uses_earliest_patch_release_date() {
-    let cache_dir = unique_dir("ir-exclude-newer-minor-zero-date-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-minor-zero-date-bin");
-    let r46_dir = unique_dir("ir-exclude-newer-minor-zero-date-r46");
-    let r47_dir = unique_dir("ir-exclude-newer-minor-zero-date-r47");
-    let script = unique_path("ir-exclude-newer-minor-zero-date", "R");
-
-    let r46_binary = selected_r_binary(&r46_dir, "r46");
-    let r47_binary = selected_r_binary(&r47_dir, "r47");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "case \"$1 $2 $3\" in\n",
-                "  \"available --all --json\")\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"4.6.0","version":"4.6.0","date":"2027-03-11"}},
-{{"name":"4.7.1","version":"4.7.1","date":"2027-04-24"}},
-{{"name":"4.7.2","version":"4.7.2","date":"2027-07-01"}},
-{{"name":"devel","version":"4.8.0","date":"2027-04-01"}},
-{{"name":"next","version":"4.9.0","date":"2027-04-01"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  \"list --json \")\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"4.6.3","version":"4.6.3","aliases":[],"binary":"{}"}},
-{{"name":"4.7.2","version":"4.7.2","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  *) exit 64 ;;\n",
-                "esac\n",
-            ),
-            r46_binary.display(),
-            r47_binary.display(),
-        ),
-    );
-
-    fs::write(&script, "#| exclude-newer: 2027-05-01\ncat('ignored')\n").unwrap();
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args(["run", script.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r47");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r46_dir);
-    let _ = fs::remove_dir_all(&r47_dir);
-    let _ = fs::remove_file(&script);
 }
 
 #[cfg(unix)]
@@ -1512,7 +1283,7 @@ fn render_without_r_version_pins_quarto_to_rscript_bat_target() {
         .env("PATH", path)
         .env("IR_QUARTO", bin_dir.join("quarto.bat"))
         .env("IR_EXPECTED_QUARTO_R", &expected_rscript)
-        .env_remove("IR_RSCRIPT")
+        .env("IR_RSCRIPT", "Rscript.bat")
         .arg("render")
         .arg(&doc)
         .output()
