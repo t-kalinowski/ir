@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ReleaseMetadata {
-    pub(crate) version: String,
+pub(crate) struct RMinorReleaseMetadata {
+    pub(crate) major: u64,
+    pub(crate) minor: u64,
     pub(crate) date: String,
 }
 
@@ -18,10 +21,10 @@ struct RVersionRelease {
 pub(crate) fn parse_release_metadata_json(
     json: &str,
     source: &str,
-) -> Result<Vec<ReleaseMetadata>, String> {
+) -> Result<Vec<RMinorReleaseMetadata>, String> {
     let versions: Vec<RVersionRelease> =
         serde_json::from_str(json).map_err(|e| format!("failed to parse {source} JSON: {e}"))?;
-    let mut releases = Vec::new();
+    let mut releases = BTreeMap::new();
 
     for version in versions {
         let name = version.name.as_deref().unwrap_or(&version.version);
@@ -29,7 +32,7 @@ pub(crate) fn parse_release_metadata_json(
             continue;
         };
         let raw_version = version.semver.as_deref().unwrap_or(&version.version);
-        let Some(release_version) = release_version(raw_version) else {
+        let Some((major, minor, _patch)) = version_parts(raw_version) else {
             continue;
         };
         let Some(date) = version.date.as_deref() else {
@@ -39,40 +42,38 @@ pub(crate) fn parse_release_metadata_json(
             .ok_or_else(|| {
                 format!(
                     "R version availability metadata returned invalid release date `{}` for R {}",
-                    date, release_version
+                    date, raw_version
                 )
             })?
             .to_string();
-        releases.push(ReleaseMetadata {
-            version: release_version,
-            date,
-        });
+        let key = (major, minor);
+        if releases
+            .get(&key)
+            .map(|previous: &RMinorReleaseMetadata| date < previous.date)
+            .unwrap_or(true)
+        {
+            releases.insert(key, RMinorReleaseMetadata { major, minor, date });
+        }
     }
 
     if releases.is_empty() {
         return Err(format!(
-            "R version availability metadata in {source} did not contain any R releases"
+            "R version availability metadata in {source} did not contain any R minor releases"
         ));
     }
 
-    Ok(releases)
+    Ok(releases.into_values().collect())
 }
 
-fn release_version(semver: &str) -> Option<String> {
+fn version_parts(semver: &str) -> Option<(u64, u64, u64)> {
     let mut parts = semver.split('.');
-    let major = parts.next()?;
-    let minor = parts.next()?;
-    let patch = parts.next()?;
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
     if parts.next().is_some() {
         return None;
     }
-    for part in [major, minor, patch] {
-        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-    }
-
-    Some(semver.to_string())
+    Some((major, minor, patch))
 }
 
 fn iso_date_prefix(value: &str) -> Option<&str> {

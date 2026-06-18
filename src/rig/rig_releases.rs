@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 
 use super::r_selection;
@@ -31,13 +32,7 @@ pub(crate) fn latest_minor_version_on(exclude_newer: &str) -> Result<String, Box
     }
 
     let available = all_available_releases()?;
-    let release = latest_minor_release_on(
-        exclude_newer,
-        available
-            .iter()
-            .filter_map(|release| minor_release_from_available(release).transpose())
-            .collect::<Result<Vec<_>, _>>()?,
-    )?;
+    let release = latest_minor_release_on(exclude_newer, available_minor_releases(&available)?)?;
     Ok(release.version())
 }
 
@@ -64,10 +59,30 @@ fn all_available_releases() -> Result<Vec<RigAvailableRelease>, Box<dyn Error>> 
         .map_err(|e| format!("failed to parse `rig available --all --json` JSON: {e}").into())
 }
 
+fn available_minor_releases(
+    available: &[RigAvailableRelease],
+) -> Result<Vec<RMinorRelease<'_>>, Box<dyn Error>> {
+    let mut releases = BTreeMap::new();
+    for release in available {
+        let Some(release) = minor_release_from_available(release)? else {
+            continue;
+        };
+        let key = (release.major, release.minor);
+        if releases
+            .get(&key)
+            .map(|previous: &RMinorRelease<'_>| release.date < previous.date)
+            .unwrap_or(true)
+        {
+            releases.insert(key, release);
+        }
+    }
+    Ok(releases.into_values().collect())
+}
+
 fn minor_release_from_available(
     release: &RigAvailableRelease,
 ) -> Result<Option<RMinorRelease<'_>>, Box<dyn Error>> {
-    let Some((major, minor)) = minor_release_version(&release.version) else {
+    let Some((major, minor)) = minor_version(&release.version) else {
         return Ok(None);
     };
     let Some(date) = release.date.as_deref() else {
@@ -83,12 +98,12 @@ fn minor_release_from_available(
     Ok(Some(RMinorRelease { major, minor, date }))
 }
 
-fn minor_release_version(version: &str) -> Option<(u64, u64)> {
+fn minor_version(version: &str) -> Option<(u64, u64)> {
     let mut parts = version.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?;
-    if patch != "0" || parts.next().is_some() {
+    parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
         return None;
     }
 

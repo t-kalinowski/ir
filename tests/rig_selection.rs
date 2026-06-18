@@ -393,7 +393,7 @@ fn run_with_exclude_newer_frontmatter_errors_when_implicit_r_minor_is_missing() 
 
 #[cfg(unix)]
 #[test]
-fn run_with_future_exclude_newer_uses_minor_zero_release_date() {
+fn run_with_future_exclude_newer_uses_earliest_patch_release_date() {
     let cache_dir = unique_dir("ir-exclude-newer-minor-zero-date-cache");
     let bin_dir = unique_dir("ir-exclude-newer-minor-zero-date-bin");
     let r46_dir = unique_dir("ir-exclude-newer-minor-zero-date-r46");
@@ -412,9 +412,9 @@ fn run_with_future_exclude_newer_uses_minor_zero_release_date() {
                 "  \"available --all --json\")\n",
                 "    cat <<'JSON'\n",
                 r#"[
-{{"name":"4.6.3","version":"4.6.3","date":"2027-03-11"}},
-{{"name":"4.7.0","version":"4.7.0","date":"2027-04-24"}},
-{{"name":"4.7.1","version":"4.7.1","date":"2027-07-01"}}
+{{"name":"4.6.0","version":"4.6.0","date":"2027-03-11"}},
+{{"name":"4.7.1","version":"4.7.1","date":"2027-04-24"}},
+{{"name":"4.7.2","version":"4.7.2","date":"2027-07-01"}}
 ]"#,
                 "\nJSON\n",
                 "    ;;\n",
@@ -422,7 +422,7 @@ fn run_with_future_exclude_newer_uses_minor_zero_release_date() {
                 "    cat <<'JSON'\n",
                 r#"[
 {{"name":"4.6.3","version":"4.6.3","aliases":[],"binary":"{}"}},
-{{"name":"4.7.0","version":"4.7.0","aliases":[],"binary":"{}"}}
+{{"name":"4.7.2","version":"4.7.2","aliases":[],"binary":"{}"}}
 ]"#,
                 "\nJSON\n",
                 "    ;;\n",
