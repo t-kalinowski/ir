@@ -129,40 +129,18 @@ fn path_with_bin_dir(bin_dir: &std::path::Path) -> std::ffi::OsString {
 }
 
 #[cfg(unix)]
-fn snapshot_date_after_embedded_r_metadata() -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct Release {
-        semver: String,
-        date: String,
-    }
-
-    let json = fs::read_to_string(concat!(
+fn snapshot_date_after_embedded_r_metadata_fetch() -> Option<String> {
+    let fetched_at = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/rig/r-versions.json"
+        "/src/rig/r-versions-fetched-at.txt"
     ))
     .unwrap();
     let format = format_description!("[year]-[month]-[day]");
-    let latest = serde_json::from_str::<Vec<Release>>(&json)
-        .unwrap()
-        .into_iter()
-        .filter_map(|release| {
-            let mut parts = release.semver.split('.');
-            let major = parts.next()?.parse::<u64>().ok()?;
-            let minor = parts.next()?.parse::<u64>().ok()?;
-            let patch = parts.next()?.parse::<u64>().ok()?;
-            if parts.next().is_some() || major < 3 {
-                return None;
-            }
-            let date = Date::parse(release.date.get(..10)?, &format).ok()?;
-            Some(((major, minor, patch), date))
-        })
-        .max_by_key(|(version, _)| *version)
-        .map(|(_, date)| date)
-        .unwrap();
-    let snapshot = latest + Duration::days(1);
+    let fetched_at = Date::parse(fetched_at.trim(), &format).unwrap();
+    let snapshot = fetched_at + Duration::days(1);
 
     if snapshot > OffsetDateTime::now_utc().date() {
-        eprintln!("SKIP stale embedded R metadata fallback: latest embedded R release is {latest}");
+        eprintln!("SKIP stale embedded R metadata fallback: metadata was fetched at {fetched_at}");
         return None;
     }
 
@@ -771,8 +749,58 @@ fn run_with_exclude_newer_selects_r_3_6_for_2019_snapshot() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_within_metadata_freshness_uses_embedded_minor() {
+    let cache_dir = unique_dir("ir-exclude-newer-r46-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r46-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r46");
+
+    let r46_binary = selected_r_binary(&r46_dir, "r46");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r46_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            "2026-06-01",
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r46");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r46_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
-    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata() else {
+    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
         return;
     };
 
@@ -826,6 +854,60 @@ fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&newer_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exclude_newer_after_metadata_fetch_falls_back_to_embedded_minor() {
+    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
+        return;
+    };
+
+    let cache_dir = unique_dir("ir-exclude-newer-r-fallback-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-fallback-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r-fallback");
+
+    let r46_binary = selected_r_binary(&r46_dir, "r46");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) echo unavailable >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r46_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            &snapshot_date,
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r46");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r46_dir);
 }
 
 #[cfg(unix)]
