@@ -88,6 +88,18 @@ pub(crate) fn select_available_candidate<'a>(
         })
 }
 
+pub(crate) fn rig_install_hint(requirement: &VersionRequirement) -> Option<&str> {
+    match requirement {
+        VersionRequirement::Bare(req) => Some(req),
+        VersionRequirement::Comparison {
+            op: VersionOp::Eq,
+            raw,
+            ..
+        } => Some(raw),
+        VersionRequirement::Comparison { .. } => None,
+    }
+}
+
 pub(crate) fn iso_date_prefix(value: &str) -> Option<&str> {
     let date = value.get(..10)?;
     if is_iso_date(date) {
@@ -140,6 +152,9 @@ impl VersionRequirement {
                     VersionOp::Gte => compare_version_parts(&candidate, required_version).is_ge(),
                     VersionOp::Lt => compare_version_parts(&candidate, required_version).is_lt(),
                     VersionOp::Lte => compare_version_parts(&candidate, required_version).is_le(),
+                    VersionOp::Eq if required_version.len() < 3 => {
+                        candidate.starts_with(required_version)
+                    }
                     VersionOp::Eq => compare_version_parts(&candidate, required_version).is_eq(),
                 }
             }
