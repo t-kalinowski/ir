@@ -53,7 +53,7 @@ fn embedded_minor_releases<'a>(
         let Some((major, minor, _patch)) = version_parts(release.version.as_ref()) else {
             continue;
         };
-        if major < 4 {
+        if major < 3 {
             continue;
         }
         let date = release.date.as_ref();

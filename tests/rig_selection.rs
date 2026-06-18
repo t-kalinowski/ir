@@ -150,7 +150,7 @@ fn snapshot_date_after_embedded_r_metadata() -> Option<String> {
             let major = parts.next()?.parse::<u64>().ok()?;
             let minor = parts.next()?.parse::<u64>().ok()?;
             let patch = parts.next()?.parse::<u64>().ok()?;
-            if parts.next().is_some() || major < 4 {
+            if parts.next().is_some() || major < 3 {
                 return None;
             }
             let date = Date::parse(release.date.get(..10)?, &format).ok()?;
@@ -710,6 +710,63 @@ fn run_with_exclude_newer_selects_r_4_0_for_2021_snapshot() {
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r40_dir);
     let _ = fs::remove_dir_all(&r41_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exclude_newer_selects_r_3_6_for_2019_snapshot() {
+    let cache_dir = unique_dir("ir-exclude-newer-r36-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r36-bin");
+    let r36_dir = unique_dir("ir-exclude-newer-r36");
+    let r40_dir = unique_dir("ir-exclude-newer-r36-r40");
+
+    let r36_binary = selected_r_binary(&r36_dir, "r36");
+    let r40_binary = selected_r_binary(&r40_dir, "r40");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"3.6.3","version":"3.6.3","aliases":[],"binary":"{}"}},
+{{"name":"4.0.5","version":"4.0.5","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r36_binary.display(),
+            r40_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            "2019-12-31",
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r36");
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r36_dir);
+    let _ = fs::remove_dir_all(&r40_dir);
 }
 
 #[cfg(unix)]

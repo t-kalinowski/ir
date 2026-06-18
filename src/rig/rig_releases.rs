@@ -68,7 +68,7 @@ fn latest_available_minor_version_on(
         let Some((major, minor, _patch)) = version_parts(&release.version) else {
             continue;
         };
-        if major < 4 {
+        if major < 3 {
             continue;
         }
         let Some(date) = release.date.as_deref().and_then(iso_date_prefix) else {
