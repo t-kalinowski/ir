@@ -535,7 +535,7 @@ if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
 }
 
 #[test]
-fn run_with_ir_cache_dir_falls_back_when_user_cache_lock_is_unusable() {
+fn run_with_ir_cache_dir_ignores_unusable_user_cache_for_resolver_lock() {
     let cache_dir = unique_dir("ir-cache-lock-unusable-override");
     let r_user_cache_file = unique_path("ir-cache-lock-unusable-r-cache", "txt");
     let profile = unique_path("ir-cache-lock-unusable-profile", "R");
@@ -1924,16 +1924,23 @@ fn concurrent_resolvers_serialize_different_dependency_resolution() {
 }
 
 #[test]
-fn concurrent_resolvers_serialize_across_cache_roots() {
-    let first_cache_dir = unique_dir("ir-cross-cache-lock-one");
-    let second_cache_dir = unique_dir("ir-cross-cache-lock-two");
-    let user_cache_dir = unique_dir("ir-cross-cache-lock-user-cache");
-    let profile = unique_path("ir-cross-cache-lock-profile", "R");
-    let active = unique_path("ir-cross-cache-lock-active", "");
-    let entered = unique_path("ir-cross-cache-lock-entered", "txt");
-    let overlap = unique_path("ir-cross-cache-lock-overlap", "txt");
-    let probe = ResolverLockProbe {
-        user_cache_dir: &user_cache_dir,
+fn concurrent_resolvers_serialize_shared_cache_with_different_user_cache_roots() {
+    let cache_dir = unique_dir("ir-shared-cache-different-user-cache");
+    let first_user_cache_dir = unique_dir("ir-shared-cache-user-one");
+    let second_user_cache_dir = unique_dir("ir-shared-cache-user-two");
+    let profile = unique_path("ir-shared-cache-different-user-cache-profile", "R");
+    let active = unique_path("ir-shared-cache-different-user-cache-active", "");
+    let entered = unique_path("ir-shared-cache-different-user-cache-entered", "txt");
+    let overlap = unique_path("ir-shared-cache-different-user-cache-overlap", "txt");
+    let first_probe = ResolverLockProbe {
+        user_cache_dir: &first_user_cache_dir,
+        profile: &profile,
+        active: &active,
+        overlap: &overlap,
+        entered: &entered,
+    };
+    let second_probe = ResolverLockProbe {
+        user_cache_dir: &second_user_cache_dir,
         profile: &profile,
         active: &active,
         overlap: &overlap,
@@ -1943,35 +1950,35 @@ fn concurrent_resolvers_serialize_across_cache_roots() {
     write_resolver_lock_profile(&profile);
 
     let first =
-        spawn_resolver_for_lock_test(&first_cache_dir, &probe, None, "cross-cache-lock-one");
+        spawn_resolver_for_lock_test(&cache_dir, &first_probe, None, "shared-cache-lock-one");
     let first = wait_for_resolver_probe(first, &active);
 
-    let second = resolver_lock_command(&second_cache_dir, &probe, None, "cross-cache-lock-two")
+    let second = resolver_lock_command(&cache_dir, &second_probe, None, "shared-cache-lock-two")
         .output()
         .unwrap();
     let first = first.wait_with_output().unwrap();
 
     assert_success(&first);
     assert_success(&second);
-    assert_stdout_contains(&first, "ir.fixture=cross-cache-lock-one");
-    assert_stdout_contains(&second, "ir.fixture=cross-cache-lock-two");
+    assert_stdout_contains(&first, "ir.fixture=shared-cache-lock-one");
+    assert_stdout_contains(&second, "ir.fixture=shared-cache-lock-two");
     assert!(
         !overlap.exists(),
-        "resolve.R should not overlap across cache roots"
+        "resolve.R should not overlap for a shared ir cache"
     );
     assert_eq!(
         resolver_probe_count(&entered),
-        2,
-        "each cache root should resolve independently"
+        1,
+        "second resolver should reuse the shared cache marker"
     );
 
     let _ = fs::remove_file(&profile);
     let _ = fs::remove_file(&entered);
     let _ = fs::remove_file(&overlap);
     let _ = fs::remove_dir_all(&active);
-    let _ = fs::remove_dir_all(&first_cache_dir);
-    let _ = fs::remove_dir_all(&second_cache_dir);
-    let _ = fs::remove_dir_all(&user_cache_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&first_user_cache_dir);
+    let _ = fs::remove_dir_all(&second_user_cache_dir);
 }
 
 #[cfg(unix)]
