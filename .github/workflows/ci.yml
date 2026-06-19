@@ -114,6 +114,9 @@ jobs:
         shell: bash
         run: |
           "$IR_RSCRIPT" scripts/warm-renv-cache.R \
+            --repos https://cloud.r-project.org \
+            withr@3.0.3
+          "$IR_RSCRIPT" scripts/warm-renv-cache.R \
             github::rstudio/reticulate@main
         env:
           GITHUB_PAT: ${{ github.token }}
