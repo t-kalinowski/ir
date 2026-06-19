@@ -155,12 +155,9 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("any::xfun"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
     assert!(workflow.contains("Warm default R package cache"));
-    assert!(workflow.contains("Warm GitHub R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
     assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
-    assert!(workflow.contains("unset RENV_CONFIG_REPOS_OVERRIDE"));
-    assert!(workflow.contains("withr@3.0.3"));
-    assert!(workflow.contains("github::rstudio/reticulate@main"));
+    assert!(workflow.contains("github::rstudio/reticulate fansi"));
     assert!(workflow.contains("rmarkdown xfun quarto"));
     assert!(workflow.contains("rmarkdown bookdown tinytex xfun"));
     assert!(workflow.contains("shell: bash"));
@@ -173,6 +170,11 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("cargo nextest run --verbose --no-fail-fast"));
     assert!(!workflow.contains("cargo build --verbose"));
     assert!(!workflow.contains("Warm non-default R package cache"));
+    assert!(!workflow.contains("Warm GitHub R package cache"));
+    assert!(!workflow.contains("withr@"));
+    assert!(!workflow.contains("reticulate github::rstudio/reticulate"));
+    assert!(!workflow.contains("github::rstudio/reticulate reticulate"));
+    assert!(!workflow.contains("github::rstudio/reticulate@"));
     assert!(!workflow.contains("scripts/warm-r-version-cache.R"));
     assert!(!workflow.contains("cargo run --bin ir -- run --isolated --vanilla"));
     assert!(!workflow.contains("--r-version \"$IR_TEST_R_VERSION\""));
