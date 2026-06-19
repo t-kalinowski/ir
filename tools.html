@@ -79,9 +79,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-9aa68caa1778ee5759e263c3b2f4abf3.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-7fb2366ea9cfc589a5fa427510273c33.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -377,7 +377,8 @@ $ ir tool run --from btw btw --help</code></pre>
 <pre class="console"><code>$ rx --with cli --from btw btw
 $ rx -w cli --from btw btw
 $ rx --from 'btw&gt;=0.1.0' btw
-$ rx --r-version 4.5 --from btw btw</code></pre>
+$ rx --r-version 4.5 --from btw btw
+$ rx --rscript /path/to/Rscript --from btw btw</code></pre>
 <p>Package refs use pak syntax. Quote refs when the shell would otherwise interpret characters such as <code>&gt;</code>.</p>
 <section id="write-package-tools" class="level2">
 <h2 class="anchored" data-anchor-id="write-package-tools">Write package tools</h2>
@@ -408,8 +409,9 @@ $ rx --r-version 4.5 --from btw btw</code></pre>
 $ ir tool install github::r-lib/Rapp
 $ ir tool install --bin-dir ~/.local/bin btw
 $ ir tool install --force btw
-$ ir tool install --with cli --r-version 4.5 btw</code></pre>
-<p>Installed launchers keep the same resolved package ref, <code>--with</code> package additions, and R version selection that were used at install time. They set <code>R_LIBS</code> to the resolved library and <code>R_LIBS_USER=NULL</code>. Nested <code>#| launcher:</code> metadata is included in generated launchers. If there is no <code>launcher.name</code>, top-level <code>#| name:</code> is used for the launcher name when present. Plain <code>Rscript</code> package executables keep Rscript’s normal startup package behavior unless launcher metadata explicitly sets <code>default-packages</code>.</p>
+$ ir tool install --with cli --r-version 4.5 btw
+$ ir tool install --rscript /path/to/Rscript btw</code></pre>
+<p>Installed launchers keep the same resolved package ref, <code>--with</code> package additions, and R selection that were used at install time. They set <code>R_LIBS</code> to the resolved library and <code>R_LIBS_USER=NULL</code>. Nested <code>#| launcher:</code> metadata is included in generated launchers. If there is no <code>launcher.name</code>, top-level <code>#| name:</code> is used for the launcher name when present. Plain <code>Rscript</code> package executables keep Rscript’s normal startup package behavior unless launcher metadata explicitly sets <code>default-packages</code>.</p>
 <p>By default, <code>ir tool install</code> writes launchers to <code>IR_TOOL_BIN_DIR</code>, <code>RAPP_BIN_DIR</code>, <code>XDG_BIN_HOME</code>, <code>XDG_DATA_HOME/../bin</code>, or <code>~/.local/bin</code> on Unix. On Windows, it uses <code>%LOCALAPPDATA%\Programs\R\ir\bin</code>, falling back to <code>%USERPROFILE%\AppData\Local\Programs\R\ir\bin</code>. <code>--bin-dir</code> overrides those defaults. When no <code>--bin-dir</code> override is used, <code>ir tool install</code> also sets up <code>PATH</code> for the selected launcher directory where needed. On macOS, it adds the default <code>~/.local/bin</code> launcher directory to <code>~/.zprofile</code> when it is not already on <code>PATH</code>, respecting <code>ZDOTDIR</code>. On Windows, it adds the default or environment-selected launcher directory to the user <code>Path</code>. Set <code>IR_NO_MODIFY_PATH=1</code> or <code>RAPP_NO_MODIFY_PATH=1</code> to skip PATH setup.</p>
 
 

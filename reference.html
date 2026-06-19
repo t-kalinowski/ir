@@ -44,9 +44,9 @@ ul.task-list li input[type="checkbox"] {
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-9aa68caa1778ee5759e263c3b2f4abf3.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
-<link href="site_libs/bootstrap/bootstrap-f4dda05aca053c49d473672dfd2972fa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-7fb2366ea9cfc589a5fa427510273c33.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="site_libs/bootstrap/bootstrap-0134bf7ea20a951bf8969683a6dbdde6.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -382,6 +382,7 @@ ul.task-list li input[type="checkbox"] {
   <span style="color: #00BBBB; font-weight: bold;">-e</span>, <span style="color: #00BBBB; font-weight: bold;">--expr</span><span style="color: #555555;"> &lt;EXPR&gt;</span>           Evaluate an inline R expression instead of a script file
       <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>            Add a dependency for this run; may be repeated
       <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>      Select the R version for this run with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>     Select the Rscript executable
       <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve packages from the Posit Package Manager snapshot at this date
       <span style="color: #00BBBB; font-weight: bold;">--isolated</span>              Disable the user library for this run
   <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                  Print help
@@ -416,9 +417,10 @@ ul.task-list li input[type="checkbox"] {
 <span style="color: #5555FF; font-weight: bold;">Options:</span>
       <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>            Add a dependency for this render; may be repeated
       <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>      Select the R version for this render with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>     Select the Rscript executable
       <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve packages from the Posit Package Manager snapshot at this date
       <span style="color: #00BBBB; font-weight: bold;">--isolated</span>              Disable the user library for this render
-      <span style="color: #00BBBB; font-weight: bold;">--vanilla</span>               Run Quarto's knitr R with --vanilla
+      <span style="color: #00BBBB; font-weight: bold;">--vanilla</span>               Pass --vanilla to the Rscript used by Quarto
   <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                  Print help
 
 <span style="color: #5555FF; font-weight: bold;">Examples:</span>
@@ -429,7 +431,7 @@ ul.task-list li input[type="checkbox"] {
 <span style="color: #555555;">      # --with is for ir; --to html is passed to quarto render.</span>
 
   ir render --vanilla slides.qmd --output slides.html
-<span style="color: #555555;">      # --vanilla runs knitr R with --vanilla.</span>
+<span style="color: #555555;">      # --vanilla is passed to the Rscript used by Quarto.</span>
 <span style="color: #555555;">      # --output slides.html is passed to quarto render.</span></code></pre>
 
 </div>
@@ -475,10 +477,11 @@ ul.task-list li input[type="checkbox"] {
   <span style="color: #555555;">[ARGS]...</span>  Rscript options, package ref or command, and tool arguments
 
 <span style="color: #5555FF; font-weight: bold;">Options:</span>
-      <span style="color: #00BBBB; font-weight: bold;">--from</span><span style="color: #555555;"> &lt;PKG_REF&gt;</span>    Resolve a package ref and run &lt;command&gt; from that package
-  <span style="color: #00BBBB; font-weight: bold;">-w</span>, <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for this tool run; may be repeated
-      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for this tool run with rig
-  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+      <span style="color: #00BBBB; font-weight: bold;">--from</span><span style="color: #555555;"> &lt;PKG_REF&gt;</span>     Resolve a package ref and run &lt;command&gt; from that package
+  <span style="color: #00BBBB; font-weight: bold;">-w</span>, <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>         Add a dependency for this tool run; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>   Select the R version for this tool run with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>  Select the Rscript executable
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>               Print help
 
 <span style="color: #5555FF; font-weight: bold;">Examples:</span>
   ir tool run btw
@@ -504,11 +507,12 @@ ul.task-list li input[type="checkbox"] {
   <span style="color: #555555;">&lt;PKG_REF&gt;</span>  Package ref that provides executables to install
 
 <span style="color: #5555FF; font-weight: bold;">Options:</span>
-      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>        Add a dependency for installed launchers; may be repeated
-      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>  Select the R version for installed launchers with rig
-      <span style="color: #00BBBB; font-weight: bold;">--bin-dir</span><span style="color: #555555;"> &lt;DIR&gt;</span>     Directory where launchers are written
-      <span style="color: #00BBBB; font-weight: bold;">--force</span>             Overwrite an existing launcher path
-  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>              Print help
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>         Add a dependency for installed launchers; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>   Select the R version for installed launchers with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>  Select the Rscript executable
+      <span style="color: #00BBBB; font-weight: bold;">--bin-dir</span><span style="color: #555555;"> &lt;DIR&gt;</span>      Directory where launchers are written
+      <span style="color: #00BBBB; font-weight: bold;">--force</span>              Overwrite an existing launcher path
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>               Print help
 
 <span style="color: #5555FF; font-weight: bold;">Examples:</span>
   ir tool install btw
