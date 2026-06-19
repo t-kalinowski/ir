@@ -815,6 +815,84 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_after_metadata_fetch_uses_refreshed_minor_cache() {
+    let cache_dir = unique_dir("ir-exclude-newer-r-refreshed-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-refreshed-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r-refreshed-r46");
+    let r47_dir = unique_dir("ir-exclude-newer-r-refreshed-r47");
+    let available_called = unique_path("ir-exclude-newer-r-refreshed-available", "txt");
+
+    fs::create_dir_all(cache_dir.join("rig")).unwrap();
+    fs::write(
+        cache_dir.join("rig").join("minor-releases.json"),
+        r#"{
+  "fetched_at": "2026-06-18",
+  "releases": [
+    {"major": 4, "minor": 6, "date": "2026-04-24"},
+    {"major": 4, "minor": 7, "date": "2026-06-18"}
+  ]
+}
+"#,
+    )
+    .unwrap();
+
+    let r46_binary = selected_r_binary(&r46_dir, "r46");
+    let r47_binary = selected_r_binary(&r47_dir, "r47");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}},
+{{"name":"4.7.0","version":"4.7.0","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) : > '{}'; echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r46_binary.display(),
+            r47_binary.display(),
+            available_called.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            "2026-06-18",
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r47");
+    assert!(
+        !available_called.exists(),
+        "date-only exclude-newer should use a refreshed minor-release cache before calling `rig available`"
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r46_dir);
+    let _ = fs::remove_dir_all(&r47_dir);
+    let _ = fs::remove_file(&available_called);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_ir_rscript_and_exclude_newer_skips_rig_selection() {
     let cache_dir = unique_dir("ir-env-rscript-exclude-newer-cache");
     let bin_dir = unique_dir("ir-env-rscript-exclude-newer-bin");
