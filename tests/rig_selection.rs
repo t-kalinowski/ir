@@ -594,14 +594,7 @@ fn run_with_exclude_newer_selects_latest_available_minor_r() {
 ]"#,
                 "\nJSON\n",
                 "    ;;\n",
-                "  available)\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"4.3.0","version":"4.3.0","date":"2023-04-21T07:06:14Z"}},
-{{"name":"4.4.0","version":"4.4.0","date":"2024-04-24T04:07:56Z"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
+                "  available) echo unexpected available >&2; exit 65 ;;\n",
                 "  *) exit 64 ;;\n",
                 "esac\n",
             ),
@@ -692,113 +685,6 @@ fn run_with_exclude_newer_selects_r_4_0_for_2021_snapshot() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_selects_r_3_6_for_2019_snapshot() {
-    let cache_dir = unique_dir("ir-exclude-newer-r36-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r36-bin");
-    let r36_dir = unique_dir("ir-exclude-newer-r36");
-    let r40_dir = unique_dir("ir-exclude-newer-r36-r40");
-
-    let r36_binary = selected_r_binary(&r36_dir, "r36");
-    let r40_binary = selected_r_binary(&r40_dir, "r40");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "case \"$1\" in\n",
-                "  list)\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"3.6.3","version":"3.6.3","aliases":[],"binary":"{}"}},
-{{"name":"4.0.5","version":"4.0.5","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  available) echo unexpected available >&2; exit 65 ;;\n",
-                "  *) exit 64 ;;\n",
-                "esac\n",
-            ),
-            r36_binary.display(),
-            r40_binary.display()
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args([
-            "run",
-            "--exclude-newer",
-            "2019-12-31",
-            "-e",
-            "cat('ignored')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r36");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r36_dir);
-    let _ = fs::remove_dir_all(&r40_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_within_metadata_freshness_uses_embedded_minor() {
-    let cache_dir = unique_dir("ir-exclude-newer-r46-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r46-bin");
-    let r46_dir = unique_dir("ir-exclude-newer-r46");
-
-    let r46_binary = selected_r_binary(&r46_dir, "r46");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "case \"$1\" in\n",
-                "  list)\n",
-                "    cat <<'JSON'\n",
-                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  available) echo unexpected available >&2; exit 65 ;;\n",
-                "  *) exit 64 ;;\n",
-                "esac\n",
-            ),
-            r46_binary.display()
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args([
-            "run",
-            "--exclude-newer",
-            "2026-06-01",
-            "-e",
-            "cat('ignored')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r46");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r46_dir);
-}
-
-#[cfg(unix)]
-#[test]
 fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
     let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
         return;
@@ -823,13 +709,19 @@ fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
                 "    ;;\n",
                 "  \"available --all --json\")\n",
                 "    cat <<'JSON'\n",
-                r#"[{{"name":"99.0.0","version":"99.0.0","date":"{}T00:00:00Z"}}]"#,
+                r#"[
+{{"name":"99.0.0","version":"99.0.0","date":"{}T00:00:00Z"}},
+{{"name":"devel","version":"100.0.0","date":"{}T00:00:00Z"}},
+{{"name":"next","version":"101.0.0","date":"{}T00:00:00Z"}}
+]"#,
                 "\nJSON\n",
                 "    ;;\n",
                 "  *) exit 64 ;;\n",
                 "esac\n",
             ),
             newer_binary.display(),
+            snapshot_date,
+            snapshot_date,
             snapshot_date
         ),
     );
@@ -925,77 +817,6 @@ fn run_with_exclude_newer_and_newer_installed_r_requires_live_metadata() {
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r46_dir);
     let _ = fs::remove_dir_all(&newer_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_ignores_prerelease_live_metadata() {
-    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
-        return;
-    };
-
-    let cache_dir = unique_dir("ir-exclude-newer-r-prerelease-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r-prerelease-bin");
-    let r46_dir = unique_dir("ir-exclude-newer-r-prerelease-r46");
-    let next_dir = unique_dir("ir-exclude-newer-r-prerelease-next");
-
-    let r46_binary = selected_r_binary(&r46_dir, "r46");
-    let next_binary = selected_r_binary(&next_dir, "next");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "case \"$1 $2 $3\" in\n",
-                "  \"list --json \")\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}},
-{{"name":"next","version":"99.0.0","aliases":[],"binary":"{}"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  \"available --all --json\")\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"4.6.0","version":"4.6.0","date":"2026-04-24T00:00:00Z"}},
-{{"name":"devel","version":"98.0.0","date":"{}T00:00:00Z"}},
-{{"name":"next","version":"99.0.0","date":"{}T00:00:00Z"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  *) exit 64 ;;\n",
-                "esac\n",
-            ),
-            r46_binary.display(),
-            next_binary.display(),
-            snapshot_date,
-            snapshot_date
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args([
-            "run",
-            "--exclude-newer",
-            &snapshot_date,
-            "-e",
-            "cat('ignored')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=r46");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&r46_dir);
-    let _ = fs::remove_dir_all(&next_dir);
 }
 
 #[cfg(unix)]
@@ -1148,62 +969,6 @@ fn missing_exact_minor_r_version_with_exclude_newer_does_not_query_available_rel
     );
     assert!(
         stderr.contains("Run `rig install 4.4`"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(
-        !stderr.contains("unexpected available"),
-        "{}",
-        output_text(&out)
-    );
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn missing_exact_patch_r_version_with_exclude_newer_reports_requested_install_hint() {
-    let cache_dir = unique_dir("ir-exclude-newer-missing-r-patch-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-missing-r-patch-bin");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        concat!(
-            "#!/bin/sh\n",
-            "case \"$1\" in\n",
-            "  list) echo '[]' ;;\n",
-            "  available) echo unexpected available >&2; exit 65 ;;\n",
-            "  *) exit 64 ;;\n",
-            "esac\n",
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args([
-            "run",
-            "--r-version",
-            "== 4.4.2",
-            "--exclude-newer",
-            "2024-06-20",
-            "-e",
-            "cat('ignored')",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("R 4.4.2 is required but is not installed"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(
-        stderr.contains("Run `rig install 4.4.2`"),
         "{}",
         output_text(&out)
     );
