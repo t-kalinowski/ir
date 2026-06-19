@@ -1010,6 +1010,7 @@ fn tool_run_accepts_cli_rscript() {
         concat!(
             "#!/bin/sh\n",
             "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
             "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
             "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
             "  exit 0\n",
@@ -1055,6 +1056,7 @@ fn tool_install_accepts_cli_rscript_and_records_recovery_command() {
         concat!(
             "#!/bin/sh\n",
             "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
             "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
             "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
             "  exit 0\n",
@@ -1088,6 +1090,117 @@ fn tool_install_accepts_cli_rscript_and_records_recovery_command() {
         "{launcher}"
     );
     assert!(launcher.contains(&reinstall), "{launcher}");
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_records_env_selected_rscript_in_recovery_command() {
+    let cache_dir = unique_dir("ir-tool-install-env-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-env-rscript-bin");
+    let library = unique_dir("ir-tool-install-env-rscript-library");
+    let rscript_dir = unique_dir("ir-tool-install-env-rscript-r");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(&exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n");
+
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
+            "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "echo selected=env-rscript\n",
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("IR_RSCRIPT", &rscript)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    let selected = std::path::absolute(&rscript).unwrap();
+    let reinstall = format!(
+        "ir tool install --force --rscript {} irfake",
+        selected.to_string_lossy()
+    );
+    assert!(launcher.contains(&reinstall), "{launcher}");
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_quotes_windows_recovery_rscript() {
+    let cache_dir = unique_dir("ir-tool-install-windows-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-windows-rscript-bin");
+    let library = unique_dir("ir-tool-install-windows-rscript-library");
+    let rscript_dir = unique_dir("ir tool install windows rscript");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(&exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n");
+
+    let rscript = rscript_dir.join("Rscript.cmd");
+    fs::write(
+        &rscript,
+        concat!(
+            "@echo off\r\n",
+            "if not \"%IR_RESOLVE_RESULT_FILE%\" == \"\" (\r\n",
+            "  more > nul\r\n",
+            "  echo %IR_TEST_LIBRARY%> \"%IR_RESOLVE_RESULT_FILE%\"\r\n",
+            "  echo irfake> \"%IR_RESOLVE_PACKAGE_RESULT_FILE%\"\r\n",
+            "  exit /b 0\r\n",
+            ")\r\n",
+            "echo selected=windows-rscript\r\n",
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    let selected = std::path::absolute(&rscript).unwrap();
+    let reinstall = format!(
+        "ir tool install --force --rscript \"{}\" irfake",
+        selected.to_string_lossy().replace('"', "\"\"")
+    );
+    assert!(launcher.contains(&reinstall), "{launcher}");
+    assert!(
+        !launcher.contains("--rscript '"),
+        "Windows recovery command should not use POSIX quoting:\n{launcher}"
+    );
 
     let _ = fs::remove_dir_all(&library);
     let _ = fs::remove_dir_all(&rscript_dir);

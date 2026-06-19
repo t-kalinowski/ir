@@ -9,10 +9,9 @@ use std::process::Command;
 use saphyr::Yaml;
 
 use crate::cli::{is_package_executable_name, ToolInstallArgs, ToolRunArgs};
-#[cfg(any(target_os = "macos", not(unix)))]
-use crate::runtime::nonempty_env;
 use crate::runtime::{
-    resolve_library_and_primary_package, rscript_for_spec, spawn_error, RSelectionArgs,
+    nonempty_env, resolve_library_and_primary_package, rscript_for_spec, spawn_error,
+    RSelectionArgs,
 };
 use crate::spec::{load_first_yaml_document, RuntimeSpec};
 
@@ -1014,29 +1013,56 @@ fn tool_install_recovery_command(install: &ToolInstallArgs, rscript: &OsStr) -> 
     ];
     for dep in &install.with_deps {
         words.push("--with".to_string());
-        words.push(command_word(dep));
+        words.push(recovery_command_word(dep));
     }
     if let Some(req) = &install.r_requirement {
         words.push("--r-version".to_string());
-        words.push(command_word(req));
+        words.push(recovery_command_word(req));
     }
-    if install.rscript.is_some() {
+    if install.rscript.is_some() || (install.r_requirement.is_none() && env_r_selection_was_set()) {
         words.push("--rscript".to_string());
-        words.push(command_word(&rscript.to_string_lossy()));
+        words.push(recovery_command_word(&rscript.to_string_lossy()));
     }
-    words.push(command_word(&install.package_ref));
+    words.push(recovery_command_word(&install.package_ref));
     words.join(" ")
 }
 
-fn command_word(value: &str) -> String {
-    if value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
-    {
+fn env_r_selection_was_set() -> bool {
+    nonempty_env("IR_RSCRIPT").is_some()
+        || env::var_os("IR_R_VERSION")
+            .is_some_and(|value| !value.to_string_lossy().trim().is_empty())
+}
+
+fn recovery_command_word(value: &str) -> String {
+    if recovery_command_plain(value) {
         value.to_string()
     } else {
-        sh_quote_str(value)
+        recovery_command_quote(value)
     }
+}
+
+#[cfg(unix)]
+fn recovery_command_plain(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
+}
+
+#[cfg(not(unix))]
+fn recovery_command_plain(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\' | ':' | '@'))
+}
+
+#[cfg(unix)]
+fn recovery_command_quote(value: &str) -> String {
+    sh_quote_str(value)
+}
+
+#[cfg(not(unix))]
+fn recovery_command_quote(value: &str) -> String {
+    cmd_quote_str(value)
 }
 
 #[cfg(unix)]
