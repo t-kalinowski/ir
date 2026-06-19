@@ -1223,6 +1223,7 @@ fn sh_quote_os(value: &OsStr) -> String {
     sh_quote_str(&value.to_string_lossy())
 }
 
+#[cfg(unix)]
 fn sh_quote_str(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -1159,7 +1159,7 @@ fn tool_install_quotes_windows_recovery_rscript() {
     let package = library.join("irfake");
     let exec_dir = package.join("exec");
     fs::create_dir_all(&exec_dir).unwrap();
-    write_executable(&exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n");
+    fs::write(exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n").unwrap();
 
     let rscript = rscript_dir.join("Rscript.cmd");
     fs::write(
