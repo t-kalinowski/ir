@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 
@@ -80,17 +79,7 @@ def release_install(installed: list[dict[str, Any]]) -> dict[str, Any]:
     return release
 
 
-def rscript_path(install: dict[str, Any]) -> str:
-    binary = install.get("binary")
-    if not isinstance(binary, str) or not binary:
-        die(f"rig does not report an R binary for {install.get('name')}")
-
-    path = Path(binary)
-    suffix = path.suffix
-    return str(path.with_name(f"Rscript{suffix}")).replace("\\", "/")
-
-
-def resolve_install(spec: str) -> tuple[str, str, str]:
+def resolve_install(spec: str) -> tuple[str, str]:
     offset = oldrel_offset(spec)
     installed = installed_r()
     release = release_install(installed)
@@ -110,33 +99,43 @@ def resolve_install(spec: str) -> tuple[str, str, str]:
         die(f"R {target[0]}.{target[1]} from {spec} is not installed by rig")
 
     _, install = max(matches, key=lambda item: item[0])
-    return install["name"], install["version"], rscript_path(install)
+    return install["name"], install["version"]
 
 
-def release_date(name: str) -> str:
+def release_metadata(name: str) -> tuple[str, str]:
+    expression = (
+        'cat(sprintf("IR_TEST_R_DATE=%s-%s-%s\\nIR_TEST_RSCRIPT=%s\\n", '
+        'R.version$year, R.version$month, R.version$day, '
+        'normalizePath(file.path(R.home("bin"), "Rscript"), '
+        'winslash = "/", mustWork = TRUE)))'
+    )
     output = run_rig(
         [
             "run",
             "-r",
             name,
             "-e",
-            'cat(sprintf("%s-%s-%s\\n", R.version$year, R.version$month, R.version$day))',
+            expression,
         ]
     )
-    match = re.search(r"\d{4}-\d{2}-\d{2}", output)
-    if not match:
+    date = re.search(r"^IR_TEST_R_DATE=(\d{4}-\d{2}-\d{2})$", output, re.MULTILINE)
+    if not date:
         die(f"could not read R release date for {name}")
-    return match.group(0)
+    rscript = re.search(r"^IR_TEST_RSCRIPT=(.+)$", output, re.MULTILINE)
+    if not rscript:
+        die(f"could not read Rscript path for {name}")
+    return date.group(1), rscript.group(1)
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         die("usage: scripts/resolve-test-r.py oldrel/N")
 
-    name, version, rscript = resolve_install(sys.argv[1])
+    name, version = resolve_install(sys.argv[1])
+    date, rscript = release_metadata(name)
     print(name)
     print(version)
-    print(release_date(name))
+    print(date)
     print(rscript)
 
 

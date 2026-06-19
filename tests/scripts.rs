@@ -454,7 +454,6 @@ fn test_r_metadata_resolver_uses_newest_installed_r_without_release_alias() {
     let _ = fs::remove_dir_all(&temp);
     fs::create_dir_all(&temp).unwrap();
     let rig = temp.join("rig");
-    let r_binary = temp.join("R dir").join("R");
     let rscript = temp.join("R dir").join("Rscript");
     fs::write(
         &rig,
@@ -464,18 +463,20 @@ set -eu
 if [ "$1" = "list" ] && [ "$2" = "--json" ]; then
   cat <<'JSON'
 [
-  {{"name": "4.6.0", "version": "4.6.0", "aliases": [], "binary": "{release_binary}"}},
-  {{"name": "4.4.3", "version": "4.4.3", "aliases": [], "binary": "{test_binary}"}}
+  {{"name": "4.6.0", "version": "4.6.0", "aliases": []}},
+  {{"name": "4.4.3", "version": "4.4.3", "aliases": []}}
 ]
 JSON
 elif [ "$1" = "run" ]; then
-  printf '2025-02-28\n'
+  cat <<'EOF'
+IR_TEST_R_DATE=2025-02-28
+IR_TEST_RSCRIPT={test_rscript}
+EOF
 else
   exit 99
 fi
 "#,
-            release_binary = temp.join("release").display(),
-            test_binary = r_binary.display()
+            test_rscript = rscript.display()
         ),
     )
     .unwrap();
