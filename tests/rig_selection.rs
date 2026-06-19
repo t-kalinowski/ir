@@ -5,9 +5,6 @@ mod support;
 use support::*;
 
 use std::fs;
-use time::{Date, Duration, OffsetDateTime};
-
-use time::macros::format_description;
 
 #[cfg(windows)]
 use std::path::PathBuf;
@@ -126,25 +123,6 @@ fn path_with_bin_dir(bin_dir: &std::path::Path) -> std::ffi::OsString {
         ),
     )
     .unwrap()
-}
-
-#[cfg(unix)]
-fn snapshot_date_after_embedded_r_metadata_fetch() -> Option<String> {
-    let fetched_at = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/rig/r-versions-fetched-at.txt"
-    ))
-    .unwrap();
-    let format = format_description!("[year]-[month]-[day]");
-    let fetched_at = Date::parse(fetched_at.trim(), &format).unwrap();
-    let snapshot = fetched_at + Duration::days(1);
-
-    if snapshot > OffsetDateTime::now_utc().date() {
-        eprintln!("SKIP stale embedded R metadata fallback: metadata was fetched at {fetched_at}");
-        return None;
-    }
-
-    Some(snapshot.to_string())
 }
 
 #[cfg(unix)]
@@ -685,80 +663,12 @@ fn run_with_exclude_newer_selects_r_4_0_for_2021_snapshot() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
-    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
-        return;
-    };
-
-    let cache_dir = unique_dir("ir-exclude-newer-r-newer-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r-newer-bin");
-    let newer_dir = unique_dir("ir-exclude-newer-r-newer");
-
-    let newer_binary = selected_r_binary(&newer_dir, "newer");
-
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "case \"$1 $2 $3\" in\n",
-                "  \"list --json \")\n",
-                "    cat <<'JSON'\n",
-                r#"[{{"name":"99.0.0","version":"99.0.0","aliases":[],"binary":"{}"}}]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  \"available --all --json\")\n",
-                "    cat <<'JSON'\n",
-                r#"[
-{{"name":"99.0.0","version":"99.0.0","date":"{}T00:00:00Z"}},
-{{"name":"devel","version":"100.0.0","date":"{}T00:00:00Z"}},
-{{"name":"next","version":"101.0.0","date":"{}T00:00:00Z"}}
-]"#,
-                "\nJSON\n",
-                "    ;;\n",
-                "  *) exit 64 ;;\n",
-                "esac\n",
-            ),
-            newer_binary.display(),
-            snapshot_date,
-            snapshot_date,
-            snapshot_date
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .args([
-            "run",
-            "--exclude-newer",
-            &snapshot_date,
-            "-e",
-            "cat('ignored')",
-        ])
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=newer");
-
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
-    let _ = fs::remove_dir_all(&newer_dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn run_with_exclude_newer_and_newer_installed_r_requires_live_metadata() {
-    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
-        return;
-    };
-
+fn run_with_exclude_newer_and_newer_installed_r_uses_embedded_minor_without_live_lookup() {
     let cache_dir = unique_dir("ir-exclude-newer-r-newer-required-cache");
     let bin_dir = unique_dir("ir-exclude-newer-r-newer-required-bin");
     let r46_dir = unique_dir("ir-exclude-newer-r-newer-required-r46");
     let newer_dir = unique_dir("ir-exclude-newer-r-newer-required-newer");
+    let available_called = unique_path("ir-exclude-newer-r-newer-required-available", "txt");
 
     let r46_binary = selected_r_binary(&r46_dir, "r46");
     let newer_binary = selected_r_binary(&newer_dir, "newer");
@@ -777,12 +687,13 @@ fn run_with_exclude_newer_and_newer_installed_r_requires_live_metadata() {
 ]"#,
                 "\nJSON\n",
                 "    ;;\n",
-                "  \"available --all --json\") echo unavailable >&2; exit 65 ;;\n",
+                "  \"available --all --json\") : > '{}'; echo unexpected available >&2; exit 65 ;;\n",
                 "  *) exit 64 ;;\n",
                 "esac\n",
             ),
             r46_binary.display(),
-            newer_binary.display()
+            newer_binary.display(),
+            available_called.display()
         ),
     );
 
@@ -793,39 +704,30 @@ fn run_with_exclude_newer_and_newer_installed_r_requires_live_metadata() {
         .args([
             "run",
             "--exclude-newer",
-            &snapshot_date,
+            "2026-06-01",
             "-e",
             "cat('ignored')",
         ])
         .output()
         .unwrap();
 
-    assert!(!out.status.success(), "{}", output_text(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r46");
     assert!(
-        stderr.contains("`rig available --all --json` failed"),
-        "{}",
-        output_text(&out)
-    );
-    assert!(
-        !stdout(&out).contains("selected=r46"),
-        "should not fall back to embedded R metadata after required live discovery fails\n{}",
-        output_text(&out)
+        !available_called.exists(),
+        "date-only exclude-newer should not call `rig available` when the embedded minor is installed"
     );
 
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r46_dir);
     let _ = fs::remove_dir_all(&newer_dir);
+    let _ = fs::remove_file(&available_called);
 }
 
 #[cfg(unix)]
 #[test]
 fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_lookup() {
-    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
-        return;
-    };
-
     let cache_dir = unique_dir("ir-exclude-newer-r-fallback-cache");
     let bin_dir = unique_dir("ir-exclude-newer-r-fallback-bin");
     let r46_dir = unique_dir("ir-exclude-newer-r-fallback");
@@ -866,7 +768,7 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
         .args([
             "run",
             "--exclude-newer",
-            &snapshot_date,
+            "2026-06-01",
             "-e",
             "cat('ignored')",
         ])

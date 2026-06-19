@@ -164,6 +164,18 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("R_PROFILE_USER"));
     assert!(workflow.contains("scripts/ci-rprofile.R"));
     assert!(workflow.contains("scripts/warm-renv-cache.R"));
+    let warm_default_cache = workflow
+        .split("      - name: Warm default R package cache")
+        .nth(1)
+        .and_then(|block| {
+            block
+                .split("      - name: Warm snapshot R package cache")
+                .next()
+        })
+        .expect(
+            "workflow should have a default cache warm step before the snapshot cache warm step",
+        );
+    assert!(warm_default_cache.contains("GITHUB_PAT: ${{ github.token }}"));
     assert!(!workflow.contains("bookdown btw Rapp"));
     assert!(!workflow.contains("Warm default R package cache (Unix)"));
     assert!(!workflow.contains("Warm default R package cache (Windows)"));

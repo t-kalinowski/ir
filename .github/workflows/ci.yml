@@ -108,6 +108,7 @@ jobs:
             cli glue jsonlite dplyr tidyr github::rstudio/reticulate fansi htmltools knitr rmarkdown xfun quarto \
             btw Rapp docopt pkgsearch prettyunits
         env:
+          GITHUB_PAT: ${{ github.token }}
           R_PROFILE_USER: ${{ github.workspace }}/scripts/ci-rprofile.R
 
       - name: Warm snapshot R package cache
