@@ -21,9 +21,9 @@ pub fn resolve_rscript(req: &str, exclude_newer: Option<&str>) -> Result<OsStrin
 
 pub fn resolve_rscript_for_exclude_newer(exclude_newer: &str) -> Result<OsString, Box<dyn Error>> {
     let exclude_newer = r_selection::parse_iso_date_field("exclude-newer", exclude_newer)?;
-    let req = rig_releases::latest_minor_version_on(&exclude_newer)?;
-    let requirement = r_selection::parse_version_requirement(&req)?;
     let installed = rig_client::list()?;
+    let req = rig_releases::latest_minor_version_on(&exclude_newer, &installed)?;
+    let requirement = r_selection::parse_version_requirement(&req)?;
 
     if let Some(installed) = r_selection::select_installed_r(&requirement, &installed) {
         return installed.rscript();

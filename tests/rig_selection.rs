@@ -858,33 +858,49 @@ fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
 
 #[cfg(unix)]
 #[test]
-fn run_with_exclude_newer_after_metadata_fetch_falls_back_to_embedded_minor() {
+fn run_with_exclude_newer_ignores_prerelease_live_metadata() {
     let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
         return;
     };
 
-    let cache_dir = unique_dir("ir-exclude-newer-r-fallback-cache");
-    let bin_dir = unique_dir("ir-exclude-newer-r-fallback-bin");
-    let r46_dir = unique_dir("ir-exclude-newer-r-fallback");
+    let cache_dir = unique_dir("ir-exclude-newer-r-prerelease-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-prerelease-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r-prerelease-r46");
+    let next_dir = unique_dir("ir-exclude-newer-r-prerelease-next");
 
     let r46_binary = selected_r_binary(&r46_dir, "r46");
+    let next_binary = selected_r_binary(&next_dir, "next");
 
     write_executable(
         &bin_dir.join("rig"),
         &format!(
             concat!(
                 "#!/bin/sh\n",
-                "case \"$1\" in\n",
-                "  list)\n",
+                "case \"$1 $2 $3\" in\n",
+                "  \"list --json \")\n",
                 "    cat <<'JSON'\n",
-                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
+                r#"[
+{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}},
+{{"name":"next","version":"99.0.0","aliases":[],"binary":"{}"}}
+]"#,
                 "\nJSON\n",
                 "    ;;\n",
-                "  available) echo unavailable >&2; exit 65 ;;\n",
+                "  \"available --all --json\")\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.6.0","version":"4.6.0","date":"2026-04-24T00:00:00Z"}},
+{{"name":"devel","version":"98.0.0","date":"{}T00:00:00Z"}},
+{{"name":"next","version":"99.0.0","date":"{}T00:00:00Z"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
                 "  *) exit 64 ;;\n",
                 "esac\n",
             ),
-            r46_binary.display()
+            r46_binary.display(),
+            next_binary.display(),
+            snapshot_date,
+            snapshot_date
         ),
     );
 
@@ -908,6 +924,68 @@ fn run_with_exclude_newer_after_metadata_fetch_falls_back_to_embedded_minor() {
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r46_dir);
+    let _ = fs::remove_dir_all(&next_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_lookup() {
+    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
+        return;
+    };
+
+    let cache_dir = unique_dir("ir-exclude-newer-r-fallback-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-fallback-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r-fallback");
+    let available_called = unique_path("ir-exclude-newer-r-fallback-available", "txt");
+
+    let r46_binary = selected_r_binary(&r46_dir, "r46");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) : > '{}'; echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r46_binary.display(),
+            available_called.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            &snapshot_date,
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=r46");
+    assert!(
+        !available_called.exists(),
+        "date-only exclude-newer should not call `rig available` when embedded metadata can select R"
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r46_dir);
+    let _ = fs::remove_file(&available_called);
 }
 
 #[cfg(unix)]
