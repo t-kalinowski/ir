@@ -829,9 +829,11 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
     let cache_dir = unique_dir("ir-exclude-newer-r-fallback-cache");
     let bin_dir = unique_dir("ir-exclude-newer-r-fallback-bin");
     let r46_dir = unique_dir("ir-exclude-newer-r-fallback");
+    let devel_dir = unique_dir("ir-exclude-newer-r-fallback-devel");
     let available_called = unique_path("ir-exclude-newer-r-fallback-available", "txt");
 
     let r46_binary = selected_r_binary(&r46_dir, "r46");
+    let devel_binary = selected_r_binary(&devel_dir, "devel");
 
     write_executable(
         &bin_dir.join("rig"),
@@ -841,7 +843,10 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
                 "case \"$1\" in\n",
                 "  list)\n",
                 "    cat <<'JSON'\n",
-                r#"[{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}}]"#,
+                r#"[
+{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}},
+{{"name":"devel","version":"99.0.0","aliases":["next"],"binary":"{}"}}
+]"#,
                 "\nJSON\n",
                 "    ;;\n",
                 "  available) : > '{}'; echo unexpected available >&2; exit 65 ;;\n",
@@ -849,6 +854,7 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
                 "esac\n",
             ),
             r46_binary.display(),
+            devel_binary.display(),
             available_called.display()
         ),
     );
@@ -877,6 +883,7 @@ fn run_with_exclude_newer_after_metadata_fetch_uses_embedded_minor_without_live_
     let _ = fs::remove_dir_all(&cache_dir);
     let _ = fs::remove_dir_all(&bin_dir);
     let _ = fs::remove_dir_all(&r46_dir);
+    let _ = fs::remove_dir_all(&devel_dir);
     let _ = fs::remove_file(&available_called);
 }
 

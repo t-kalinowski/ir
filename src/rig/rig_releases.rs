@@ -90,6 +90,13 @@ fn installed_has_minor_after_embedded_metadata(installed: &[InstalledR]) -> bool
 
     installed
         .iter()
+        .filter(|installed| {
+            !matches!(installed.name.as_str(), "devel" | "next")
+                && !installed
+                    .aliases
+                    .iter()
+                    .any(|alias| matches!(alias.as_str(), "devel" | "next"))
+        })
         .filter_map(|installed| {
             version_parts(&installed.version).map(|(major, minor, _patch)| (major, minor))
         })
