@@ -858,6 +858,77 @@ fn run_with_exclude_newer_discovers_minor_after_embedded_metadata() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_and_newer_installed_r_requires_live_metadata() {
+    let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
+        return;
+    };
+
+    let cache_dir = unique_dir("ir-exclude-newer-r-newer-required-cache");
+    let bin_dir = unique_dir("ir-exclude-newer-r-newer-required-bin");
+    let r46_dir = unique_dir("ir-exclude-newer-r-newer-required-r46");
+    let newer_dir = unique_dir("ir-exclude-newer-r-newer-required-newer");
+
+    let r46_binary = selected_r_binary(&r46_dir, "r46");
+    let newer_binary = selected_r_binary(&newer_dir, "newer");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1 $2 $3\" in\n",
+                "  \"list --json \")\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.6.0","version":"4.6.0","aliases":[],"binary":"{}"}},
+{{"name":"99.0.0","version":"99.0.0","aliases":[],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  \"available --all --json\") echo unavailable >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            r46_binary.display(),
+            newer_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            &snapshot_date,
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`rig available --all --json` failed"),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
+        !stdout(&out).contains("selected=r46"),
+        "should not fall back to embedded R metadata after required live discovery fails\n{}",
+        output_text(&out)
+    );
+
+    let _ = fs::remove_dir_all(&cache_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&r46_dir);
+    let _ = fs::remove_dir_all(&newer_dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_exclude_newer_ignores_prerelease_live_metadata() {
     let Some(snapshot_date) = snapshot_date_after_embedded_r_metadata_fetch() else {
         return;

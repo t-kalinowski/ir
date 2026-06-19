@@ -44,11 +44,7 @@ pub(crate) fn latest_minor_version_on(
                 );
             }
             Ok(None) => {}
-            Err(err) => {
-                if version.is_none() {
-                    return Err(err);
-                }
-            }
+            Err(err) => return Err(err),
         }
     }
 
