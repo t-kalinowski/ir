@@ -77,6 +77,8 @@ fn r_version_selection_covers_render_flag_and_run_frontmatter() {
 
     let run = ir()
         .env("IR_CACHE_DIR", &cache_dir)
+        .env_remove("IR_RSCRIPT")
+        .env_remove("IR_R_VERSION")
         .args(["run", "--isolated", "--vanilla"])
         .arg(&script)
         .output()
