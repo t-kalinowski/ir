@@ -54,7 +54,7 @@ def installed_r() -> list[dict[str, Any]]:
 
 
 def release_install(installed: list[dict[str, Any]]) -> dict[str, Any]:
-    release = next(
+    aliased = next(
         (
             install
             for install in installed
@@ -63,8 +63,19 @@ def release_install(installed: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         None,
     )
-    if release is None:
-        die("rig does not report an installed release R")
+    if aliased is not None:
+        return aliased
+
+    stable = [
+        (parts, install)
+        for install in installed
+        for parts in [version_parts(install.get("version", ""))]
+        if parts is not None
+    ]
+    if not stable:
+        die("rig does not report an installed stable R")
+
+    _, release = max(stable, key=lambda item: item[0])
     return release
 
 

@@ -2,6 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -433,4 +436,54 @@ fn test_r_metadata_resolution_is_shared() {
             path.display()
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_r_metadata_resolver_uses_newest_installed_r_without_release_alias() {
+    let temp = std::env::temp_dir().join(format!("ir-fake-rig-no-release-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp);
+    fs::create_dir_all(&temp).unwrap();
+    let rig = temp.join("rig");
+    fs::write(
+        &rig,
+        r#"#!/usr/bin/env sh
+set -eu
+if [ "$1" = "list" ] && [ "$2" = "--json" ]; then
+  cat <<'JSON'
+[
+  {"name": "4.6.0", "version": "4.6.0", "aliases": []},
+  {"name": "4.4.3", "version": "4.4.3", "aliases": []}
+]
+JSON
+elif [ "$1" = "run" ]; then
+  printf '2025-02-28\n'
+else
+  exit 99
+fi
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&rig).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&rig, permissions).unwrap();
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![temp.clone()];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).unwrap();
+    let out = Command::new("python3")
+        .current_dir(repo_root())
+        .env("PATH", path)
+        .args(["scripts/resolve-test-r.py", "oldrel/2"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "4.4.3 4.4.3 2025-02-28\n"
+    );
+
+    let _ = fs::remove_dir_all(&temp);
 }
