@@ -14,7 +14,6 @@ $TestRSpec = "oldrel/2"
 $TestRName = $null
 $TestRVersion = $null
 $TestRExcludeNewer = $null
-$DefaultRscript = $null
 $RustupInitUrl = "https://win.rustup.rs"
 $SkipRust = $false
 $SkipPython = $false
@@ -133,6 +132,7 @@ function Set-TestRMetadata {
     }
 
     if ($DryRun) {
+        $script:TestRName = "<rig-name-for-$TestRSpec>"
         $script:TestRVersion = "<resolved-$TestRSpec-version>"
         $script:TestRExcludeNewer = "<release-date-for-$TestRSpec>"
         return
@@ -150,24 +150,6 @@ function Set-TestRMetadata {
     $script:TestRName = $fields[0]
     $script:TestRVersion = $fields[1]
     $script:TestRExcludeNewer = $fields[2]
-}
-
-function Set-DefaultRscript {
-    if ($SkipRRelease) {
-        return
-    }
-
-    if ($DryRun) {
-        $script:DefaultRscript = "<rig-release-Rscript>"
-        return
-    }
-
-    $rscript = & (Get-PythonTool) "scripts/resolve-test-r.py" "--release-rscript"
-    if ($LASTEXITCODE -ne 0) {
-        throw "scripts/resolve-test-r.py --release-rscript exited with code $LASTEXITCODE"
-    }
-
-    $script:DefaultRscript = ([string]$rscript).Trim()
 }
 
 function Add-PathIfExists {
@@ -284,30 +266,18 @@ if (-not $SkipTestR) {
     Invoke-Step "rig" @("add", $TestRSpec)
 }
 
-Set-DefaultRscript
 Set-TestRMetadata
 
 Invoke-Step "cargo" @("--version")
 Invoke-Step "rustc" @("--version")
 Invoke-Step (Get-PythonTool) @("--version")
 Invoke-Step "rig" @("--version")
-if ($DefaultRscript) {
-    Invoke-Step $DefaultRscript @("--version")
-}
-else {
-    Invoke-Step "Rscript" @("--version")
-}
+Invoke-Step "Rscript" @("--version")
 if (-not $SkipTestR) {
-    if ($DryRun) {
-        $testRName = "<rig-name-for-$TestRSpec>"
+    if (-not $TestRName) {
+        throw "test R metadata was not loaded"
     }
-    else {
-        if (-not $TestRName) {
-            throw "test R metadata was not loaded"
-        }
-        $testRName = $TestRName
-    }
-    Invoke-Step "rig" @("run", "-r", $testRName, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+    Invoke-Step "rig" @("run", "-r", $TestRName, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
 }
 Invoke-Step "quarto" @("--version")
 
@@ -315,21 +285,9 @@ if (-not $SkipTestR -and -not $DryRun -and $env:GITHUB_ENV) {
     Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=$TestRVersion"
     Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
 }
-if (-not $DryRun -and $DefaultRscript -and $env:GITHUB_ENV) {
-    Add-Content -Path $env:GITHUB_ENV -Value "IR_RSCRIPT=$DefaultRscript"
-}
-if (-not $DryRun -and $DefaultRscript -and $env:GITHUB_PATH) {
-    Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $DefaultRscript)
-}
 
 Write-Host ""
 Write-Host "Developer dependencies are installed."
-if ($DefaultRscript) {
-    Write-Host "To use rig's release R in this PowerShell session, run:"
-    Write-Host ""
-    Write-Host "  `$env:IR_RSCRIPT=$DefaultRscript"
-    Write-Host ""
-}
 if ($SkipTestR) {
     exit 0
 }

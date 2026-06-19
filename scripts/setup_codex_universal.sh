@@ -171,7 +171,9 @@ EOF
 
 rig add oldrel/2
 test_r_metadata="$(python3 scripts/resolve-test-r.py oldrel/2)"
-read -r rig_name test_r_version test_r_exclude_newer <<<"$test_r_metadata"
+read -r rig_name test_r_version test_r_exclude_newer <<EOF
+$test_r_metadata
+EOF
 cat > /tmp/ir-rig-setup.R <<'EOF'
 options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
 if (!requireNamespace("pak", quietly = TRUE)) {

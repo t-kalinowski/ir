@@ -9,23 +9,27 @@ use std::process::Command;
 use saphyr::Yaml;
 
 use crate::cli::{is_package_executable_name, ToolInstallArgs, ToolRunArgs};
-#[cfg(any(target_os = "macos", not(unix)))]
-use crate::runtime::nonempty_env;
-use crate::runtime::{resolve_library_and_primary_package, rscript_for_spec, spawn_error};
+use crate::runtime::{
+    nonempty_env, resolve_library_and_primary_package, rscript_for_spec, spawn_error,
+    RSelectionArgs,
+};
 use crate::spec::{load_first_yaml_document, RuntimeSpec};
 
 pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     let mut deps = vec![run.target.package_ref.clone()];
     deps.extend(run.with_deps.iter().cloned());
-    let mut spec = RuntimeSpec {
+    let spec = RuntimeSpec {
         dependencies: deps,
         ..RuntimeSpec::default()
     };
-    if let Some(req) = &run.r_requirement {
-        spec.r_requirement = Some(req.clone());
-    }
 
-    let rscript = rscript_for_spec(&spec)?;
+    let rscript = rscript_for_spec(
+        &spec,
+        RSelectionArgs {
+            r_requirement: run.r_requirement.as_deref(),
+            rscript: run.rscript.as_deref(),
+        },
+    )?;
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
     let executable = find_package_executable(&library, &package_name, &run.target.executable)?;
     let code = run_package_executable(
@@ -44,11 +48,14 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
         ..RuntimeSpec::default()
     };
     spec.dependencies.extend(install.with_deps.iter().cloned());
-    if let Some(req) = &install.r_requirement {
-        spec.r_requirement = Some(req.clone());
-    }
 
-    let rscript = rscript_for_spec(&spec)?;
+    let rscript = rscript_for_spec(
+        &spec,
+        RSelectionArgs {
+            r_requirement: install.r_requirement.as_deref(),
+            rscript: install.rscript.as_deref(),
+        },
+    )?;
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
     let executables = discover_package_executables(&library, &package_name)?;
     if executables.is_empty() {
@@ -68,7 +75,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript)?;
-    let reinstall_command = tool_install_recovery_command(install);
+    let reinstall_command = tool_install_recovery_command(install, &rscript);
     for executable in &executables {
         let target = launcher_target_path(&install.bin_dir, &executable.name);
         if target.exists() && !install.force {
@@ -997,7 +1004,7 @@ fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
+fn tool_install_recovery_command(install: &ToolInstallArgs, rscript: &OsStr) -> String {
     let mut words = vec![
         "ir".to_string(),
         "tool".to_string(),
@@ -1006,25 +1013,56 @@ fn tool_install_recovery_command(install: &ToolInstallArgs) -> String {
     ];
     for dep in &install.with_deps {
         words.push("--with".to_string());
-        words.push(command_word(dep));
+        words.push(recovery_command_word(dep));
     }
     if let Some(req) = &install.r_requirement {
         words.push("--r-version".to_string());
-        words.push(command_word(req));
+        words.push(recovery_command_word(req));
     }
-    words.push(command_word(&install.package_ref));
+    if install.rscript.is_some() || (install.r_requirement.is_none() && env_r_selection_was_set()) {
+        words.push("--rscript".to_string());
+        words.push(recovery_command_word(&rscript.to_string_lossy()));
+    }
+    words.push(recovery_command_word(&install.package_ref));
     words.join(" ")
 }
 
-fn command_word(value: &str) -> String {
-    if value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
-    {
+fn env_r_selection_was_set() -> bool {
+    nonempty_env("IR_RSCRIPT").is_some()
+        || env::var_os("IR_R_VERSION")
+            .is_some_and(|value| !value.to_string_lossy().trim().is_empty())
+}
+
+fn recovery_command_word(value: &str) -> String {
+    if recovery_command_plain(value) {
         value.to_string()
     } else {
-        sh_quote_str(value)
+        recovery_command_quote(value)
     }
+}
+
+#[cfg(unix)]
+fn recovery_command_plain(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
+}
+
+#[cfg(not(unix))]
+fn recovery_command_plain(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\' | ':' | '@'))
+}
+
+#[cfg(unix)]
+fn recovery_command_quote(value: &str) -> String {
+    sh_quote_str(value)
+}
+
+#[cfg(not(unix))]
+fn recovery_command_quote(value: &str) -> String {
+    cmd_quote_str(value)
 }
 
 #[cfg(unix)]
@@ -1185,6 +1223,7 @@ fn sh_quote_os(value: &OsStr) -> String {
     sh_quote_str(&value.to_string_lossy())
 }
 
+#[cfg(unix)]
 fn sh_quote_str(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -31,7 +31,7 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 
 - **The file explains itself.** Package requirements live in the script or document, not in a separate setup note.
 - **Fast by design.** `ir` keeps package setup direct and reuses cached resolutions and libraries when the same requirements are seen again.
-- **Reproducibility is explicit.** Use `r-version` to select an installed R, or `exclude-newer` to resolve packages and select the newest installed R available as of a specific date.
+- **Reproducibility is explicit.** Use `r-version`, `rscript`, or their command-line and environment equivalents to select R. Use `--exclude-newer`, `IR_EXCLUDE_NEWER`, or frontmatter `exclude-newer` to resolve packages as of a specific date. When `exclude-newer` is set without an R selection, `ir` selects the latest R minor version available on that date.
 - **It works with normal R habits.** Forward `Rscript` options, render Quarto documents, evaluate inline expressions, or use `--with` for one-off packages.
 - **Package tools are easy to try.** Run package executables with `rx`, or install persistent launchers for R, Rapp, and direct executable scripts without setting up a project by hand.
 
@@ -45,6 +45,7 @@ $ ir run --vanilla script.R
 $ ir render report.qmd --to html
 $ ir run --with cli -e 'cli::cli_alert_success("works")'
 $ ir run --r-version 4.5 script.R
+$ ir run --exclude-newer 2024-01-15 script.R
 $ rx btw --help
 $ ir tool run --from btw btw --help
 $ ir tool install btw
@@ -102,8 +103,8 @@ inspect the plan.
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH`, a rig default R install, or `IR_RSCRIPT` when neither `r-version` nor `exclude-newer` is set.
-- `rig` on `PATH` when using `r-version` or `exclude-newer`.
+- `R` / `Rscript` on `PATH`, or a selected `rscript`/`IR_RSCRIPT`, when R is not selected by version or date.
+- `rig` on `PATH` when using `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer` R selection.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 
 On first use, `ir` prepares its resolver tooling in its cache, so you do not need to pre-install pak or renv.

@@ -133,6 +133,19 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
     assert!(!stdout.contains("rig add release"), "{stdout}");
 }
 
+#[cfg(unix)]
+#[test]
+fn install_dev_deps_sh_can_skip_test_r() {
+    let out =
+        dev_deps_sh_plan_with_args(&["--dry-run", "--platform", "linux-deb", "--skip", "test-r"]);
+
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig add oldrel/2"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_VERSION"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_EXCLUDE_NEWER"), "{stdout}");
+}
+
 #[test]
 fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     let path = repo_root().join(".github/workflows/ci.yml");
@@ -140,23 +153,53 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
+    assert!(workflow.contains("Keep the GitHub setup actions above"));
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
-    assert!(workflow.contains("Use rig for R itself so CI has one R installer"));
-    assert!(workflow.contains("Install R package docs dependencies"));
-    assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
     assert!(workflow.contains("Install rig and non-default R (Unix)"));
     assert!(workflow.contains("Install rig and non-default R (Windows)"));
-    assert!(workflow.contains("--skip quarto"));
-    assert!(workflow.contains("-Skip rust, python, quarto"));
+    assert!(workflow.contains("-Skip rust, python, quarto, r-release"));
     assert!(!workflow.contains("IR_TEST_R_VERSION=4.4.3"));
     assert!(!workflow.contains("IR_TEST_R_EXCLUDE_NEWER=2025-02-28"));
-    assert!(!workflow.contains("r-lib/actions/setup-r"));
-    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
-    assert!(!workflow.contains("scripts/install-test-r-deps.R"));
-    assert!(!workflow.contains("IR_TEST_R_REPOS"));
-    assert!(!workflow.contains("IR_RSCRIPT"));
-    assert!(!workflow.contains("--skip r-release"));
-    assert!(!workflow.contains("-Skip rust, python, quarto, r-release"));
+    assert!(workflow.contains("any::bookdown"));
+    assert!(workflow.contains("any::xfun"));
+    assert!(workflow.contains("taiki-e/install-action@nextest"));
+    assert!(workflow.contains("Warm default R package cache"));
+    assert!(workflow.contains("Warm snapshot R package cache"));
+    assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
+    assert!(workflow.contains("github::rstudio/reticulate fansi"));
+    assert!(workflow.contains("rmarkdown xfun quarto"));
+    assert!(workflow.contains("rmarkdown bookdown tinytex xfun"));
+    assert!(workflow.contains("shell: bash"));
+    assert!(workflow.contains("R_PROFILE_USER"));
+    assert!(workflow.contains("scripts/ci-rprofile.R"));
+    assert!(workflow.contains("scripts/warm-renv-cache.R"));
+    let warm_default_cache = workflow
+        .split("      - name: Warm default R package cache")
+        .nth(1)
+        .and_then(|block| {
+            block
+                .split("      - name: Warm snapshot R package cache")
+                .next()
+        })
+        .expect(
+            "workflow should have a default cache warm step before the snapshot cache warm step",
+        );
+    assert!(warm_default_cache.contains("GITHUB_PAT: ${{ github.token }}"));
+    assert!(!warm_default_cache.contains("R_PROFILE_USER"));
+    assert!(!workflow.contains("bookdown btw Rapp"));
+    assert!(!workflow.contains("Warm default R package cache (Unix)"));
+    assert!(!workflow.contains("Warm default R package cache (Windows)"));
+    assert!(workflow.contains("cargo nextest run --verbose --no-fail-fast"));
+    assert!(!workflow.contains("cargo build --verbose"));
+    assert!(!workflow.contains("Warm non-default R package cache"));
+    assert!(!workflow.contains("Warm GitHub R package cache"));
+    assert!(!workflow.contains("withr@"));
+    assert!(!workflow.contains("reticulate github::rstudio/reticulate"));
+    assert!(!workflow.contains("github::rstudio/reticulate reticulate"));
+    assert!(!workflow.contains("github::rstudio/reticulate@"));
+    assert!(!workflow.contains("scripts/warm-r-version-cache.R"));
+    assert!(!workflow.contains("cargo run --bin ir -- run --isolated --vanilla"));
+    assert!(!workflow.contains("--r-version \"$IR_TEST_R_VERSION\""));
     assert!(
         !workflow.contains("-Skip rust `\n            -Skip python"),
         "PowerShell array parameters must be passed in one binding"
@@ -170,14 +213,13 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
 }
 
 #[test]
-fn install_dev_deps_scripts_persist_release_r_for_ci_steps() {
+fn install_dev_deps_scripts_persist_dynamic_test_r_metadata() {
     let sh_path = repo_root().join("scripts/install-dev-deps.sh");
     let sh = fs::read_to_string(&sh_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", sh_path.display()));
-    assert!(sh.contains("DEFAULT_RSCRIPT"));
-    assert!(sh.contains("scripts/resolve-test-r.py --release-rscript"));
-    assert!(sh.contains("IR_RSCRIPT"));
-    assert!(sh.contains("GITHUB_PATH"));
+    assert!(sh.contains("TEST_R_SPEC=\"oldrel/2\""));
+    assert!(sh.contains("scripts/resolve-test-r.py \"$TEST_R_SPEC\""));
+    assert!(sh.contains("IR_TEST_R_EXCLUDE_NEWER"));
     assert!(
         !sh.contains("rig default release"),
         "setup should not mutate a user's configured rig default"
@@ -186,14 +228,35 @@ fn install_dev_deps_scripts_persist_release_r_for_ci_steps() {
     let ps1_path = repo_root().join("scripts/install-dev-deps.ps1");
     let ps1 = fs::read_to_string(&ps1_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", ps1_path.display()));
-    assert!(ps1.contains("$DefaultRscript"));
-    assert!(ps1.contains("scripts/resolve-test-r.py\" \"--release-rscript"));
-    assert!(ps1.contains("IR_RSCRIPT=$DefaultRscript"));
-    assert!(ps1.contains("GITHUB_PATH"));
+    assert!(ps1.contains("$TestRSpec = \"oldrel/2\""));
+    assert!(ps1.contains("scripts/resolve-test-r.py\" $TestRSpec"));
+    assert!(ps1.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
     assert!(
         !ps1.contains("rig default release"),
         "setup should not mutate a user's configured rig default"
     );
+}
+
+#[test]
+fn cli_tests_do_not_use_global_e2e_lock() {
+    let tests = [
+        "tests/run.rs",
+        "tests/resolver_lock.rs",
+        "tests/rig_selection.rs",
+        "tests/render.rs",
+        "tests/tool.rs",
+        "tests/support/mod.rs",
+    ]
+    .into_iter()
+    .map(|path| {
+        let path = repo_root().join(path);
+        fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+    })
+    .collect::<String>();
+
+    assert!(!tests.contains("static E2E_LOCK"), "use per-test isolation");
+    assert!(!tests.contains("e2e_lock()"), "use per-test isolation");
 }
 
 #[test]
@@ -202,42 +265,15 @@ fn docs_workflow_requires_all_ci_jobs() {
     let workflow = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
-    assert!(
-        !workflow.contains("known-broken"),
-        "docs should not publish around known-broken CI jobs"
-    );
-    assert!(workflow.contains("Install R with rig"));
-    assert!(workflow.contains("scripts/install-dev-deps.sh"));
-    assert!(workflow.contains("--skip test-r"));
     assert!(workflow.contains("actions: read"));
-    assert!(workflow.contains("Rscript scripts/install-docs-r-deps.R"));
-    assert!(!workflow.contains("IR_DOCS_R_REPOS"));
-    assert!(!workflow.contains("r-lib/actions/setup-r"));
-    assert!(!workflow.contains("r-lib/actions/setup-r-dependencies"));
-    assert!(
-        !workflow.contains("workflow_dispatch"),
-        "docs should publish only from completed CI runs"
-    );
-    assert!(
-        !workflow.contains("skips the CI-jobs gate"),
-        "docs should not have a manual CI-gate bypass"
-    );
-    assert!(
-        !workflow.contains("github.event_name == 'workflow_run'"),
-        "the CI gate should not be conditional on event type"
-    );
-    assert!(
-        !workflow.contains("github.sha"),
-        "docs checkout should use the CI-triggering commit, not a manual dispatch ref"
-    );
-    assert!(
-        !workflow.contains("non-Windows"),
-        "docs should require all CI jobs, including Windows"
-    );
-    assert!(
-        !workflow.contains(r#"test("windows"; "i")"#),
-        "docs should not filter Windows CI jobs out of the gate"
-    );
+    assert!(workflow.contains("Require CI jobs to have succeeded"));
+    assert!(workflow.contains("All CI jobs succeeded; proceeding to publish."));
+    assert!(!workflow.contains("workflow_dispatch"));
+    assert!(!workflow.contains("github.event_name == 'workflow_run'"));
+    assert!(!workflow.contains("github.sha"));
+    assert!(!workflow.contains("non-Windows"));
+    assert!(!workflow.contains("known-broken"));
+    assert!(!workflow.contains(r#"test("windows"; "i")"#));
 }
 
 #[cfg(windows)]
@@ -290,21 +326,44 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip rust, python, quarto, r-release",
         ])
         .output()
         .unwrap();
 
     assert_success(&out);
     assert_stdout_contains(&out, "choco install rig -y --no-progress");
-    assert_stdout_contains(&out, "rig add release");
     assert_stdout_contains(&out, "rig add oldrel/2");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(!stdout.contains("rig default release"), "{stdout}");
     assert!(
         !stdout.contains("winget install --id posit.rig"),
         "{stdout}"
     );
+    assert!(!stdout.contains("rig add release"), "{stdout}");
+    assert!(!stdout.contains("rig default release"), "{stdout}");
+}
+
+#[cfg(windows)]
+#[test]
+fn install_dev_deps_ps1_can_skip_test_r() {
+    let out = Command::new("powershell")
+        .current_dir(repo_root())
+        .env_remove("GITHUB_ACTIONS")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip test-r",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig add oldrel/2"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_VERSION"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_EXCLUDE_NEWER"), "{stdout}");
 }
 
 #[test]
@@ -333,10 +392,9 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
     assert!(!script.contains(r#"@("python", "python3", "py")"#));
     assert!(script.contains("R\\bin"));
+    assert!(script.contains("$TestRSpec = \"oldrel/2\""));
     assert!(script.contains("IR_TEST_R_VERSION=$TestRVersion"));
     assert!(script.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
-    assert!(script.contains("IR_RSCRIPT=$DefaultRscript"));
-    assert!(script.contains("GITHUB_PATH"));
     assert!(
         !script.contains("rig default release"),
         "setup should not mutate a user's configured rig default"
@@ -375,28 +433,4 @@ fn test_r_metadata_resolution_is_shared() {
             path.display()
         );
     }
-}
-
-#[test]
-fn r_dependency_installers_use_rig_provided_pak() {
-    let path = repo_root().join("scripts/install-docs-r-deps.R");
-    let script = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-
-    assert!(script.contains("pak::pkg_install(packages)"));
-    assert!(
-        !script.contains("install.packages"),
-        "{} should let pak install package dependencies and system requirements",
-        path.display()
-    );
-    assert!(
-        !script.contains("dependencies = NA"),
-        "{} should rely on pak::pkg_install() defaults",
-        path.display()
-    );
-    assert!(
-        !script.contains("IR_TEST_R_REPOS") && !script.contains("IR_DOCS_R_REPOS"),
-        "{} should not carry custom repository plumbing",
-        path.display()
-    );
 }

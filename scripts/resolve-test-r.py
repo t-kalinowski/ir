@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -92,25 +91,6 @@ def resolve_install(spec: str) -> tuple[str, str]:
     return install["name"], install["version"]
 
 
-def rscript_from_r_binary(binary: str) -> str:
-    if "\\" in binary or re.match(r"^[A-Za-z]:", binary):
-        path = PureWindowsPath(binary)
-        suffix = path.suffix if path.suffix.lower() == ".exe" else ""
-        return str(path.with_name(f"Rscript{suffix}"))
-
-    path = Path(binary)
-    suffix = path.suffix if path.suffix.lower() == ".exe" else ""
-    return str(path.with_name(f"Rscript{suffix}"))
-
-
-def release_rscript() -> str:
-    release = release_install(installed_r())
-    binary = release.get("binary")
-    if not isinstance(binary, str) or not binary:
-        die("rig release R does not report a binary path")
-    return rscript_from_r_binary(binary)
-
-
 def release_date(name: str) -> str:
     output = run_rig(
         [
@@ -129,11 +109,7 @@ def release_date(name: str) -> str:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        die("usage: scripts/resolve-test-r.py oldrel/N | --release-rscript")
-
-    if sys.argv[1] == "--release-rscript":
-        print(release_rscript())
-        return
+        die("usage: scripts/resolve-test-r.py oldrel/N")
 
     name, version = resolve_install(sys.argv[1])
     print(name, version, release_date(name))
