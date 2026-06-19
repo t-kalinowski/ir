@@ -485,7 +485,7 @@ fn test_r_metadata_resolution_is_shared() {
 
 #[cfg(unix)]
 #[test]
-fn test_r_metadata_resolver_delegates_oldrel_resolution_to_rig() {
+fn test_r_metadata_resolver_delegates_oldrel_resolution_to_rig_resolve() {
     let temp = std::env::temp_dir().join(format!(
         "ir-fake-rig-oldrel-no-release-{}",
         std::process::id()
@@ -499,7 +499,9 @@ fn test_r_metadata_resolver_delegates_oldrel_resolution_to_rig() {
         format!(
             r#"#!/usr/bin/env sh
 set -eu
-if [ "$1" = "run" ] && [ "$2" = "-r" ] && [ "$3" = "oldrel/2" ]; then
+if [ "$1" = "-q" ] && [ "$2" = "resolve" ] && [ "$3" = "oldrel/2" ]; then
+  echo '4.4.3 https://example.test/R-4.4.3.pkg'
+elif [ "$1" = "run" ] && [ "$2" = "-r" ] && [ "$3" = "4.4.3" ]; then
   cat <<'EOF'
 IR_TEST_R_VERSION=4.4.3
 IR_TEST_R_DATE=2025-02-28
@@ -532,7 +534,7 @@ fi
     assert_success(&out);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("oldrel/2\n4.4.3\n2025-02-28\n{}\n", rscript.display())
+        format!("4.4.3\n4.4.3\n2025-02-28\n{}\n", rscript.display())
     );
 
     let _ = fs::remove_dir_all(&temp);

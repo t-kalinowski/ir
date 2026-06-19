@@ -27,6 +27,14 @@ def run_rig(args: list[str]) -> str:
     return result.stdout
 
 
+def resolve_spec(spec: str) -> str:
+    output = run_rig(["-q", "resolve", spec])
+    version = output.strip().split(maxsplit=1)[0] if output.strip() else ""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        die(f"could not resolve {spec} to a concrete R version")
+    return version
+
+
 def release_metadata(spec: str) -> tuple[str, str, str]:
     expression = (
         'rscript <- file.path(R.home("bin"), '
@@ -62,9 +70,11 @@ def main() -> None:
     if len(sys.argv) != 2:
         die("usage: scripts/resolve-test-r.py oldrel/N")
 
-    spec = sys.argv[1]
-    version, date, rscript = release_metadata(spec)
-    print(spec)
+    version = resolve_spec(sys.argv[1])
+    reported_version, date, rscript = release_metadata(version)
+    if reported_version != version:
+        die(f"rig resolved {sys.argv[1]} to R {version}, but ran R {reported_version}")
+    print(version)
     print(version)
     print(date)
     print(rscript)
