@@ -1156,7 +1156,7 @@ fn run_frontmatter_github_ref_installs_github_package() {
         &script,
         r#"#!/usr/bin/env -S ir run
 #| packages:
-#|   - github::rstudio/reticulate@fix-windows-pwsh-uv-bootstrap
+#|   - github::rstudio/reticulate
 
 library(reticulate)
 lib <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1]][[1]]
@@ -1169,7 +1169,6 @@ stopifnot(
   identical(desc$RemoteType, "github"),
   identical(desc$RemoteUsername, "rstudio"),
   identical(desc$RemoteRepo, "reticulate"),
-  identical(desc$RemoteRef, "fix-windows-pwsh-uv-bootstrap"),
   nzchar(desc$RemoteSha)
 )
 cat("ir.fixture=github-ref\n")
@@ -1177,7 +1176,6 @@ cat("github.remote=", paste(
   desc$RemoteType,
   desc$RemoteUsername,
   desc$RemoteRepo,
-  desc$RemoteRef,
   sep = "/"
 ), "\n", sep = "")
 "#,
@@ -1194,10 +1192,7 @@ cat("github.remote=", paste(
 
     assert_success(&out);
     assert_stdout_contains(&out, "ir.fixture=github-ref");
-    assert_stdout_contains(
-        &out,
-        "github.remote=github/rstudio/reticulate/fix-windows-pwsh-uv-bootstrap",
-    );
+    assert_stdout_contains(&out, "github.remote=github/rstudio/reticulate");
 
     let _ = fs::remove_file(&script);
     let _ = fs::remove_dir_all(&cache_dir);

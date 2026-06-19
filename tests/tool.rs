@@ -994,34 +994,215 @@ if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
 }
 
 #[cfg(unix)]
+fn fake_tool_package_with_rscript(
+    prefix: &str,
+    rscript_name: &str,
+    label: &str,
+) -> (PathBuf, PathBuf, PathBuf) {
+    let library = unique_dir(&format!("{prefix}-library"));
+    let rscript_dir = unique_dir(&format!("{prefix}-r"));
+    let exec_dir = library.join("irfake").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(&exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n");
+
+    let rscript = rscript_dir.join(rscript_name);
+    write_executable(
+        &rscript,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
+                "  cat >/dev/null\n",
+                "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+                "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "echo {}\n",
+            ),
+            label
+        ),
+    );
+
+    (library, rscript_dir, rscript)
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_run_accepts_cli_rscript() {
+    let cache_dir = unique_dir("ir-tool-run-cli-rscript-cache");
+    let (library, rscript_dir, rscript) = fake_tool_package_with_rscript(
+        "ir-tool-run-cli-rscript",
+        "Rscript",
+        "selected=tool-rscript",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--from", "irfake", "hello"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=tool-rscript");
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_accepts_cli_rscript_and_records_recovery_command() {
+    let cache_dir = unique_dir("ir-tool-install-cli-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-cli-rscript-bin");
+    let rscript_name = "Rscript-ir-tool-install-cli-rscript";
+    let (library, rscript_dir, rscript) = fake_tool_package_with_rscript(
+        "ir-tool-install-cli-rscript",
+        rscript_name,
+        "selected=tool-rscript",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("PATH", path_with_bin_dir(&rscript_dir))
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript", rscript_name])
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "Installed");
+    let launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    let selected = fs::canonicalize(&rscript).unwrap();
+    let reinstall = format!(
+        "ir tool install --force --rscript {} irfake",
+        selected.to_string_lossy()
+    );
+    assert!(
+        launcher.contains(&selected.to_string_lossy().into_owned()),
+        "{launcher}"
+    );
+    assert!(launcher.contains(&reinstall), "{launcher}");
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_records_env_selected_rscript_in_recovery_command() {
+    let cache_dir = unique_dir("ir-tool-install-env-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-env-rscript-bin");
+    let (library, rscript_dir, rscript) = fake_tool_package_with_rscript(
+        "ir-tool-install-env-rscript",
+        "Rscript",
+        "selected=env-rscript",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("IR_RSCRIPT", &rscript)
+        .args(["tool", "install", "--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    let selected = std::path::absolute(&rscript).unwrap();
+    let reinstall = format!(
+        "ir tool install --force --rscript {} irfake",
+        selected.to_string_lossy()
+    );
+    assert!(launcher.contains(&reinstall), "{launcher}");
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_quotes_windows_recovery_rscript() {
+    let cache_dir = unique_dir("ir-tool-install-windows-rscript-cache");
+    let bin_dir = unique_dir("ir-tool-install-windows-rscript-bin");
+    let library = unique_dir("ir-tool-install-windows-rscript-library");
+    let rscript_dir = unique_dir("ir tool install windows rscript");
+    let package = library.join("irfake");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(exec_dir.join("hello.R"), "#!/usr/bin/env Rscript\n").unwrap();
+
+    let rscript = rscript_dir.join("Rscript.cmd");
+    fs::write(
+        &rscript,
+        concat!(
+            "@echo off\r\n",
+            "if not \"%IR_RESOLVE_RESULT_FILE%\" == \"\" (\r\n",
+            "  more > nul\r\n",
+            "  echo %IR_TEST_LIBRARY%> \"%IR_RESOLVE_RESULT_FILE%\"\r\n",
+            "  echo irfake> \"%IR_RESOLVE_PACKAGE_RESULT_FILE%\"\r\n",
+            "  exit /b 0\r\n",
+            ")\r\n",
+            "echo selected=windows-rscript\r\n",
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irfake")
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    let selected = std::path::absolute(&rscript).unwrap();
+    let reinstall = format!(
+        "ir tool install --force --rscript \"{}\" irfake",
+        selected.to_string_lossy().replace('"', "\"\"")
+    );
+    assert!(launcher.contains(&reinstall), "{launcher}");
+    assert!(
+        !launcher.contains("--rscript '"),
+        "Windows recovery command should not use POSIX quoting:\n{launcher}"
+    );
+
+    let _ = fs::remove_dir_all(&library);
+    let _ = fs::remove_dir_all(&rscript_dir);
+    let _ = fs::remove_dir_all(&bin_dir);
+    let _ = fs::remove_dir_all(&cache_dir);
+}
+
+#[cfg(unix)]
 #[test]
 fn tool_install_with_path_rscript_symlink_records_target() {
     let cache_dir = unique_dir("ir-tool-install-rscript-link-cache");
     let bin_dir = unique_dir("ir-tool-install-rscript-link-bin");
     let link_dir = unique_dir("ir-tool-install-rscript-link-path");
-    let target_dir = unique_dir("ir-tool-install-rscript-link-target");
-    let library = unique_dir("ir-tool-install-rscript-link-library");
-    let package = library.join("irfake");
-    let exec_dir = package.join("exec");
-    fs::create_dir_all(&exec_dir).unwrap();
-    write_executable(
-        &exec_dir.join("hello.R"),
-        "#!/usr/bin/env Rscript\ncat('hello\\n')\n",
-    );
-
-    let target_rscript = target_dir.join("Rscript");
-    write_executable(
-        &target_rscript,
-        concat!(
-            "#!/bin/sh\n",
-            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
-            "  cat >/dev/null\n",
-            "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
-            "  printf '%s\\n' irfake > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
-            "  exit 0\n",
-            "fi\n",
-            "echo target-rscript\n",
-        ),
+    let (library, target_dir, target_rscript) = fake_tool_package_with_rscript(
+        "ir-tool-install-rscript-link-target",
+        "Rscript",
+        "target-rscript",
     );
     let link_rscript = link_dir.join("Rscript");
     std::os::unix::fs::symlink(&target_rscript, &link_rscript).unwrap();
@@ -1111,4 +1292,15 @@ fn launcher_path(bin_dir: &Path, name: &str) -> PathBuf {
     {
         bin_dir.join(format!("{name}.cmd"))
     }
+}
+
+#[cfg(unix)]
+fn path_with_bin_dir(bin_dir: &Path) -> std::ffi::OsString {
+    std::env::join_paths(
+        std::iter::once(bin_dir.as_os_str().to_owned()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|path| path.into_os_string()),
+        ),
+    )
+    .unwrap()
 }

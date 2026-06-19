@@ -9,9 +9,10 @@ Arguments:
 Options:
       --with <PKG>            Add a dependency for this render; may be repeated
       --r-version <SPEC>      Select the R version for this render with rig
+      --rscript <RSCRIPT>     Select the Rscript executable
       --exclude-newer <DATE>  Resolve packages from the Posit Package Manager snapshot at this date
       --isolated              Disable the user library for this render
-      --vanilla               Run Quarto's knitr R with --vanilla
+      --vanilla               Pass --vanilla to the Rscript used by Quarto
   -h, --help                  Print help
 
 Examples:
@@ -22,5 +23,5 @@ Examples:
       # --with is for ir; --to html is passed to quarto render.
 
   ir render --vanilla slides.qmd --output slides.html
-      # --vanilla runs knitr R with --vanilla.
+      # --vanilla is passed to the Rscript used by Quarto.
       # --output slides.html is passed to quarto render.
