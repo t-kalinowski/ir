@@ -515,7 +515,9 @@ fn test_r_metadata_resolver_delegates_oldrel_resolution_to_rig_resolve() {
     let _ = fs::remove_dir_all(&temp);
     fs::create_dir_all(&temp).unwrap();
     let rig = temp.join("rig");
+    let r = temp.join("R dir").join("R");
     let rscript = temp.join("R dir").join("Rscript");
+    fs::create_dir_all(r.parent().unwrap()).unwrap();
     fs::write(
         &rig,
         format!(
@@ -526,10 +528,27 @@ if [ "$1" = "-q" ] && [ "$2" = "resolve" ] && [ "$3" = "oldrel/2" ]; then
 elif [ "$1" = "-q" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
   cat <<'JSON'
 [
-  {{"name": "4.4-arm64", "version": "4.4.3", "aliases": []}}
+  {{"name": "4.4-arm64", "version": "4.4.3", "aliases": [], "binary": "{r_binary}"}}
 ]
 JSON
-elif [ "$1" = "run" ] && [ "$2" = "-r" ] && [ "$3" = "4.4-arm64" ] && [ "${{4:-}}" = "-e" ] && [ "${{5:-}}" = 'source(file("stdin"))' ]; then
+elif [ "$1" = "run" ]; then
+  echo "metadata probe should invoke the resolved R binary directly" >&2
+  exit 99
+else
+  echo "unexpected rig command: $*" >&2
+  exit 99
+fi
+"#,
+            r_binary = r.display(),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &r,
+        format!(
+            r#"#!/usr/bin/env sh
+set -eu
+if [ "$1" = "--vanilla" ] && [ "$2" = "--slave" ] && [ "$3" = "-e" ] && [ "$4" = 'source(file("stdin"))' ]; then
   script="$(cat)"
   printf '%s\n' "$script" | grep -q 'write[.]dcf' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
   printf '%s\n' "$script" | grep -q 'Rscript[.]exe' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
@@ -539,7 +558,7 @@ date: 2025-02-28
 rscript: {test_rscript}
 EOF
 else
-  echo "unexpected rig command: $*" >&2
+  echo "unexpected R command: $*" >&2
   exit 99
 fi
 "#,
@@ -550,6 +569,9 @@ fi
     let mut permissions = fs::metadata(&rig).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&rig, permissions).unwrap();
+    let mut permissions = fs::metadata(&r).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&r, permissions).unwrap();
 
     let old_path = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![temp.clone()];

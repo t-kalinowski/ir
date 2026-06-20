@@ -30,6 +30,22 @@ def run_rig(args: list[str], stdin: str | None = None) -> str:
     return result.stdout
 
 
+def run_r(binary: str, args: list[str], stdin: str) -> str:
+    result = subprocess.run(
+        [binary, *args],
+        check=False,
+        input=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        die(f"`{binary} {' '.join(args)}` exited with code {result.returncode}")
+    return result.stdout
+
+
 def resolve_spec(spec: str) -> str:
     output = run_rig(["-q", "resolve", spec])
     version = output.strip().split(maxsplit=1)[0] if output.strip() else ""
@@ -38,17 +54,22 @@ def resolve_spec(spec: str) -> str:
     return version
 
 
-def installed_name_for_version(version: str, spec: str) -> str:
+def installed_r_for_version(version: str, spec: str) -> tuple[str, str]:
     installs = json.loads(run_rig(["-q", "list", "--json"]))
     for install in installs:
         if install.get("version") == version:
-            return install["name"]
+            name = install.get("name", "")
+            binary = install.get("binary", "")
+            if not name or not binary:
+                die(f"rig did not report a name and R binary for R {version} from {spec}")
+            return name, binary
     die(f"R {version} from {spec} is not installed by rig")
 
 
-def release_metadata(name: str) -> tuple[str, str, str]:
-    output = run_rig(
-        ["run", "-r", name, "-e", 'source(file("stdin"))'],
+def release_metadata(binary: str) -> tuple[str, str, str]:
+    output = run_r(
+        binary,
+        ["--vanilla", "--slave", "-e", 'source(file("stdin"))'],
         # fmt: r
         stdin="""
             rscript <- file.path(
@@ -65,7 +86,7 @@ def release_metadata(name: str) -> tuple[str, str, str]:
             write.dcf(metadata, stdout())
         """,
     )
-    metadata = parse_metadata(output, name)
+    metadata = parse_metadata(output, binary)
     return (
         metadata["version"],
         metadata["date"],
@@ -88,8 +109,8 @@ def main() -> None:
 
     spec = sys.argv[1]
     version = resolve_spec(spec)
-    name = installed_name_for_version(version, spec)
-    reported_version, date, rscript = release_metadata(name)
+    name, binary = installed_r_for_version(version, spec)
+    reported_version, date, rscript = release_metadata(binary)
     if reported_version != version:
         die(f"rig resolved {spec} to R {version}, but ran R {reported_version}")
     print(name)
