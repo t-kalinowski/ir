@@ -355,7 +355,7 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     );
     assert_stdout_contains(&out, "IR_TEST_R_VERSION=<resolved-oldrel/2-version>");
     assert_stdout_contains(&out, "IR_TEST_R_EXCLUDE_NEWER=<release-date-for-oldrel/2>");
-    assert_stdout_contains(&out, "IR_TEST_RSCRIPT=<Rscript-for-oldrel/2>");
+    assert_stdout_contains(&out, "IR_TEST_RSCRIPT='<Rscript-for-oldrel/2>'");
 }
 
 #[cfg(windows)]
@@ -439,6 +439,14 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("$TestRSpec = \"oldrel/2\""));
     assert!(script.contains("IR_TEST_R_VERSION=$TestRVersion"));
     assert!(script.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
+    assert!(
+        !script.contains("exit 0"),
+        "skip paths should return from the script without closing an interactive shell"
+    );
+    assert!(
+        script.contains("IR_TEST_RSCRIPT='$TestRscript'"),
+        "printed IR_TEST_RSCRIPT assignment should be pasteable when Rscript lives under Program Files"
+    );
     assert!(script.contains("IR_TEST_RSCRIPT=$TestRscript"));
     assert!(
         !script.contains("rig default release"),

@@ -293,13 +293,13 @@ if (-not $SkipTestR -and -not $DryRun -and $env:GITHUB_ENV) {
 Write-Host ""
 Write-Host "Developer dependencies are installed."
 if ($SkipTestR) {
-    exit 0
+    return
 }
 Write-Host "To enable the version-selection tests in this PowerShell session, run:"
 Write-Host ""
 Write-Host "  `$env:IR_TEST_R_VERSION=$TestRVersion"
 Write-Host "  `$env:IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
-Write-Host "  `$env:IR_TEST_RSCRIPT=$TestRscript"
+Write-Host "  `$env:IR_TEST_RSCRIPT='$TestRscript'"
 Write-Host ""
 Write-Host "Then run:"
 Write-Host ""
