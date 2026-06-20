@@ -52,14 +52,14 @@ def release_metadata(name: str) -> tuple[str, str, str]:
         # fmt: r
         stdin="""
             rscript <- file.path(
-            R.home("bin"),
-            if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript"
+              R.home("bin"),
+              if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript"
             )
 
             metadata <- data.frame(
-            version = as.character(getRversion()),
-            date = sprintf("%s-%s-%s", R.version$year, R.version$month, R.version$day),
-            rscript = normalizePath(rscript, winslash = "/", mustWork = TRUE)
+              version = as.character(getRversion()),
+              date = sprintf("%s-%s-%s", R.version$year, R.version$month, R.version$day),
+              rscript = normalizePath(rscript, winslash = "/", mustWork = TRUE)
             )
 
             write.dcf(metadata, stdout())
