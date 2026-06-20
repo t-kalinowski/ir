@@ -6,27 +6,30 @@
 
 set -eu
 
-TEST_R_VERSION="4.4.3"
+TEST_R_SPEC="oldrel/2"
+TEST_R_NAME=""
+TEST_R_VERSION=""
+TEST_R_EXCLUDE_NEWER=""
+TEST_RSCRIPT=""
 DRY_RUN=0
 PLATFORM="auto"
 SKIP_RUST=0
 SKIP_PYTHON=0
 SKIP_QUARTO=0
 SKIP_R_RELEASE=0
-SET_RIG_DEFAULT=0
+SKIP_TEST_R=0
 
 usage() {
   cat <<EOF
-Usage: scripts/install-dev-deps.sh [--dry-run] [--platform macos|linux-deb] [--skip COMPONENT] [--set-rig-default]
+Usage: scripts/install-dev-deps.sh [--dry-run] [--platform macos|linux-deb] [--skip COMPONENT]
 
-Installs Rust, Python, rig, R release, R ${TEST_R_VERSION}, and Quarto.
+Installs Rust, Python, rig, R release, R ${TEST_R_SPEC} for tests, and Quarto.
 Use scripts/install-dev-deps.ps1 on Windows.
 
 Options:
   --dry-run           Print the commands without running them.
   --platform PLATFORM Print or run the plan for a supported platform.
-  --skip COMPONENT    Skip installing rust, python, quarto, or r-release.
-  --set-rig-default   Run rig default release after installing R release.
+  --skip COMPONENT    Skip installing rust, python, quarto, r-release, or test-r.
   -h, --help          Show this help.
 EOF
 }
@@ -83,6 +86,9 @@ skip_component() {
       ;;
     r-release)
       SKIP_R_RELEASE=1
+      ;;
+    test-r)
+      SKIP_TEST_R=1
       ;;
     *)
       die "unsupported skip component: $1"
@@ -252,31 +258,36 @@ install_r_versions() {
   if [ "$SKIP_R_RELEASE" -eq 0 ]; then
     run rig add release
   fi
-  run rig add "$TEST_R_VERSION"
-  if [ "$SET_RIG_DEFAULT" -eq 1 ]; then
-    run rig default release
+  if [ "$SKIP_TEST_R" -eq 0 ]; then
+    run rig add "$TEST_R_SPEC"
   fi
 }
 
-rig_name_for_version() {
-  version="$1"
-  require_command python3
-  rig list --json | python3 -c '
-import json
-import sys
+load_test_r_metadata() {
+  if [ "$SKIP_TEST_R" -eq 1 ]; then
+    return
+  fi
 
-version = sys.argv[1]
-text = "\n".join(
-    line for line in sys.stdin.read().splitlines()
-    if not line.startswith("[INFO]")
-)
-for install in json.loads(text):
-    if install.get("version") == version:
-        print(install["name"])
-        break
-else:
-    raise SystemExit(f"R {version} is not installed by rig")
-' "$version"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    TEST_R_NAME="<rig-name-for-${TEST_R_SPEC}>"
+    TEST_R_VERSION="<resolved-${TEST_R_SPEC}-version>"
+    TEST_R_EXCLUDE_NEWER="<release-date-for-${TEST_R_SPEC}>"
+    TEST_RSCRIPT="<Rscript-for-${TEST_R_SPEC}>"
+    return
+  fi
+
+  require_command python3
+  metadata_file="${TMPDIR:-/tmp}/ir-test-r-metadata.$$"
+  python3 scripts/resolve-test-r.py "$TEST_R_SPEC" >"$metadata_file"
+  TEST_R_NAME="$(sed -n '1p' "$metadata_file")"
+  TEST_R_VERSION="$(sed -n '2p' "$metadata_file")"
+  TEST_R_EXCLUDE_NEWER="$(sed -n '3p' "$metadata_file")"
+  TEST_RSCRIPT="$(sed -n '4p' "$metadata_file")"
+  rm -f "$metadata_file"
+  [ -n "$TEST_R_NAME" ] || die "scripts/resolve-test-r.py did not return a rig name"
+  [ -n "$TEST_R_VERSION" ] || die "scripts/resolve-test-r.py did not return an R version"
+  [ -n "$TEST_R_EXCLUDE_NEWER" ] || die "scripts/resolve-test-r.py did not return an R release date"
+  [ -n "$TEST_RSCRIPT" ] || die "scripts/resolve-test-r.py did not return an Rscript path"
 }
 
 verify_install() {
@@ -285,23 +296,47 @@ verify_install() {
   run python3 --version
   run rig --version
   run Rscript --version
-  if [ "$DRY_RUN" -eq 1 ]; then
+  if [ "$SKIP_TEST_R" -eq 0 ] && [ "$DRY_RUN" -eq 1 ]; then
     run rig list --json
-    test_r_name="<rig-name-for-${TEST_R_VERSION}>"
-  else
-    test_r_name="$(rig_name_for_version "$TEST_R_VERSION")"
+    test_r_name="$TEST_R_NAME"
+  elif [ "$SKIP_TEST_R" -eq 0 ]; then
+    test_r_name="$TEST_R_NAME"
+    [ -n "$test_r_name" ] || die "test R metadata was not loaded"
   fi
-  run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
+  if [ "$SKIP_TEST_R" -eq 0 ]; then
+    run rig run -r "$test_r_name" -e "stopifnot(as.character(getRversion()) == '${TEST_R_VERSION}')"
+  fi
   run quarto --version
+}
+
+persist_github_env() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return
+  fi
+
+  if [ -n "${GITHUB_ENV:-}" ] && [ "$SKIP_TEST_R" -eq 0 ]; then
+    printf 'IR_TEST_R_VERSION=%s\n' "$TEST_R_VERSION" >>"$GITHUB_ENV"
+    printf 'IR_TEST_R_EXCLUDE_NEWER=%s\n' "$TEST_R_EXCLUDE_NEWER" >>"$GITHUB_ENV"
+    printf 'IR_TEST_RSCRIPT=%s\n' "$TEST_RSCRIPT" >>"$GITHUB_ENV"
+  fi
 }
 
 print_next_steps() {
   cat <<EOF
 
 Developer dependencies are installed.
+EOF
+
+  if [ "$SKIP_TEST_R" -eq 1 ]; then
+    return
+  fi
+
+  cat <<EOF
 To enable the version-selection tests in this shell, run:
 
   export IR_TEST_R_VERSION=${TEST_R_VERSION}
+  export IR_TEST_R_EXCLUDE_NEWER=${TEST_R_EXCLUDE_NEWER}
+  export IR_TEST_RSCRIPT=${TEST_RSCRIPT}
 
 Then run:
 
@@ -323,9 +358,6 @@ while [ "$#" -gt 0 ]; do
       shift
       [ "$#" -gt 0 ] || die "--skip requires a value"
       skip_component "$1"
-      ;;
-    --set-rig-default)
-      SET_RIG_DEFAULT=1
       ;;
     -h | --help)
       usage
@@ -355,5 +387,7 @@ case "$PLATFORM" in
 esac
 
 install_r_versions
+load_test_r_metadata
 verify_install
+persist_github_env
 print_next_steps

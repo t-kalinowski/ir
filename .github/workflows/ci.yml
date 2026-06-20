@@ -88,7 +88,6 @@ jobs:
             --skip python \
             --skip quarto \
             --skip r-release
-          echo "IR_TEST_R_VERSION=4.4.3" >> "$GITHUB_ENV"
 
       - name: Install rig and non-default R (Windows)
         if: runner.os == 'Windows'
@@ -99,7 +98,6 @@ jobs:
           # the second R needed by the version-selection tests.
           .\scripts\install-dev-deps.ps1 `
             -Skip rust, python, quarto, r-release
-          Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=4.4.3"
 
       - name: Warm default R package cache
         shell: bash
@@ -118,6 +116,16 @@ jobs:
             dplyr tidyr glue jsonlite rmarkdown bookdown tinytex xfun
         env:
           R_PROFILE_USER: ${{ github.workspace }}/scripts/ci-rprofile.R
+
+      - name: Warm non-default R package cache
+        shell: bash
+        run: |
+          "$IR_TEST_RSCRIPT" scripts/warm-renv-cache.R \
+            --repos https://packagemanager.posit.co/cran/${IR_TEST_R_EXCLUDE_NEWER} \
+            jsonlite knitr rmarkdown
+        env:
+          R_PROFILE_USER: ${{ github.workspace }}/scripts/ci-rprofile.R
+          R_LIBS_USER: ${{ runner.temp }}/ir-test-r-library
 
       - run: cargo nextest run --verbose --no-fail-fast
         env:

@@ -169,12 +169,13 @@ renv::install(
 )
 EOF
 
-rig add 4.4.3
-rig_name="$(
-  rig list --json |
-    jq -r '[.[] | select(.version == "4.4.3")][0].name'
-)"
-cat > /tmp/ir-rig-setup.R <<'EOF'
+rig add oldrel/2
+mapfile -t test_r_metadata < <(python3 scripts/resolve-test-r.py oldrel/2)
+rig_name="${test_r_metadata[0]}"
+test_r_version="${test_r_metadata[1]}"
+test_r_exclude_newer="${test_r_metadata[2]}"
+test_rscript="${test_r_metadata[3]}"
+cat > /tmp/ir-rig-setup.R <<EOF
 options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
 if (!requireNamespace("pak", quietly = TRUE)) {
   install.packages("pak")
@@ -183,13 +184,13 @@ pak::pkg_install(c("renv", "secretbase", "jsonlite", "knitr", "rmarkdown"))
 prefetch_lib <- file.path(
   Sys.getenv("HOME"),
   ".cache", "ir-codex-renv-prefetch",
-  paste0(getRversion(), "-", R.version$platform)
+  paste0(getRversion(), "-", R.version\$platform)
 )
 dir.create(prefetch_lib, recursive = TRUE, showWarnings = FALSE)
 renv::install(
   c("jsonlite", "knitr", "rmarkdown"),
   library = prefetch_lib,
-  repos = c(CRAN = "https://packagemanager.posit.co/cran/2026-06-01"),
+  repos = c(CRAN = "https://packagemanager.posit.co/cran/${test_r_exclude_newer}"),
   prompt = FALSE,
   rebuild = FALSE
 )
@@ -200,8 +201,12 @@ stopifnot(
 )
 EOF
 env -u R_LIBS_USER rig run -r "$rig_name" -f /tmp/ir-rig-setup.R
-export IR_TEST_R_VERSION=4.4.3
-persist_export IR_TEST_R_VERSION 4.4.3
+export IR_TEST_R_VERSION="$test_r_version"
+export IR_TEST_R_EXCLUDE_NEWER="$test_r_exclude_newer"
+export IR_TEST_RSCRIPT="$test_rscript"
+persist_export IR_TEST_R_VERSION "$test_r_version"
+persist_export IR_TEST_R_EXCLUDE_NEWER "$test_r_exclude_newer"
+persist_export IR_TEST_RSCRIPT "$test_rscript"
 
 cores="$(nproc)"
 append_once "$HOME/.Renviron" 'NOT_CRAN=true'

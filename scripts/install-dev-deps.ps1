@@ -5,18 +5,22 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
-    [switch]$SetRigDefault,
     [string[]]$Skip = @()
 )
 
 $ErrorActionPreference = "Stop"
 
-$TestRVersion = "4.4.3"
+$TestRSpec = "oldrel/2"
+$TestRName = $null
+$TestRVersion = $null
+$TestRExcludeNewer = $null
+$TestRscript = $null
 $RustupInitUrl = "https://win.rustup.rs"
 $SkipRust = $false
 $SkipPython = $false
 $SkipQuarto = $false
 $SkipRRelease = $false
+$SkipTestR = $false
 
 foreach ($component in $Skip) {
     switch ($component) {
@@ -24,6 +28,7 @@ foreach ($component in $Skip) {
         "python" { $SkipPython = $true }
         "quarto" { $SkipQuarto = $true }
         "r-release" { $SkipRRelease = $true }
+        "test-r" { $SkipTestR = $true }
         default { throw "unsupported skip component: $component" }
     }
 }
@@ -120,6 +125,34 @@ function Require-Tool {
     if (-not $DryRun -and -not (Test-Tool $Name)) {
         throw "required command not found: $Name"
     }
+}
+
+function Set-TestRMetadata {
+    if ($SkipTestR) {
+        return
+    }
+
+    if ($DryRun) {
+        $script:TestRName = "<rig-name-for-$TestRSpec>"
+        $script:TestRVersion = "<resolved-$TestRSpec-version>"
+        $script:TestRExcludeNewer = "<release-date-for-$TestRSpec>"
+        $script:TestRscript = "<Rscript-for-$TestRSpec>"
+        return
+    }
+
+    $metadata = & (Get-PythonTool) "scripts/resolve-test-r.py" $TestRSpec
+    if ($LASTEXITCODE -ne 0) {
+        throw "scripts/resolve-test-r.py exited with code $LASTEXITCODE"
+    }
+    $fields = @($metadata)
+    if ($fields.Count -ne 4) {
+        throw "scripts/resolve-test-r.py returned unexpected output: $metadata"
+    }
+
+    $script:TestRName = $fields[0]
+    $script:TestRVersion = $fields[1]
+    $script:TestRExcludeNewer = $fields[2]
+    $script:TestRscript = $fields[3]
 }
 
 function Add-PathIfExists {
@@ -232,24 +265,41 @@ if (-not $DryRun -and -not (Test-Tool "rig")) {
 if (-not $SkipRRelease) {
     Invoke-Step "rig" @("add", "release")
 }
-Invoke-Step "rig" @("add", $TestRVersion)
-if ($SetRigDefault) {
-    Invoke-Step "rig" @("default", "release")
+if (-not $SkipTestR) {
+    Invoke-Step "rig" @("add", $TestRSpec)
 }
+
+Set-TestRMetadata
 
 Invoke-Step "cargo" @("--version")
 Invoke-Step "rustc" @("--version")
 Invoke-Step (Get-PythonTool) @("--version")
 Invoke-Step "rig" @("--version")
 Invoke-Step "Rscript" @("--version")
-Invoke-Step "rig" @("run", "-r", $TestRVersion, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+if (-not $SkipTestR) {
+    if (-not $TestRName) {
+        throw "test R metadata was not loaded"
+    }
+    Invoke-Step "rig" @("run", "-r", $TestRName, "-e", "stopifnot(as.character(getRversion()) == '$TestRVersion')")
+}
 Invoke-Step "quarto" @("--version")
+
+if (-not $SkipTestR -and -not $DryRun -and $env:GITHUB_ENV) {
+    Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_VERSION=$TestRVersion"
+    Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
+    Add-Content -Path $env:GITHUB_ENV -Value "IR_TEST_RSCRIPT=$TestRscript"
+}
 
 Write-Host ""
 Write-Host "Developer dependencies are installed."
+if ($SkipTestR) {
+    return
+}
 Write-Host "To enable the version-selection tests in this PowerShell session, run:"
 Write-Host ""
-Write-Host "  `$env:IR_TEST_R_VERSION=4.4.3"
+Write-Host "  `$env:IR_TEST_R_VERSION=$TestRVersion"
+Write-Host "  `$env:IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"
+Write-Host "  `$env:IR_TEST_RSCRIPT='$TestRscript'"
 Write-Host ""
 Write-Host "Then run:"
 Write-Host ""

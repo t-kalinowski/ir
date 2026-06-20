@@ -2,6 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -63,9 +66,10 @@ fn install_dev_deps_sh_prints_linux_plan() {
     assert_stdout_contains(&out, "https://rig.r-pkg.org/deb/rig.gpg");
     assert_stdout_contains(&out, "quarto-linux-");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
-    assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+    assert_stdout_contains(&out, "IR_TEST_R_VERSION=<resolved-oldrel/2-version>");
+    assert_stdout_contains(&out, "IR_TEST_R_EXCLUDE_NEWER=<release-date-for-oldrel/2>");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
         "{}",
@@ -90,7 +94,7 @@ fn install_dev_deps_sh_prints_macos_plan() {
     assert_stdout_contains(&out, "brew install --cask rig");
     assert_stdout_contains(&out, "brew install --cask quarto");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
@@ -123,7 +127,7 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
 
     assert_success(&out);
     assert_stdout_contains(&out, "https://rig.r-pkg.org/deb/rig.gpg");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert_stdout_contains(&out, "rig list --json");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("https://sh.rustup.rs"), "{stdout}");
@@ -134,12 +138,15 @@ fn install_dev_deps_sh_can_skip_action_managed_tools_for_ci() {
 
 #[cfg(unix)]
 #[test]
-fn install_dev_deps_sh_sets_rig_default_only_when_requested() {
+fn install_dev_deps_sh_can_skip_test_r() {
     let out =
-        dev_deps_sh_plan_with_args(&["--dry-run", "--platform", "linux-deb", "--set-rig-default"]);
+        dev_deps_sh_plan_with_args(&["--dry-run", "--platform", "linux-deb", "--skip", "test-r"]);
 
     assert_success(&out);
-    assert_stdout_contains(&out, "rig default release");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig add oldrel/2"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_VERSION"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_EXCLUDE_NEWER"), "{stdout}");
 }
 
 #[test]
@@ -151,19 +158,35 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("scripts/install-dev-deps.sh"));
     assert!(workflow.contains("Keep the GitHub setup actions above"));
     assert!(workflow.contains("scripts\\install-dev-deps.ps1"));
+    assert!(workflow.contains("Install rig and non-default R (Unix)"));
+    assert!(workflow.contains("Install rig and non-default R (Windows)"));
+    assert!(workflow.contains("-Skip rust, python, quarto, r-release"));
+    assert!(!workflow.contains("IR_TEST_R_VERSION=4.4.3"));
+    assert!(!workflow.contains("IR_TEST_R_EXCLUDE_NEWER=2025-02-28"));
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("any::xfun"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
+    assert!(workflow.contains("Warm non-default R package cache"));
     assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
     assert!(workflow.contains("github::rstudio/reticulate fansi"));
     assert!(workflow.contains("rmarkdown xfun quarto"));
     assert!(workflow.contains("rmarkdown bookdown tinytex xfun"));
+    assert!(workflow.contains("\"$IR_TEST_RSCRIPT\" scripts/warm-renv-cache.R"));
     assert!(workflow.contains("shell: bash"));
     assert!(workflow.contains("R_PROFILE_USER"));
     assert!(workflow.contains("scripts/ci-rprofile.R"));
     assert!(workflow.contains("scripts/warm-renv-cache.R"));
+    let warm_non_default_cache = workflow
+        .split("      - name: Warm non-default R package cache")
+        .nth(1)
+        .and_then(|block| block.split("      - run: cargo nextest").next())
+        .expect("workflow should warm the non-default R package cache before tests");
+    assert!(warm_non_default_cache
+        .contains("--repos https://packagemanager.posit.co/cran/${IR_TEST_R_EXCLUDE_NEWER}"));
+    assert!(!warm_non_default_cache.contains("2026-06-01"));
+    assert!(warm_non_default_cache.contains("R_LIBS_USER: ${{ runner.temp }}/ir-test-r-library"));
     let warm_default_cache = workflow
         .split("      - name: Warm default R package cache")
         .nth(1)
@@ -182,7 +205,6 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(!workflow.contains("Warm default R package cache (Windows)"));
     assert!(workflow.contains("cargo nextest run --verbose --no-fail-fast"));
     assert!(!workflow.contains("cargo build --verbose"));
-    assert!(!workflow.contains("Warm non-default R package cache"));
     assert!(!workflow.contains("Warm GitHub R package cache"));
     assert!(!workflow.contains("withr@"));
     assert!(!workflow.contains("reticulate github::rstudio/reticulate"));
@@ -191,9 +213,6 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(!workflow.contains("scripts/warm-r-version-cache.R"));
     assert!(!workflow.contains("cargo run --bin ir -- run --isolated --vanilla"));
     assert!(!workflow.contains("--r-version \"$IR_TEST_R_VERSION\""));
-    assert!(workflow.contains("Install rig and non-default R (Unix)"));
-    assert!(workflow.contains("Install rig and non-default R (Windows)"));
-    assert!(workflow.contains("-Skip rust, python, quarto, r-release"));
     assert!(
         !workflow.contains("-Skip rust `\n            -Skip python"),
         "PowerShell array parameters must be passed in one binding"
@@ -204,6 +223,43 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(!workflow.contains("Install rig (macOS)"));
     assert!(!workflow.contains("Warm resolver tooling for the non-default R"));
     assert!(!workflow.contains("pak::pkg_install(c(\"pak\", \"renv\", \"secretbase\"))"));
+
+    let warm_script_path = repo_root().join("scripts/warm-renv-cache.R");
+    let warm_script = fs::read_to_string(&warm_script_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", warm_script_path.display()));
+    assert!(warm_script.contains("Sys.getenv(\"R_LIBS_USER\", unset = \"\")"));
+    assert!(warm_script.contains("dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)"));
+    assert!(warm_script.contains(".libPaths(c(user_libs, .libPaths()))"));
+}
+
+#[test]
+fn install_dev_deps_scripts_persist_dynamic_test_r_metadata() {
+    let sh_path = repo_root().join("scripts/install-dev-deps.sh");
+    let sh = fs::read_to_string(&sh_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", sh_path.display()));
+    assert!(sh.contains("TEST_R_SPEC=\"oldrel/2\""));
+    assert!(sh.contains("scripts/resolve-test-r.py \"$TEST_R_SPEC\""));
+    assert!(sh.contains("sed -n '4p' \"$metadata_file\""));
+    assert!(sh.contains("IR_TEST_R_EXCLUDE_NEWER"));
+    assert!(sh.contains("IR_TEST_RSCRIPT"));
+    assert!(
+        !sh.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
+
+    let ps1_path = repo_root().join("scripts/install-dev-deps.ps1");
+    let ps1 = fs::read_to_string(&ps1_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", ps1_path.display()));
+    assert!(ps1.contains("$TestRSpec = \"oldrel/2\""));
+    assert!(ps1.contains("scripts/resolve-test-r.py\" $TestRSpec"));
+    assert!(ps1.contains("$fields = @($metadata)"));
+    assert!(!ps1.contains(r#"-split "\s+""#));
+    assert!(ps1.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
+    assert!(ps1.contains("IR_TEST_RSCRIPT=$TestRscript"));
+    assert!(
+        !ps1.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
 }
 
 #[test]
@@ -226,6 +282,23 @@ fn cli_tests_do_not_use_global_e2e_lock() {
 
     assert!(!tests.contains("static E2E_LOCK"), "use per-test isolation");
     assert!(!tests.contains("e2e_lock()"), "use per-test isolation");
+}
+
+#[test]
+fn r_version_selection_test_uses_dynamic_test_r_version() {
+    let path = repo_root().join("tests/rig_selection.rs");
+    let test = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    assert!(!test.contains("FIXTURE_R_VERSION"));
+    assert!(!test.contains("must match the fixture"));
+    assert!(test.contains(
+        "rig_test_r_version(\"r_version_selection_covers_render_flag_and_run_frontmatter\")"
+    ));
+    assert!(test.contains("replace(\"#| r-version: 4.4.3\""));
+    assert!(test.contains("IR_TEST_R_EXCLUDE_NEWER"));
+    assert!(test.contains("\"exclude-newer: 2026-06-01\""));
+    assert!(test.contains("exclude-newer: {target_exclude_newer}"));
 }
 
 #[test]
@@ -274,13 +347,15 @@ fn install_dev_deps_ps1_prints_windows_plan() {
     assert_stdout_contains(&out, "winget install --id posit.rig");
     assert_stdout_contains(&out, "winget install --id Posit.Quarto");
     assert_stdout_contains(&out, "rig add release");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("rig default release"),
         "{}",
         output_text(&out)
     );
-    assert_stdout_contains(&out, "IR_TEST_R_VERSION=4.4.3");
+    assert_stdout_contains(&out, "IR_TEST_R_VERSION=<resolved-oldrel/2-version>");
+    assert_stdout_contains(&out, "IR_TEST_R_EXCLUDE_NEWER=<release-date-for-oldrel/2>");
+    assert_stdout_contains(&out, "IR_TEST_RSCRIPT='<Rscript-for-oldrel/2>'");
 }
 
 #[cfg(windows)]
@@ -301,7 +376,7 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
 
     assert_success(&out);
     assert_stdout_contains(&out, "choco install rig -y --no-progress");
-    assert_stdout_contains(&out, "rig add 4.4.3");
+    assert_stdout_contains(&out, "rig add oldrel/2");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("winget install --id posit.rig"),
@@ -313,7 +388,7 @@ fn install_dev_deps_ps1_uses_choco_for_rig_on_github_actions() {
 
 #[cfg(windows)]
 #[test]
-fn install_dev_deps_ps1_sets_rig_default_only_when_requested() {
+fn install_dev_deps_ps1_can_skip_test_r() {
     let out = Command::new("powershell")
         .current_dir(repo_root())
         .env_remove("GITHUB_ACTIONS")
@@ -322,13 +397,17 @@ fn install_dev_deps_ps1_sets_rig_default_only_when_requested() {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "& .\\scripts\\install-dev-deps.ps1 -DryRun -SetRigDefault",
+            "& .\\scripts\\install-dev-deps.ps1 -DryRun -Skip test-r",
         ])
         .output()
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "rig default release");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("rig add oldrel/2"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_VERSION"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_R_EXCLUDE_NEWER"), "{stdout}");
+    assert!(!stdout.contains("IR_TEST_RSCRIPT"), "{stdout}");
 }
 
 #[test]
@@ -346,8 +425,6 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(script.contains("ProgramFiles \"rig\""));
     assert!(script.contains("ProgramFiles \"rig\\bin\""));
     assert!(script.contains("[string[]]$Skip"));
-    assert!(script.contains("[switch]$SetRigDefault"));
-    assert!(script.contains("if ($SetRigDefault)"));
     assert!(script.contains("unsupported skip component"));
     assert!(script.contains("function Test-RunnableTool"));
     assert!(
@@ -359,5 +436,168 @@ fn install_dev_deps_ps1_documents_windows_bootstrap() {
     assert!(!script.contains(r#"Test-AnyTool @("python", "python3")"#));
     assert!(!script.contains(r#"@("python", "python3", "py")"#));
     assert!(script.contains("R\\bin"));
-    assert!(script.contains("IR_TEST_R_VERSION=4.4.3"));
+    assert!(script.contains("$TestRSpec = \"oldrel/2\""));
+    assert!(script.contains("IR_TEST_R_VERSION=$TestRVersion"));
+    assert!(script.contains("IR_TEST_R_EXCLUDE_NEWER=$TestRExcludeNewer"));
+    assert!(
+        !script.contains("exit 0"),
+        "skip paths should return from the script without closing an interactive shell"
+    );
+    assert!(
+        script.contains("IR_TEST_RSCRIPT='$TestRscript'"),
+        "printed IR_TEST_RSCRIPT assignment should be pasteable when Rscript lives under Program Files"
+    );
+    assert!(script.contains("IR_TEST_RSCRIPT=$TestRscript"));
+    assert!(
+        !script.contains("rig default release"),
+        "setup should not mutate a user's configured rig default"
+    );
+}
+
+#[test]
+fn test_r_metadata_resolution_is_shared() {
+    let helper = repo_root().join("scripts/resolve-test-r.py");
+    assert!(
+        helper.exists(),
+        "test R metadata resolution should live in a shared helper"
+    );
+    let helper_text = fs::read_to_string(&helper)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", helper.display()));
+    assert!(
+        helper_text.contains(r#"if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript""#),
+        "test R metadata resolution should ask Windows R for Rscript.exe"
+    );
+    assert!(helper_text.contains("stdin=\"\"\""));
+    assert!(helper_text.contains("write.dcf"));
+    assert!(helper_text.contains("from email.parser import Parser"));
+    assert!(helper_text.contains(r#"source(file("stdin"))"#));
+    assert!(!helper_text.contains("cat(sprintf"));
+    assert!(!helper_text.contains("def output_field"));
+    assert!(!helper_text.contains("available\", \"--all\", \"--json"));
+    assert!(!helper_text.contains("def version_parts"));
+
+    for script in [
+        "scripts/install-dev-deps.sh",
+        "scripts/install-dev-deps.ps1",
+        "scripts/setup_codex_universal.sh",
+    ] {
+        let path = repo_root().join(script);
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        assert!(
+            text.contains("scripts/resolve-test-r.py"),
+            "{} should call the shared test R resolver",
+            path.display()
+        );
+        assert!(
+            !text.contains("def version_parts"),
+            "{} should not duplicate the resolver's Python code",
+            path.display()
+        );
+        assert!(
+            !text.contains("function Get-TestRMetadata"),
+            "{} should not duplicate the resolver's PowerShell code",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn universal_setup_uses_resolved_test_r_snapshot_date() {
+    let path = repo_root().join("scripts/setup_codex_universal.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    assert!(script.contains("test_r_exclude_newer=\"${test_r_metadata[2]}\""));
+    assert!(script.contains("https://packagemanager.posit.co/cran/${test_r_exclude_newer}"));
+    assert!(!script.contains("https://packagemanager.posit.co/cran/2026-06-01"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_r_metadata_resolver_delegates_oldrel_resolution_to_rig_resolve() {
+    let temp = std::env::temp_dir().join(format!(
+        "ir-fake-rig-oldrel-no-release-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp);
+    fs::create_dir_all(&temp).unwrap();
+    let rig = temp.join("rig");
+    let r = temp.join("R dir").join("R");
+    let rscript = temp.join("R dir").join("Rscript");
+    fs::create_dir_all(r.parent().unwrap()).unwrap();
+    fs::write(
+        &rig,
+        format!(
+            r#"#!/usr/bin/env sh
+set -eu
+if [ "$1" = "-q" ] && [ "$2" = "resolve" ] && [ "$3" = "oldrel/2" ]; then
+  echo '4.4.3 https://example.test/R-4.4.3.pkg'
+elif [ "$1" = "-q" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+  cat <<'JSON'
+[
+  {{"name": "4.4-arm64", "version": "4.4.3", "aliases": [], "binary": "{r_binary}"}}
+]
+JSON
+elif [ "$1" = "run" ]; then
+  echo "metadata probe should invoke the resolved R binary directly" >&2
+  exit 99
+else
+  echo "unexpected rig command: $*" >&2
+  exit 99
+fi
+"#,
+            r_binary = r.display(),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &r,
+        format!(
+            r#"#!/usr/bin/env sh
+set -eu
+if [ "$1" = "--vanilla" ] && [ "$2" = "--slave" ] && [ "$3" = "-e" ] && [ "$4" = 'source(file("stdin"))' ]; then
+  script="$(cat)"
+  printf '%s\n' "$script" | grep -q 'write[.]dcf' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
+  printf '%s\n' "$script" | grep -q 'width *= *100000' || {{ echo "metadata script should disable DCF wrapping" >&2; exit 98; }}
+  printf '%s\n' "$script" | grep -q 'Rscript[.]exe' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
+  cat <<'EOF'
+version: 4.4.3
+date: 2025-02-28
+rscript: {test_rscript}
+EOF
+else
+  echo "unexpected R command: $*" >&2
+  exit 99
+fi
+"#,
+            test_rscript = rscript.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&rig).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&rig, permissions).unwrap();
+    let mut permissions = fs::metadata(&r).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&r, permissions).unwrap();
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![temp.clone()];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).unwrap();
+    let out = Command::new("python3")
+        .current_dir(repo_root())
+        .env("PATH", path)
+        .args(["scripts/resolve-test-r.py", "oldrel/2"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("4.4-arm64\n4.4.3\n2025-02-28\n{}\n", rscript.display())
+    );
+
+    let _ = fs::remove_dir_all(&temp);
 }
