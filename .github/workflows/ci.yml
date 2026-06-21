@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  R_USER_CACHE_DIR: ${{ github.workspace }}/.cache/R
 
 jobs:
   test:
@@ -30,10 +31,23 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+      - name: Prepare daily R cache
+        id: r-cache-date
+        shell: bash
+        run: |
+          mkdir -p .cache/R
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Cache R user cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.R_USER_CACHE_DIR }}
+          # No restore key: the UTC date bucket makes the first run each day cold.
+          key: r-user-cache-${{ runner.os }}-${{ steps.r-cache-date.outputs.date }}-${{ hashFiles('.github/workflows/ci.yml', 'driver/resolve.R', 'scripts/warm-renv-cache.R') }}
       # No DESCRIPTION in this repo, so list the end-to-end fixture deps
       # explicitly (overriding the action's default `deps::.`).
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          cache-version: ${{ steps.r-cache-date.outputs.date }}
           packages: |
             any::pak
             any::renv
