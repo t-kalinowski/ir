@@ -1,0 +1,144 @@
+use std::error::Error;
+use std::ffi::OsStr;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::spec::{RuntimeSpec, UvSpec};
+
+/// The Python resolution driver is embedded for the same reason as the R
+/// package resolver: ir ships as one self-contained binary.
+const PYTHON_RESOLVE_DRIVER: &str = include_str!("../driver/resolve_python.R");
+
+pub(crate) fn prepare_render_spec(spec: &mut RuntimeSpec) {
+    if spec.uv.is_some() && !has_dependency(&spec.dependencies, "reticulate") {
+        spec.dependencies.push("reticulate".to_string());
+    }
+}
+
+pub(crate) fn resolve_env(
+    rscript: &OsStr,
+    library: Option<&Path>,
+    uv: Option<&UvSpec>,
+) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    let Some(uv) = uv else {
+        return Ok(None);
+    };
+
+    let tmp = std::env::temp_dir();
+    let driver = unique_path(&tmp, "ir-python", "R");
+    let result_file = unique_path(&tmp, "ir-python", "txt");
+    fs::write(&driver, PYTHON_RESOLVE_DRIVER)?;
+
+    let mut cmd = Command::new(rscript);
+    cmd.arg(&driver)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .env("IR_PYTHON_RESULT_FILE", &result_file)
+        .env_remove("IR_EXCLUDE_NEWER");
+    if let Some(library) = library {
+        cmd.env("R_LIBS", library);
+    }
+    if let Some(python_version) = &uv.python_version {
+        cmd.env("IR_UV_PYTHON_VERSION", python_version);
+    }
+    if let Some(exclude_newer) = &uv.exclude_newer {
+        cmd.env("IR_UV_EXCLUDE_NEWER", exclude_newer);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or("failed to open Python resolver stdin")?;
+        for package in uv_packages(uv) {
+            writeln!(stdin, "{package}")?;
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait for Python resolver: {e}"))?;
+
+    let _ = fs::remove_file(&driver);
+    let result = fs::read_to_string(&result_file).unwrap_or_default();
+    let _ = fs::remove_file(&result_file);
+
+    if !status.success() {
+        return Err("Python environment resolution failed".into());
+    }
+
+    let path = result.trim();
+    if path.is_empty() {
+        return Err("Python environment resolver did not return a Python path".into());
+    }
+
+    Ok(Some(PathBuf::from(path)))
+}
+
+fn has_dependency(dependencies: &[String], package: &str) -> bool {
+    dependencies
+        .iter()
+        .any(|dependency| dependency_name(dependency) == package)
+}
+
+fn dependency_name(dependency: &str) -> &str {
+    let dependency = dependency.trim();
+    let end = dependency
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.'))
+        .unwrap_or(dependency.len());
+    &dependency[..end]
+}
+
+fn uv_packages(uv: &UvSpec) -> Vec<String> {
+    let mut packages = uv.packages.clone();
+    if !packages
+        .iter()
+        .any(|package| uv_package_name(package) == "jupyter")
+    {
+        packages.push("jupyter".to_string());
+    }
+    packages
+}
+
+fn uv_package_name(package: &str) -> &str {
+    let package = package.trim();
+    let end = package
+        .find(|ch: char| {
+            matches!(
+                ch,
+                '<' | '>' | '=' | '~' | '!' | '[' | '@' | ';' | ' ' | '\t'
+            )
+        })
+        .unwrap_or(package.len());
+    &package[..end]
+}
+
+fn unique_path(dir: &Path, prefix: &str, ext: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut path = dir.join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    if !ext.is_empty() {
+        path.set_extension(ext);
+    }
+    path
+}
+
+fn spawn_error(rscript: &OsStr, err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        format!(
+            "could not find Rscript `{}` while resolving Python environment",
+            rscript.to_string_lossy()
+        )
+    } else {
+        format!(
+            "failed to launch Python resolver with `{}`: {err}",
+            rscript.to_string_lossy()
+        )
+    }
+}

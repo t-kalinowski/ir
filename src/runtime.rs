@@ -10,16 +10,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 
+use crate::python;
 use crate::quarto::{self, RenderSource};
 use crate::resolve_cache;
 use crate::rig;
 use crate::script::RunSource;
-use crate::spec::{RuntimeSpec, UvSpec};
+use crate::spec::RuntimeSpec;
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.
 const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
-const PYTHON_RESOLVE_DRIVER: &str = include_str!("../driver/resolve_python.R");
 
 /// Resolve dependencies for `source`, then run it against the resulting
 /// library. Exits the process with the program's own exit code.
@@ -69,14 +69,12 @@ pub(crate) fn cmd_render(
     apply_exclude_newer_override(&mut spec, exclude_newer)?;
     spec.dependencies.extend(with_deps.iter().cloned());
     spec.quarto_render = true;
-    if spec.uv.is_some() && !has_dependency(&spec.dependencies, "reticulate") {
-        spec.dependencies.push("reticulate".to_string());
-    }
+    python::prepare_render_spec(&mut spec);
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
     let library = resolve_library(&rscript, &spec)?;
-    let python = resolve_python_env(&rscript, library.as_deref(), spec.uv.as_ref())?;
+    let python = python::resolve_env(&rscript, library.as_deref(), spec.uv.as_ref())?;
     let code = quarto::run(
         &rscript,
         library.as_deref(),
@@ -465,105 +463,6 @@ fn parse_simple_version_ref(dependency: &str) -> Option<(&str, &str, &str)> {
         operator,
         &dependency[version_start..version_end],
     ))
-}
-
-fn has_dependency(dependencies: &[String], package: &str) -> bool {
-    dependencies
-        .iter()
-        .any(|dependency| dependency_name(dependency) == package)
-}
-
-fn dependency_name(dependency: &str) -> &str {
-    let dependency = dependency.trim();
-    let end = dependency
-        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.'))
-        .unwrap_or(dependency.len());
-    &dependency[..end]
-}
-
-fn resolve_python_env(
-    rscript: &OsStr,
-    library: Option<&Path>,
-    uv: Option<&UvSpec>,
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    let Some(uv) = uv else {
-        return Ok(None);
-    };
-
-    let tmp = env::temp_dir();
-    let driver = unique_path(&tmp, "ir-python", "R");
-    let result_file = unique_path(&tmp, "ir-python", "txt");
-    fs::write(&driver, PYTHON_RESOLVE_DRIVER)?;
-
-    let mut cmd = Command::new(rscript);
-    cmd.arg(&driver)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env("IR_PYTHON_RESULT_FILE", &result_file)
-        .env_remove("IR_EXCLUDE_NEWER");
-    if let Some(library) = library {
-        cmd.env("R_LIBS", library);
-    }
-    if let Some(python_version) = &uv.python_version {
-        cmd.env("IR_UV_PYTHON_VERSION", python_version);
-    }
-    if let Some(exclude_newer) = &uv.exclude_newer {
-        cmd.env("IR_UV_EXCLUDE_NEWER", exclude_newer);
-    }
-
-    let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or("failed to open Python resolver stdin")?;
-        for package in uv_packages(uv) {
-            writeln!(stdin, "{package}")?;
-        }
-    }
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait for Python resolver: {e}"))?;
-
-    let _ = fs::remove_file(&driver);
-    let result = fs::read_to_string(&result_file).unwrap_or_default();
-    let _ = fs::remove_file(&result_file);
-
-    if !status.success() {
-        return Err("Python environment resolution failed".into());
-    }
-
-    let path = result.trim();
-    if path.is_empty() {
-        return Err("Python environment resolver did not return a Python path".into());
-    }
-
-    Ok(Some(PathBuf::from(path)))
-}
-
-fn uv_packages(uv: &UvSpec) -> Vec<String> {
-    let mut packages = uv.packages.clone();
-    if !packages
-        .iter()
-        .any(|package| uv_package_name(package) == "jupyter")
-    {
-        packages.push("jupyter".to_string());
-    }
-    packages
-}
-
-fn uv_package_name(package: &str) -> &str {
-    let package = package.trim();
-    let end = package
-        .find(|ch: char| {
-            matches!(
-                ch,
-                '<' | '>' | '=' | '~' | '!' | '[' | '@' | ';' | ' ' | '\t'
-            )
-        })
-        .unwrap_or(package.len());
-    &package[..end]
 }
 
 enum RscriptSource<'a> {
