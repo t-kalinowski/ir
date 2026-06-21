@@ -665,6 +665,7 @@ fn run_with_exclude_newer_after_metadata_fetch_caches_actual_fetch_date() {
         cache.contains(&format!(r#""fetched_at": "{}""#, utc_today_string())),
         "{cache}"
     );
+    fs::remove_file(&available_called).unwrap();
     let out = run();
     assert_success(&out);
     assert_stdout_contains(&out, "selected=r47");
