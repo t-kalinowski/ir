@@ -31,6 +31,40 @@ if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
     .unwrap();
 }
 
+#[cfg(unix)]
+fn write_python_resolver_lock_profile(profile: &Path) {
+    fs::write(
+        profile,
+        r#"
+if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
+  readLines("stdin", warn = FALSE)
+  library <- file.path(Sys.getenv("IR_CACHE_DIR"), "fake-library")
+  dir.create(library, recursive = TRUE, showWarnings = FALSE)
+  cat(library, "\n", file = Sys.getenv("IR_RESOLVE_RESULT_FILE"))
+  q("no", status = 0, runLast = FALSE)
+}
+
+if (nzchar(Sys.getenv("IR_PYTHON_RESULT_FILE"))) {
+  readLines("stdin", warn = FALSE)
+  local({
+    active <- Sys.getenv("IR_TEST_ACTIVE")
+    if (!dir.create(active, recursive = TRUE, showWarnings = FALSE)) {
+      writeLines("overlap", Sys.getenv("IR_TEST_OVERLAP"))
+      stop("resolve_python.R overlapped", call. = FALSE)
+    }
+    on.exit(unlink(active, recursive = TRUE, force = TRUE), add = TRUE)
+    cat(Sys.getpid(), "\n", file = Sys.getenv("IR_TEST_ENTERED"), append = TRUE)
+    Sys.sleep(as.numeric(Sys.getenv("IR_TEST_SLEEP", "0")))
+    cat(Sys.getenv("IR_TEST_PYTHON"), "\n",
+        file = Sys.getenv("IR_PYTHON_RESULT_FILE"))
+  })
+  q("no", status = 0, runLast = FALSE)
+}
+"#,
+    )
+    .unwrap();
+}
+
 struct ResolverLockProbe<'a> {
     user_cache_dir: &'a Path,
     profile: &'a Path,
@@ -97,6 +131,81 @@ fn resolver_probe_count(entered: &Path) -> usize {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", entered.display()))
         .lines()
         .count()
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_uv_render_serializes_python_resolver_tooling() {
+    let cache_dir = temp_dir("ir-python-resolution-lock-cache");
+    let user_cache_dir = temp_dir("ir-python-resolution-lock-user-cache");
+    let profile = temp_path("ir-python-resolution-lock-profile", "R");
+    let active = temp_path("ir-python-resolution-lock-active", "");
+    let entered = temp_path("ir-python-resolution-lock-entered", "txt");
+    let overlap = temp_path("ir-python-resolution-lock-overlap", "txt");
+    let bin_dir = temp_dir("ir-python-resolution-lock-bin");
+    let python = bin_dir.join("python");
+    let quarto = bin_dir.join("quarto");
+    let doc = temp_path("ir-python-resolution-lock", "qmd");
+
+    write_python_resolver_lock_profile(&profile);
+    write_executable(&python, "#!/bin/sh\nexit 0\n");
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+    fs::write(
+        &doc,
+        r#"---
+title: uv lock
+format: html
+jupyter: python3
+uv:
+  packages:
+    - pandas
+---
+"#,
+    )
+    .unwrap();
+
+    let mut first = ir();
+    first
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &user_cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_QUARTO", &quarto)
+        .env("IR_TEST_ACTIVE", &active)
+        .env("IR_TEST_OVERLAP", &overlap)
+        .env("IR_TEST_ENTERED", &entered)
+        .env("IR_TEST_SLEEP", "1")
+        .env("IR_TEST_PYTHON", &python)
+        .args(["render"])
+        .arg(&doc)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let first = first.spawn().unwrap();
+    let first = wait_for_resolver_probe(first, &active);
+
+    let second = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &user_cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_QUARTO", &quarto)
+        .env("IR_TEST_ACTIVE", &active)
+        .env("IR_TEST_OVERLAP", &overlap)
+        .env("IR_TEST_ENTERED", &entered)
+        .env("IR_TEST_SLEEP", "1")
+        .env("IR_TEST_PYTHON", &python)
+        .args(["render"])
+        .arg(&doc)
+        .output()
+        .unwrap();
+    let first = first.wait_with_output().unwrap();
+
+    assert_success(&first);
+    assert_success(&second);
+    assert!(!overlap.exists(), "resolve_python.R should not overlap");
+    assert_eq!(
+        resolver_probe_count(&entered),
+        2,
+        "both uv renders should resolve Python, but not concurrently"
+    );
 }
 
 #[test]

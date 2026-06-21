@@ -1916,6 +1916,8 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("IR_TEST_EMPTY_LIB", &empty_library)
+        .env("R_LIBS_SITE", &empty_library)
+        .env("R_LIBS_USER", &empty_library)
         .env("R_PROFILE_USER", &profile)
         .args([
             "run",

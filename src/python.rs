@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::driver;
+use crate::lock::{resolver_lock_path, FileLock};
 use crate::spec::UvSpec;
 
 /// The Python resolution driver is embedded for the same reason as the R
@@ -26,6 +27,7 @@ pub(crate) fn resolve_env(
         return Ok(None);
     };
 
+    let _resolver_lock = FileLock::acquire(&resolver_lock_path(cache_dir))?;
     let driver = driver::cached_path(
         cache_dir,
         driver::PYTHON_RESOLVE_FILE,

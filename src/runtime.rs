@@ -1,7 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,6 +11,7 @@ use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 
 use crate::driver;
+use crate::lock::{resolver_lock_path, FileLock};
 use crate::python;
 use crate::quarto::{self, RenderSource};
 use crate::resolve_cache;
@@ -366,27 +367,6 @@ fn resolve_library_inner(
     })
 }
 
-struct FileLock {
-    _file: fs::File,
-}
-
-impl FileLock {
-    fn acquire(path: &Path) -> Result<Self, Box<dyn Error>> {
-        fs::create_dir_all(path.parent().ok_or("resolver lock path has no parent")?)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|e| format!("failed to open resolver lock `{}`: {e}", path.display()))?;
-        file.lock()
-            .map_err(|e| format!("failed to lock resolver cache `{}`: {e}", path.display()))?;
-
-        Ok(Self { _file: file })
-    }
-}
-
 fn normalized_dependencies(dependencies: &[String]) -> Vec<String> {
     dependencies
         .iter()
@@ -724,10 +704,6 @@ pub(crate) fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
     }
 
     Ok(r_user_cache_dir()?.join("R").join("ir"))
-}
-
-fn resolver_lock_path(root: &Path) -> PathBuf {
-    root.join("locks").join("resolver.lock")
 }
 
 pub(crate) fn nonempty_env(name: &str) -> Option<OsString> {
