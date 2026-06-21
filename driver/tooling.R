@@ -45,6 +45,29 @@ ir_tooling_min_version <- function(package, min_versions = character()) {
   if (is.null(value)) NULL else value
 }
 
+ir_reset_tooling_namespace <- function(package) {
+  if (!isNamespaceLoaded(package)) return(invisible())
+
+  attached <- paste0("package:", package)
+  tryCatch({
+    if (attached %in% search())
+      detach(attached, character.only = TRUE, unload = TRUE)
+    else
+      unloadNamespace(package)
+  }, error = function(e) {
+    stop("package `", package, "` was loaded before resolver tooling ",
+         "could select its private copy: ", conditionMessage(e),
+         call. = FALSE)
+  })
+
+  if (isNamespaceLoaded(package)) {
+    stop("package `", package, "` was loaded before resolver tooling ",
+         "could select its private copy", call. = FALSE)
+  }
+
+  invisible()
+}
+
 # Tooling packages not already usable by the resolver. Prefer the private
 # tooling library, but accept ambient packages unless they come from R_LIBS_USER
 # and were built under a different R minor version.
