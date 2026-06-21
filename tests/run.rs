@@ -1780,11 +1780,11 @@ utils::assignInNamespace("install.packages", function(...) {{
 #[cfg(unix)]
 #[test]
 fn resolver_tooling_bootstraps_only_pak_with_install_packages() {
-    let cache_dir = unique_dir("ir-pak-tooling-cache");
-    let empty_library = unique_dir("ir-pak-tooling-empty-library");
-    let install_marker = unique_path("ir-pak-tooling-install", "txt");
-    let pak_marker = unique_path("ir-pak-tooling-pak", "txt");
-    let profile = unique_path("ir-pak-tooling-profile", "R");
+    let cache_dir = temp_dir("ir-pak-tooling-cache");
+    let empty_library = temp_dir("ir-pak-tooling-empty-library");
+    let install_marker = temp_path("ir-pak-tooling-install", "txt");
+    let pak_marker = temp_path("ir-pak-tooling-pak", "txt");
+    let profile = temp_path("ir-pak-tooling-profile", "R");
 
     fs::write(
         &profile,
@@ -1942,12 +1942,6 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
         "{pak_refs}"
     );
     assert!(!pak_refs.lines().any(|line| line == "pak"), "{pak_refs}");
-
-    let _ = fs::remove_file(&profile);
-    let _ = fs::remove_file(&install_marker);
-    let _ = fs::remove_file(&pak_marker);
-    let _ = fs::remove_dir_all(&empty_library);
-    let _ = fs::remove_dir_all(&cache_dir);
 }
 
 #[cfg(unix)]

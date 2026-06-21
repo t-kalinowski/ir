@@ -309,17 +309,17 @@ fn render_quarto_bare_fixture_injects_rmarkdown() {
 #[cfg(unix)]
 #[test]
 fn render_quarto_uv_frontmatter_sets_quarto_python() {
-    let cache_dir = unique_dir("ir-render-uv-cache");
-    let bin_dir = unique_dir("ir-render-uv-bin");
-    let doc = unique_path("ir-render-uv", "qmd");
+    let cache_dir = temp_dir("ir-render-uv-cache");
+    let bin_dir = temp_dir("ir-render-uv-bin");
+    let doc = temp_path("ir-render-uv", "qmd");
     let fake_python = bin_dir.join("python");
     let rscript = bin_dir.join("Rscript");
     let quarto = bin_dir.join("quarto");
-    let r_deps = unique_path("ir-render-uv-r-deps", "txt");
-    let r_driver = unique_path("ir-render-uv-r-driver", "txt");
-    let py_driver = unique_path("ir-render-uv-py-driver", "txt");
-    let uv_packages = unique_path("ir-render-uv-packages", "txt");
-    let uv_env = unique_path("ir-render-uv-env", "txt");
+    let r_deps = temp_path("ir-render-uv-r-deps", "txt");
+    let r_driver = temp_path("ir-render-uv-r-driver", "txt");
+    let py_driver = temp_path("ir-render-uv-py-driver", "txt");
+    let uv_packages = temp_path("ir-render-uv-packages", "txt");
+    let uv_env = temp_path("ir-render-uv-env", "txt");
 
     fs::write(
         &doc,
@@ -459,27 +459,18 @@ exit 1\n",
     let env = fs::read_to_string(&uv_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
     assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
-
-    let _ = fs::remove_file(&doc);
-    let _ = fs::remove_file(&r_deps);
-    let _ = fs::remove_file(&r_driver);
-    let _ = fs::remove_file(&py_driver);
-    let _ = fs::remove_file(&uv_packages);
-    let _ = fs::remove_file(&uv_env);
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
 }
 
 #[cfg(unix)]
 #[test]
 fn render_quarto_uv_frontmatter_clears_ambient_internal_uv_env() {
-    let cache_dir = unique_dir("ir-render-uv-env-cache");
-    let bin_dir = unique_dir("ir-render-uv-env-bin");
-    let doc = unique_path("ir-render-uv-env", "qmd");
+    let cache_dir = temp_dir("ir-render-uv-env-cache");
+    let bin_dir = temp_dir("ir-render-uv-env-bin");
+    let doc = temp_path("ir-render-uv-env", "qmd");
     let fake_python = bin_dir.join("python");
     let rscript = bin_dir.join("Rscript");
     let quarto = bin_dir.join("quarto");
-    let uv_env = unique_path("ir-render-uv-env-observed", "txt");
+    let uv_env = temp_path("ir-render-uv-env-observed", "txt");
 
     fs::write(
         &doc,
@@ -536,11 +527,6 @@ exit 1\n",
     let env = fs::read_to_string(&uv_env).unwrap();
     assert!(env.contains("python_version=\n"), "{env}");
     assert!(env.contains("exclude_newer=\n"), "{env}");
-
-    let _ = fs::remove_file(&doc);
-    let _ = fs::remove_file(&uv_env);
-    let _ = fs::remove_dir_all(&cache_dir);
-    let _ = fs::remove_dir_all(&bin_dir);
 }
 
 #[test]

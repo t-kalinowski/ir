@@ -21,9 +21,9 @@ pub(crate) fn cached_path(
 
 fn write_path(path: &Path, contents: &str) -> Result<PathBuf, Box<dyn Error>> {
     fs::create_dir_all(path.parent().ok_or("driver cache path has no parent")?)?;
-    fs::write(&path, contents)?;
-    let mut permissions = fs::metadata(&path)?.permissions();
+    fs::write(path, contents)?;
+    let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_readonly(true);
-    fs::set_permissions(&path, permissions)?;
+    fs::set_permissions(path, permissions)?;
     Ok(path.to_path_buf())
 }
