@@ -8,12 +8,29 @@ mod release_metadata;
 
 const R_VERSION_METADATA_FETCHED_AT_PATH: &str = "src/rig/r-versions-fetched-at.txt";
 const R_VERSION_METADATA_PATH: &str = "src/rig/r-versions.json";
+const TOOLING_DRIVER_PATH: &str = "driver/tooling.R";
+const RESOLVE_DRIVER_PATH: &str = "driver/resolve.R";
+const PYTHON_RESOLVE_DRIVER_PATH: &str = "driver/resolve_python.R";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/rig/release_metadata.rs");
     println!("cargo:rerun-if-changed={R_VERSION_METADATA_FETCHED_AT_PATH}");
     println!("cargo:rerun-if-changed={R_VERSION_METADATA_PATH}");
+    println!("cargo:rerun-if-changed={TOOLING_DRIVER_PATH}");
+    println!("cargo:rerun-if-changed={RESOLVE_DRIVER_PATH}");
+    println!("cargo:rerun-if-changed={PYTHON_RESOLVE_DRIVER_PATH}");
+    println!(
+        "cargo:rustc-env=IR_RESOLVE_DRIVER_FILE={}",
+        driver_file_name("resolve", &[TOOLING_DRIVER_PATH, RESOLVE_DRIVER_PATH])
+    );
+    println!(
+        "cargo:rustc-env=IR_PYTHON_RESOLVE_DRIVER_FILE={}",
+        driver_file_name(
+            "resolve-python",
+            &[TOOLING_DRIVER_PATH, PYTHON_RESOLVE_DRIVER_PATH]
+        )
+    );
 
     let json = fs::read_to_string(R_VERSION_METADATA_PATH)
         .unwrap_or_else(|e| panic!("failed to read `{R_VERSION_METADATA_PATH}`: {e}"));
@@ -29,6 +46,26 @@ fn main() {
         generated_release_metadata(&releases, &fetched_at),
     )
     .expect("failed to write generated R release metadata");
+}
+
+fn driver_file_name(prefix: &str, paths: &[&str]) -> String {
+    let mut contents = Vec::new();
+    for path in paths {
+        contents.extend(
+            fs::read(path).unwrap_or_else(|e| panic!("failed to read driver `{path}`: {e}")),
+        );
+        contents.push(b'\n');
+    }
+    format!("{prefix}-{:016x}.R", fnv1a64(&contents))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn generated_release_metadata(

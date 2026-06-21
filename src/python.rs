@@ -26,7 +26,11 @@ pub(crate) fn resolve_env(
         return Ok(None);
     };
 
-    let driver = driver::cached_path(cache_dir, "resolve-python.R", PYTHON_RESOLVE_DRIVER)?;
+    let driver = driver::cached_path(
+        cache_dir,
+        driver::PYTHON_RESOLVE_FILE,
+        PYTHON_RESOLVE_DRIVER,
+    )?;
     let tmp = std::env::temp_dir();
     let result_file = unique_path(&tmp, "ir-python", "txt");
 

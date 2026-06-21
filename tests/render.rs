@@ -404,19 +404,17 @@ exit 1\n",
         "#!/bin/sh\nprintf 'quarto_python=%s\\n' \"$QUARTO_PYTHON\"\nprintf 'reticulate_python=%s\\n' \"$RETICULATE_PYTHON\"\n",
     );
     let expected_driver_dir = cache_dir.join("drivers");
-    let expected_r_driver = expected_driver_dir.join("resolve.R");
-    let expected_py_driver = expected_driver_dir.join("resolve-python.R");
+    let stale_r_driver = expected_driver_dir.join("resolve.R");
+    let stale_py_driver = expected_driver_dir.join("resolve-python.R");
     fs::create_dir_all(&expected_driver_dir).unwrap();
-    fs::write(&expected_r_driver, "stale").unwrap();
-    fs::write(&expected_py_driver, "stale").unwrap();
-    fs::write(expected_driver_dir.join("resolve.R.version"), "old").unwrap();
-    fs::write(expected_driver_dir.join("resolve-python.R.version"), "old").unwrap();
-    let mut permissions = fs::metadata(&expected_r_driver).unwrap().permissions();
+    fs::write(&stale_r_driver, "stale\n").unwrap();
+    fs::write(&stale_py_driver, "stale\n").unwrap();
+    let mut permissions = fs::metadata(&stale_r_driver).unwrap().permissions();
     permissions.set_readonly(true);
-    fs::set_permissions(&expected_r_driver, permissions).unwrap();
-    let mut permissions = fs::metadata(&expected_py_driver).unwrap().permissions();
+    fs::set_permissions(&stale_r_driver, permissions).unwrap();
+    let mut permissions = fs::metadata(&stale_py_driver).unwrap().permissions();
     permissions.set_readonly(true);
-    fs::set_permissions(&expected_py_driver, permissions).unwrap();
+    fs::set_permissions(&stale_py_driver, permissions).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -441,22 +439,26 @@ exit 1\n",
     );
     let r_driver_path = Path::new(fs::read_to_string(&r_driver).unwrap().trim()).to_path_buf();
     let py_driver_path = Path::new(fs::read_to_string(&py_driver).unwrap().trim()).to_path_buf();
-    assert_eq!(r_driver_path, expected_r_driver);
-    assert_eq!(py_driver_path, expected_py_driver);
+    assert!(r_driver_path.starts_with(&expected_driver_dir));
+    assert!(py_driver_path.starts_with(&expected_driver_dir));
+    assert_ne!(r_driver_path, stale_r_driver);
+    assert_ne!(py_driver_path, stale_py_driver);
+    let r_driver_file = r_driver_path.file_name().unwrap().to_string_lossy();
+    let py_driver_file = py_driver_path.file_name().unwrap().to_string_lossy();
+    assert!(
+        r_driver_file.starts_with("resolve-") && r_driver_file.ends_with(".R"),
+        "{r_driver_file}"
+    );
+    assert!(
+        py_driver_file.starts_with("resolve-python-") && py_driver_file.ends_with(".R"),
+        "{py_driver_file}"
+    );
     assert!(fs::read_to_string(&r_driver_path)
         .unwrap()
         .contains("ir_ensure_tooling"));
     assert!(fs::read_to_string(&py_driver_path)
         .unwrap()
         .contains("ir_ensure_tooling"));
-    assert_eq!(
-        fs::read_to_string(expected_driver_dir.join("resolve.R.version")).unwrap(),
-        env!("CARGO_PKG_VERSION")
-    );
-    assert_eq!(
-        fs::read_to_string(expected_driver_dir.join("resolve-python.R.version")).unwrap(),
-        env!("CARGO_PKG_VERSION")
-    );
     assert!(fs::metadata(&r_driver_path)
         .unwrap()
         .permissions()

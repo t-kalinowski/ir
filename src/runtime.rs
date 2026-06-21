@@ -282,7 +282,7 @@ fn resolve_library_inner(
         });
     }
 
-    let driver = driver::cached_path(&cache_dir, "resolve.R", RESOLVE_DRIVER)?;
+    let driver = driver::cached_path(&cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
     let tmp = env::temp_dir();
     let result_file = unique_path(&tmp, "ir-libpath", "txt");
     let package_result_file = primary_package.then(|| unique_path(&tmp, "ir-package", "txt"));
