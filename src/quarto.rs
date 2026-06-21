@@ -44,6 +44,7 @@ impl RenderSource {
 pub(crate) fn run(
     rscript: &OsStr,
     library: Option<&Path>,
+    python: Option<&Path>,
     doc: &Path,
     render_args: &[String],
     isolated: bool,
@@ -57,6 +58,10 @@ pub(crate) fn run(
     }
     if let Some(lib) = library {
         cmd.env("R_LIBS", lib);
+    }
+    if let Some(python) = python {
+        cmd.env("QUARTO_PYTHON", python);
+        cmd.env("RETICULATE_PYTHON", python);
     }
     if isolated {
         cmd.env("R_LIBS_USER", "NULL");

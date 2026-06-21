@@ -10,8 +10,16 @@ pub(crate) struct RuntimeSpec {
     pub(crate) isolated: bool,
     pub(crate) r_requirement: Option<String>,
     pub(crate) rscript: Option<String>,
+    pub(crate) uv: Option<UvSpec>,
     // A Quarto render needs rmarkdown injected for the knitr engine.
     pub(crate) quarto_render: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct UvSpec {
+    pub(crate) packages: Vec<String>,
+    pub(crate) python_version: Option<String>,
+    pub(crate) exclude_newer: Option<String>,
 }
 
 pub(crate) fn parse_r_frontmatter(frontmatter: &str) -> Result<RuntimeSpec, Box<dyn Error>> {
@@ -41,17 +49,26 @@ pub(crate) fn parse_quarto_frontmatter(document: &str) -> Result<RuntimeSpec, Bo
         return Err("script frontmatter must be a YAML mapping".into());
     }
 
+    let uv = frontmatter_uv_spec(&doc)?;
     let Some(spec_node) = doc.as_mapping_get("ir") else {
-        return Ok(RuntimeSpec::default());
+        return Ok(RuntimeSpec {
+            uv,
+            ..RuntimeSpec::default()
+        });
     };
     if spec_node.is_null() {
-        return Ok(RuntimeSpec::default());
+        return Ok(RuntimeSpec {
+            uv,
+            ..RuntimeSpec::default()
+        });
     }
     if !spec_node.is_mapping() {
         return Err("frontmatter `ir` must be a YAML mapping".into());
     }
 
-    runtime_spec_from_yaml_mapping(spec_node)
+    let mut spec = runtime_spec_from_yaml_mapping(spec_node)?;
+    spec.uv = uv;
+    Ok(spec)
 }
 
 fn runtime_spec_from_yaml_mapping(doc: &Yaml<'_>) -> Result<RuntimeSpec, Box<dyn Error>> {
@@ -102,6 +119,58 @@ fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error
         push_dependency_entry(&mut dependencies, item)?;
     }
     Ok(dependencies)
+}
+
+fn frontmatter_uv_spec(doc: &Yaml<'_>) -> Result<Option<UvSpec>, Box<dyn Error>> {
+    let Some(value) = doc.as_mapping_get("uv") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(Some(UvSpec::default()));
+    }
+    if let Some(seq) = value.as_vec() {
+        let mut packages = Vec::new();
+        for item in seq {
+            let Some(value) = item.as_str() else {
+                return Err("frontmatter `uv` entries must be strings".into());
+            };
+            packages.push(value.to_owned());
+        }
+        return Ok(Some(UvSpec {
+            packages,
+            ..UvSpec::default()
+        }));
+    }
+    if !value.is_mapping() {
+        return Err("frontmatter `uv` must be a YAML mapping or sequence".into());
+    }
+
+    Ok(Some(UvSpec {
+        packages: frontmatter_uv_packages(value)?,
+        python_version: frontmatter_optional_string(value, "python-version")?,
+        exclude_newer: frontmatter_optional_string(value, "exclude-newer")?,
+    }))
+}
+
+fn frontmatter_uv_packages(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error>> {
+    let Some(value) = doc.as_mapping_get("packages") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let mut packages = Vec::new();
+    let Some(seq) = value.as_vec() else {
+        return Err("frontmatter `uv.packages` must be a YAML sequence".into());
+    };
+    for item in seq {
+        let Some(value) = item.as_str() else {
+            return Err("frontmatter `uv.packages` entries must be strings".into());
+        };
+        packages.push(value.to_owned());
+    }
+    Ok(packages)
 }
 
 fn push_dependency_entry(
