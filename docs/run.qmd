@@ -60,9 +60,12 @@ Unknown keys are ignored after YAML parsing, so future metadata such as `sys-req
 ## Python environments
 
 Use `python-packages` or `python-version` to ask `ir run` for a Python environment before launching the script.
-`ir` resolves the environment with `reticulate:::uv_get_or_create_env()` and passes the resulting Python executable to the script with `RETICULATE_PYTHON`.
+`ir` resolves the environment with `reticulate:::uv_get_or_create_env()` before launching the script:
+
+- It activates the environment for subprocesses, like `source <env>/bin/activate` on Unix.
+- It sets `RETICULATE_PYTHON` to the resolved Python executable.
+
 Declare `reticulate` under `packages` when the R script loads reticulate.
-Use either `r-version` or `python-version`, not both.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -78,7 +81,7 @@ library(reticulate)
 pd <- import("pandas")
 ```
 
-When Python metadata is present, `exclude-newer` is passed to Python environment resolution instead of R package resolution.
+When Python metadata is present, `exclude-newer` is also used during Python environment resolution.
 
 ## Inline runs
 

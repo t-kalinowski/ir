@@ -73,8 +73,6 @@ fn runtime_spec_from_yaml_mapping(
         return Err("script frontmatter must be a YAML mapping".into());
     }
 
-    reject_r_python_version_conflict(doc, python_key_prefix)?;
-
     Ok(RuntimeSpec {
         dependencies: frontmatter_dependencies(doc)?,
         exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
@@ -116,21 +114,6 @@ fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error
         push_dependency_entry(&mut dependencies, item)?;
     }
     Ok(dependencies)
-}
-
-fn reject_r_python_version_conflict(
-    doc: &Yaml<'_>,
-    python_key_prefix: &str,
-) -> Result<(), Box<dyn Error>> {
-    if doc.as_mapping_get("r-version").is_some() && doc.as_mapping_get("python-version").is_some() {
-        return Err(format!(
-            "frontmatter cannot set both `{}` and `{}`",
-            frontmatter_key(python_key_prefix, "r-version"),
-            frontmatter_key(python_key_prefix, "python-version")
-        )
-        .into());
-    }
-    Ok(())
 }
 
 fn frontmatter_python_spec(

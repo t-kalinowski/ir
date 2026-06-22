@@ -376,11 +376,13 @@ cat("frontmatter.user_library=", Sys.getenv("R_LIBS_USER", unset = "<unset>"), "
 
 #[cfg(unix)]
 #[test]
-fn run_script_frontmatter_sets_reticulate_python() {
+fn run_script_frontmatter_sets_reticulate_python_and_activates_env() {
     let cache_dir = temp_dir("ir-run-python-cache");
     let bin_dir = temp_dir("ir-run-python-bin");
     let script = temp_path("ir-run-python", "R");
-    let fake_python = bin_dir.join("python");
+    let venv = bin_dir.join("venv");
+    let venv_bin = venv.join("bin");
+    let fake_python = venv_bin.join("python");
     let rscript = bin_dir.join("Rscript");
     let r_deps = temp_path("ir-run-python-r-deps", "txt");
     let python_packages = temp_path("ir-run-python-packages", "txt");
@@ -391,24 +393,23 @@ fn run_script_frontmatter_sets_reticulate_python() {
         r#"#!/usr/bin/env -S ir run
 #| python-packages:
 #|   - pandas
+#| r-version: "4.4"
 #| python-version: "3.11"
-#| exclude-newer: "2026-06-01T12:34:56Z"
+#| exclude-newer: "2026-06-01"
 
 cat("reticulate_python=", Sys.getenv("RETICULATE_PYTHON"), "\n", sep = "")
 "#,
     )
     .unwrap();
+    fs::create_dir_all(&venv_bin).unwrap();
     write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
     write_executable(
         &rscript,
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
-    echo shared Python exclude-newer should not reach R dependency resolution >&2\n\
-    exit 1\n\
-  fi\n\
-  cat > {}\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
   exit 0\n\
@@ -420,7 +421,10 @@ if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
 fi\n\
-printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n",
+printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n\
+printf 'virtual_env=%s\\n' \"${{VIRTUAL_ENV:-}}\"\n\
+printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
+            r_deps.display(),
             r_deps.display(),
             python_packages.display(),
             python_env.display(),
@@ -442,8 +446,11 @@ printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n",
         &out,
         &format!("reticulate_python={}", fake_python.display()),
     );
+    assert_stdout_contains(&out, &format!("virtual_env={}", venv.display()));
+    assert_stdout_contains(&out, &format!("path_first={}", venv_bin.display()));
 
     let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
     assert!(
         !deps.lines().any(|line| line == "reticulate"),
         "Python-only frontmatter should not inject user-library reticulate\n{deps}"
@@ -455,32 +462,7 @@ printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n",
 
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
-    assert!(env.contains("exclude_newer=2026-06-01T12:34:56Z"), "{env}");
-}
-
-#[test]
-fn run_script_rejects_r_and_python_version_frontmatter() {
-    let script = temp_path("ir-run-r-python-version-conflict", "R");
-    fs::write(
-        &script,
-        r#"#!/usr/bin/env -S ir run
-#| r-version: "4.4"
-#| python-version: "3.11"
-
-cat("not reached\n")
-"#,
-    )
-    .unwrap();
-
-    let out = ir().args(["run"]).arg(&script).output().unwrap();
-
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("frontmatter cannot set both `r-version` and `python-version`"),
-        "{}",
-        output_text(&out)
-    );
+    assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
 }
 
 #[test]

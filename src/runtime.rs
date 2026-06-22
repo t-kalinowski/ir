@@ -193,19 +193,15 @@ fn apply_exclude_newer_override(
     spec: &mut RuntimeSpec,
     cli_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
-    if spec.python.is_some() {
-        apply_python_exclude_newer_override(spec, cli_exclude_newer)?;
-        spec.exclude_newer = None;
-        return Ok(());
-    }
-
     if let Some(exclude_newer) = cli_exclude_newer {
+        apply_python_exclude_newer_override(spec, Some(exclude_newer));
         spec.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
         return Ok(());
     }
 
     if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
         let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
+        apply_python_exclude_newer_override(spec, Some(&exclude_newer));
         spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
         return Ok(());
     }
@@ -217,26 +213,14 @@ fn apply_exclude_newer_override(
     Ok(())
 }
 
-fn apply_python_exclude_newer_override(
-    spec: &mut RuntimeSpec,
-    cli_exclude_newer: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
+fn apply_python_exclude_newer_override(spec: &mut RuntimeSpec, exclude_newer: Option<&str>) {
     let Some(python) = spec.python.as_mut() else {
-        return Ok(());
+        return;
     };
 
-    if let Some(exclude_newer) = cli_exclude_newer {
+    if let Some(exclude_newer) = exclude_newer {
         python.exclude_newer = Some(exclude_newer.to_string());
-        return Ok(());
     }
-
-    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
-        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
-        python.exclude_newer = Some(exclude_newer);
-        return Ok(());
-    }
-
-    Ok(())
 }
 
 fn normalize_exclude_newer_override(value: &str) -> Result<Option<String>, Box<dyn Error>> {
@@ -577,6 +561,7 @@ fn run_script(
     }
     if let Some(python) = python {
         cmd.env("RETICULATE_PYTHON", python);
+        activate_python_env(&mut cmd, python)?;
     }
 
     if isolated {
@@ -599,6 +584,33 @@ fn run_script(
         let status = cmd.status().map_err(|e| spawn_error(rscript, e))?;
         Ok(status.code().unwrap_or(1))
     }
+}
+
+fn activate_python_env(cmd: &mut Command, python: &Path) -> Result<(), Box<dyn Error>> {
+    let Some(bin_dir) = python.parent() else {
+        return Ok(());
+    };
+
+    let mut path_entries = vec![bin_dir.to_path_buf()];
+    if let Some(path) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&path));
+    }
+    let path = env::join_paths(path_entries)
+        .map_err(|e| format!("failed to activate Python environment: {e}"))?;
+    cmd.env("PATH", path);
+
+    if let Some(env_dir) = python_virtual_env(bin_dir) {
+        cmd.env("VIRTUAL_ENV", env_dir);
+    }
+
+    Ok(())
+}
+
+fn python_virtual_env(bin_dir: &Path) -> Option<&Path> {
+    let name = bin_dir.file_name()?.to_str()?;
+    (name == "bin" || name.eq_ignore_ascii_case("Scripts"))
+        .then(|| bin_dir.parent())
+        .flatten()
 }
 
 /// The default Rscript executable to use when R is not selected explicitly.

@@ -33,7 +33,7 @@ ir:
   python-packages:
     - pandas
   python-version: "3.11"
-  exclude-newer: "2026-06-01T12:34:56Z"
+  exclude-newer: "2026-06-01"
 ---
 
 ```{python}
@@ -48,12 +48,9 @@ print("ok")
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
-    echo shared Python exclude-newer should not reach R dependency resolution >&2\n\
-    exit 1\n\
-  fi\n\
   printf '%s\\n' \"$1\" > {}\n\
-  cat > {}\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
   exit 0\n\
@@ -81,6 +78,7 @@ fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
             r_driver.display(),
+            r_deps.display(),
             r_deps.display(),
             py_driver.display(),
             python_packages.display(),
@@ -123,6 +121,7 @@ exit 1\n",
     );
 
     let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
     assert!(
         !deps.lines().any(|line| line == "reticulate"),
         "Python-only frontmatter should not inject user-library reticulate\n{deps}"
@@ -164,7 +163,7 @@ exit 1\n",
 
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
-    assert!(env.contains("exclude_newer=2026-06-01T12:34:56Z"), "{env}");
+    assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
 }
 
 #[cfg(unix)]
@@ -205,11 +204,8 @@ reticulate::py_config()
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
-    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
-    exit 1\n\
-  fi\n\
-  cat > {}\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
   exit 0\n\
@@ -223,6 +219,7 @@ if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
+            r_deps.display(),
             r_deps.display(),
             python_env.display(),
             python_env.display(),
@@ -251,6 +248,7 @@ exit 1\n",
     );
 
     let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
     assert!(deps.lines().any(|line| line == "reticulate"), "{deps}");
 
     let env = fs::read_to_string(&python_env).unwrap();
@@ -388,28 +386,65 @@ exit 1\n",
     assert_stdout_contains(&out, "quarto_python=\n");
 }
 
+#[cfg(unix)]
 #[test]
-fn render_quarto_rejects_r_and_python_version_frontmatter() {
-    let doc = temp_path("ir-render-r-python-version-conflict", "qmd");
+fn render_quarto_accepts_r_and_python_version_frontmatter() {
+    let cache_dir = temp_dir("ir-render-r-python-version-cache");
+    let bin_dir = temp_dir("ir-render-r-python-version-bin");
+    let doc = temp_path("ir-render-r-python-version", "qmd");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let quarto = bin_dir.join("quarto");
+    let python_env = temp_path("ir-render-r-python-version-env", "txt");
+
     fs::write(
         &doc,
         r#"---
-title: version conflict
+title: version pins
 ir:
   r-version: "4.4"
+  python-packages:
+    - pandas
   python-version: "3.11"
 ---
 "#,
     )
     .unwrap();
-
-    let out = ir().args(["render"]).arg(&doc).output().unwrap();
-
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("frontmatter cannot set both `ir.r-version` and `ir.python-version`"),
-        "{}",
-        output_text(&out)
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+echo unexpected Rscript invocation >&2\n\
+exit 1\n",
+            python_env.display(),
+            fake_python.display()
+        ),
     );
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .args(["render", "--rscript"])
+        .arg(&rscript)
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let env = fs::read_to_string(&python_env).unwrap();
+    assert!(env.contains("python_version=3.11"), "{env}");
 }
