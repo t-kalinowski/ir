@@ -250,6 +250,10 @@ fn warm_renv_cache_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots(
     let snapshot_repos = temp_path("ir-warm-linux-binary-repos-snapshot", "txt");
     let source_repos = temp_path("ir-warm-linux-binary-repos-source", "txt");
     let source_options = temp_path("ir-warm-linux-binary-repos-source-options", "txt");
+    let eol_repos = temp_path("ir-warm-linux-binary-repos-eol", "txt");
+    let arm_repos = temp_path("ir-warm-linux-binary-repos-arm", "txt");
+    let binary_repos = temp_path("ir-warm-linux-binary-repos-binary", "txt");
+    let binary_options = temp_path("ir-warm-linux-binary-repos-binary-options", "txt");
 
     fs::write(
         &profile,
@@ -281,6 +285,17 @@ if (nzchar(ir_test_simulated_os_release)) {
       base::readLines(con, warn = warn, ...)
   }
 }
+ir_test_glibc_version <- Sys.getenv("IR_TEST_GLIBC_VERSION", unset = "")
+if (nzchar(ir_test_glibc_version)) {
+  system2 <- function(command, args = character(), stdout = FALSE, stderr = FALSE, ...) {
+    if (identical(command, "ldd") && "--version" %in% args)
+      return(paste("ldd (GNU libc)", ir_test_glibc_version))
+    base::system2(command, args = args, stdout = stdout, stderr = stderr, ...)
+  }
+}
+ir_test_r_arch <- Sys.getenv("IR_TEST_R_ARCH", unset = "")
+if (nzchar(ir_test_r_arch))
+  R.version$arch <- ir_test_r_arch
 
 ir_test_write_pkg(
   Sys.getenv("R_LIBS_USER"),
@@ -337,6 +352,10 @@ ir_test_repos <- if (nzchar(ir_test_ppm_alias)) {
 if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
   ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
 options(repos = ir_test_repos)
+if (identical(Sys.getenv("IR_TEST_SOURCE_STARTUP", unset = ""), "1")) {
+  options(pkgType = "source", pkg.platforms = "source")
+  Sys.setenv(PKG_PLATFORMS = "source")
+}
 ir_test_download_method <- Sys.getenv("IR_TEST_DOWNLOAD_METHOD", unset = "")
 if (nzchar(ir_test_download_method))
   options(download.file.method = ir_test_download_method,
@@ -400,6 +419,7 @@ if (nzchar(ir_test_download_method))
         .env("IR_TEST_REPOS_FILE", &dated_repos)
         .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
         .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .env("IR_TEST_R_ARCH", "x86_64")
         .args(["scripts/warm-renv-cache.R", "cli"])
         .output()
         .unwrap();
@@ -441,6 +461,7 @@ if (nzchar(ir_test_download_method))
         .env("IR_TEST_DOWNLOAD_METHOD", "wget")
         .env("IR_TEST_PPM_ALIAS", "RSPM")
         .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .env("IR_TEST_R_ARCH", "x86_64")
         .args(["scripts/warm-renv-cache.R", "cli"])
         .output()
         .unwrap();
@@ -477,6 +498,69 @@ if (nzchar(ir_test_download_method))
     assert!(source_options.contains("pkgType=source"));
     assert!(source_options.contains("pkg.platforms=source"));
     assert!(source_options.contains("PKG_PLATFORMS=source"));
+
+    let eol = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_TEST_REPOS_FILE", &eol_repos)
+        .env(
+            "IR_TEST_OS_RELEASE",
+            "ID=ubuntu\nVERSION_CODENAME=focal\nUBUNTU_CODENAME=focal",
+        )
+        .env("IR_TEST_GLIBC_VERSION", "2.31")
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&eol);
+    assert_eq!(
+        read_repos(&eol_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/manylinux_2_28/latest"
+    );
+
+    let arm = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_TEST_REPOS_FILE", &arm_repos)
+        .env("IR_TEST_OS_RELEASE", "ID=debian\nVERSION_CODENAME=bookworm")
+        .env("IR_TEST_GLIBC_VERSION", "2.36")
+        .env("IR_TEST_R_ARCH", "aarch64")
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&arm);
+    assert_eq!(
+        read_repos(&arm_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/manylinux_2_28/latest"
+    );
+
+    let binary = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_PACKAGE_TYPE", "binary")
+        .env("IR_TEST_REPOS_FILE", &binary_repos)
+        .env("IR_TEST_OPTIONS_FILE", &binary_options)
+        .env("IR_TEST_SOURCE_STARTUP", "1")
+        .env(
+            "IR_TEST_OS_RELEASE",
+            "ID=ubuntu\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble",
+        )
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&binary);
+    assert_eq!(
+        read_repos(&binary_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/noble/latest"
+    );
+    let binary_options = read_repos(&binary_options);
+    assert!(binary_options.contains("pkgType=both"));
+    assert!(binary_options.contains("pkg.platforms="));
+    assert!(binary_options.contains("PKG_PLATFORMS="));
+    assert!(!binary_options.contains("pkg.platforms=source"));
+    assert!(!binary_options.contains("PKG_PLATFORMS=source"));
 }
 
 #[test]

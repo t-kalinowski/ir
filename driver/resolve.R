@@ -181,6 +181,25 @@ ir_is_standard_resolved_ref <- function(res) {
   tolower(res$type) == "standard"
 }
 
+ir_ref_parameters <- function(ref) {
+  question <- regexpr("?", ref, fixed = TRUE)[[1L]]
+  if (question < 0L) return(NULL)
+
+  params <- substring(ref, question + 1L)
+  if (!nzchar(params)) NULL else params
+}
+
+ir_ref_has_source_parameter <- function(ref) {
+  params <- ir_ref_parameters(ref)
+  if (is.null(params)) return(FALSE)
+
+  params <- strsplit(params, "&", fixed = TRUE)[[1L]]
+  params <- tolower(params)
+  any(params == "source" |
+        params == "source=true" |
+        startsWith(params, "source=") & !(params %in% c("source=false", "source=0")))
+}
+
 ir_install_spec <- function(res, i) {
   if (ir_is_standard_resolved_ref(res[i, , drop = FALSE]))
     return(sprintf("%s@%s", res$package[[i]], res$version[[i]]))
@@ -188,9 +207,46 @@ ir_install_spec <- function(res, i) {
   res$ref[[i]]
 }
 
-ir_install_specs <- function(res) {
-  sort(unique(vapply(seq_len(nrow(res)), function(i) ir_install_spec(res, i),
+ir_install_key_spec <- function(res, i) {
+  spec <- ir_install_spec(res, i)
+  if (!ir_is_standard_resolved_ref(res[i, , drop = FALSE]))
+    return(spec)
+
+  params <- ir_ref_parameters(res$ref[[i]])
+  if (is.null(params)) spec else paste0(spec, "?", params)
+}
+
+ir_install_specs <- function(res, key = FALSE) {
+  spec <- if (key) ir_install_key_spec else ir_install_spec
+  sort(unique(vapply(seq_len(nrow(res)), function(i) spec(res, i),
                      character(1))))
+}
+
+ir_source_install_specs <- function(res) {
+  specs <- vapply(seq_len(nrow(res)), function(i) {
+    if (ir_is_standard_resolved_ref(res[i, , drop = FALSE]) &&
+        ir_ref_has_source_parameter(res$ref[[i]]))
+      ir_install_spec(res, i)
+    else
+      NA_character_
+  }, character(1))
+  sort(unique(stats::na.omit(specs)))
+}
+
+ir_renv_use <- function(specs, library_path, repos) {
+  if (!length(specs)) return(invisible())
+
+  do.call(renv::use, c(
+    as.list(specs),
+    list(
+      library = library_path,
+      repos   = repos,
+      attach  = FALSE,
+      sandbox = FALSE,
+      isolate = TRUE,
+      verbose = TRUE
+    )
+  ))
 }
 
 ## --- pipeline ---------------------------------------------------------------
@@ -294,6 +350,8 @@ ir_resolve_main <- function() {
   if (is.null(res)) {
     pkgs     <- character()
     install_specs <- character()
+    install_key_specs <- character()
+    source_install_specs <- character()
     has_source_ref <- FALSE
   } else {
     # Drop base / recommended packages: those are supplied by R itself.
@@ -301,13 +359,16 @@ ir_resolve_main <- function() {
     res <- res[keep, , drop = FALSE]
     pkgs     <- res$package
     install_specs <- ir_install_specs(res)
-    has_source_ref <- any(!ir_is_standard_resolved_ref(res))
+    install_key_specs <- ir_install_specs(res, key = TRUE)
+    source_install_specs <- ir_source_install_specs(res)
+    has_source_ref <- any(!ir_is_standard_resolved_ref(res)) ||
+      length(source_install_specs) > 0L
   }
 
   ## 3. Hash install specs -> content-addressed library path
   # Bind the hash to the R version and platform: the symlinks point into the
   # renv cache, whose layout is itself keyed by R version and platform.
-  key <- paste(c(install_specs,
+  key <- paste(c(install_key_specs,
                  as.character(getRversion()),
                  ir_cache_platform()),
                collapse = "\n")
@@ -322,17 +383,20 @@ ir_resolve_main <- function() {
     # renv::use() installs into the renv cache and links the packages into
     # `library` as symlinks. Because `library` lives in our cache (not the R
     # temp dir), renv leaves it in place when the session ends.
-    do.call(renv::use, c(
-      as.list(install_specs),
-      list(
-        library = library_path,
-        repos   = repos,
-        attach  = FALSE,
-        sandbox = FALSE,
-        isolate = TRUE,
-        verbose = TRUE
-      )
-    ))
+    ir_renv_use(setdiff(install_specs, source_install_specs), library_path, repos)
+    if (length(source_install_specs)) {
+      old_options <- options(pkgType = "source", pkg.platforms = "source")
+      old_platforms <- Sys.getenv("PKG_PLATFORMS", unset = NA_character_)
+      Sys.setenv(PKG_PLATFORMS = "source")
+      on.exit({
+        options(old_options)
+        if (is.na(old_platforms))
+          Sys.unsetenv("PKG_PLATFORMS")
+        else
+          Sys.setenv(PKG_PLATFORMS = old_platforms)
+      }, add = TRUE)
+      ir_renv_use(source_install_specs, library_path, repos)
+    }
   }
 
   ## 4b. Record the resolution so an identical request skips pak.

@@ -131,44 +131,102 @@ pub(crate) fn linux_distribution() -> Option<String> {
         }
     }
 
-    let ubuntu_supported = ["xenial", "bionic", "focal", "jammy", "noble", "resolute"];
-    if ubuntu_supported.contains(&ubuntu_codename.as_str()) {
-        return Some(ubuntu_codename);
+    let arch = linux_arch();
+    let ubuntu_supported = |codename: &str| match codename {
+        "jammy" => supported_distribution(codename, arch.as_deref(), &["x86_64"]),
+        "noble" | "resolute" => {
+            supported_distribution(codename, arch.as_deref(), &["x86_64", "aarch64"])
+        }
+        _ => None,
+    };
+    if let Some(distribution) = ubuntu_supported(&ubuntu_codename) {
+        return Some(distribution);
     }
     if id == "ubuntu" {
-        if ubuntu_supported.contains(&version_codename.as_str()) {
-            return Some(version_codename);
+        if let Some(distribution) = ubuntu_supported(&version_codename) {
+            return Some(distribution);
         }
-        return None;
+        return manylinux_distribution(arch.as_deref());
     }
     if id == "debian" {
-        let debian_supported = ["buster", "bullseye", "bookworm", "trixie"];
-        if debian_supported.contains(&version_codename.as_str()) {
-            return Some(version_codename);
+        match version_codename.as_str() {
+            "bookworm" | "trixie" => {
+                return supported_distribution(&version_codename, arch.as_deref(), &["x86_64"]);
+            }
+            _ => return manylinux_distribution(arch.as_deref()),
         }
-        return None;
     }
 
     let major = version_id.split('.').next().unwrap_or_default();
     match id.as_str() {
-        "centos" => match major {
-            "7" => Some("centos7".to_string()),
-            "8" => Some("centos8".to_string()),
-            _ => None,
-        },
         "rhel" | "redhat" | "rocky" | "almalinux" => match major {
-            "7" => Some("centos7".to_string()),
-            "8" => Some("centos8".to_string()),
-            "9" => Some("rhel9".to_string()),
-            "10" => Some("rhel10".to_string()),
-            _ => None,
+            "8" => supported_distribution("centos8", arch.as_deref(), &["x86_64"]),
+            "9" => supported_distribution("rhel9", arch.as_deref(), &["x86_64", "aarch64"]),
+            "10" => supported_distribution("rhel10", arch.as_deref(), &["x86_64", "aarch64"]),
+            _ => manylinux_distribution(arch.as_deref()),
         },
         "opensuse-leap" | "sles" => match (id.as_str(), version_id.as_str()) {
-            (_, "15.6") => Some("opensuse156".to_string()),
-            ("sles", "15.7") => Some("opensuse156".to_string()),
-            _ => None,
+            (_, "15.6") => supported_distribution("opensuse156", arch.as_deref(), &["x86_64"]),
+            ("sles", "15.7") => supported_distribution("opensuse156", arch.as_deref(), &["x86_64"]),
+            _ => manylinux_distribution(arch.as_deref()),
         },
+        _ => manylinux_distribution(arch.as_deref()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_arch() -> Option<String> {
+    let arch = Command::new(rscript())
+        .args(["-e", "cat(R.version$arch)"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())?;
+    match arch.as_str() {
+        "x86_64" | "amd64" => Some("x86_64".to_string()),
+        "aarch64" | "arm64" => Some("aarch64".to_string()),
         _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn supported_distribution(
+    distribution: &str,
+    arch: Option<&str>,
+    supported: &[&str],
+) -> Option<String> {
+    if arch.is_some_and(|arch| supported.contains(&arch)) {
+        Some(distribution.to_string())
+    } else {
+        manylinux_distribution(arch)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn manylinux_distribution(arch: Option<&str>) -> Option<String> {
+    if !matches!(arch, Some("x86_64" | "aarch64")) {
+        return None;
+    }
+    let output = Command::new("ldd").arg("--version").output().ok()?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let version = text
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .find(|part| {
+            let mut pieces = part.split('.');
+            pieces.next().is_some_and(|major| !major.is_empty())
+                && pieces.next().is_some_and(|minor| !minor.is_empty())
+        })?;
+    let (major, minor) = version.split_once('.')?;
+    let major = major.parse::<u64>().ok()?;
+    let minor = minor.parse::<u64>().ok()?;
+    if (major, minor) >= (2, 28) {
+        Some("manylinux_2_28".to_string())
+    } else {
+        None
     }
 }
 

@@ -42,12 +42,49 @@ ir_configure_package_type <- function(package_type = ir_package_type()) {
   if (identical(package_type, "source")) {
     options(pkgType = "source", pkg.platforms = "source")
     Sys.setenv(PKG_PLATFORMS = "source")
+  } else {
+    options(pkgType = "both", pkg.platforms = NULL)
+    Sys.unsetenv("PKG_PLATFORMS")
   }
   invisible(package_type)
 }
 
 ir_linux_host <- function()
   identical(unname(Sys.info()[["sysname"]]), "Linux")
+
+ir_linux_arch <- function() {
+  arch <- R.version[["arch"]]
+  if (arch %in% c("x86_64", "amd64")) return("x86_64")
+  if (arch %in% c("aarch64", "arm64")) return("aarch64")
+  NULL
+}
+
+ir_glibc_version <- function() {
+  output <- tryCatch(
+    suppressWarnings(system2("ldd", "--version", stdout = TRUE,
+                             stderr = TRUE)),
+    error = function(e) character()
+  )
+  versions <- unlist(regmatches(output, gregexpr("[0-9]+\\.[0-9]+", output)),
+                     use.names = FALSE)
+  if (!length(versions)) return(NULL)
+  numeric_version(versions[[1L]])
+}
+
+ir_manylinux_binary_distribution <- function(arch = ir_linux_arch()) {
+  if (!(arch %in% c("x86_64", "aarch64"))) return(NULL)
+
+  glibc <- ir_glibc_version()
+  if (!is.null(glibc) && glibc >= numeric_version("2.28"))
+    return("manylinux_2_28")
+
+  NULL
+}
+
+ir_supported_binary_distribution <- function(distro, arch, supported) {
+  if (!is.null(arch) && arch %in% supported) return(distro)
+  ir_manylinux_binary_distribution(arch)
+}
 
 ir_linux_binary_distribution <- function(package_type = ir_package_type()) {
   if (identical(package_type, "source")) return(NULL)
@@ -56,19 +93,35 @@ ir_linux_binary_distribution <- function(package_type = ir_package_type()) {
 
   os_release <- ir_linux_os_release()
   id <- ir_named_value(os_release, "ID")
+  arch <- ir_linux_arch()
   ubuntu_codename <- ir_named_value(os_release, "UBUNTU_CODENAME")
-  ubuntu_supported <- c("xenial", "bionic", "focal", "jammy", "noble",
-                        "resolute")
-  if (!is.null(ubuntu_codename) && ubuntu_codename %in% ubuntu_supported)
-    return(ubuntu_codename)
+  ubuntu_supported <- list(
+    jammy = c("x86_64"),
+    noble = c("x86_64", "aarch64"),
+    resolute = c("x86_64", "aarch64")
+  )
+  if (!is.null(ubuntu_codename) &&
+      ubuntu_codename %in% names(ubuntu_supported)) {
+    return(ir_supported_binary_distribution(
+      ubuntu_codename, arch, ubuntu_supported[[ubuntu_codename]]
+    ))
+  }
 
   codename <- ir_named_value(os_release, "VERSION_CODENAME")
   if (identical(id, "ubuntu")) {
-    if (!is.null(codename) && codename %in% ubuntu_supported) return(codename)
+    if (!is.null(codename) && codename %in% names(ubuntu_supported)) {
+      return(ir_supported_binary_distribution(
+        codename, arch, ubuntu_supported[[codename]]
+      ))
+    }
   }
   if (identical(id, "debian")) {
-    debian_supported <- c("buster", "bullseye", "bookworm", "trixie")
-    if (!is.null(codename) && codename %in% debian_supported) return(codename)
+    debian_supported <- list(bookworm = c("x86_64"), trixie = c("x86_64"))
+    if (!is.null(codename) && codename %in% names(debian_supported)) {
+      return(ir_supported_binary_distribution(
+        codename, arch, debian_supported[[codename]]
+      ))
+    }
   }
   if (is.null(id)) return(NULL)
 
@@ -78,25 +131,21 @@ ir_linux_binary_distribution <- function(package_type = ir_package_type()) {
       suse_supported <- c(suse_supported, "15.7" = "opensuse156")
     version <- ir_named_value(os_release, "VERSION_ID")
     distro <- if (!is.null(version)) suse_supported[[version]] else NULL
-    if (!is.null(distro)) return(distro)
-  }
-  if (identical(id, "centos")) {
-    centos_supported <- c("7" = "centos7", "8" = "centos8")
-    version <- ir_named_value(os_release, "VERSION_ID")
-    major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
-    distro <- centos_supported[[major]]
-    if (!is.null(distro)) return(distro)
+    if (!is.null(distro))
+      return(ir_supported_binary_distribution(distro, arch, c("x86_64")))
   }
   if (id %in% c("rhel", "redhat", "rocky", "almalinux")) {
-    rhel_supported <- c("7" = "centos7", "8" = "centos8", "9" = "rhel9",
-                        "10" = "rhel10")
+    rhel_supported <- c("8" = "centos8", "9" = "rhel9", "10" = "rhel10")
     version <- ir_named_value(os_release, "VERSION_ID")
     major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
     distro <- rhel_supported[[major]]
-    if (!is.null(distro)) return(distro)
+    if (!is.null(distro)) {
+      supported <- if (identical(major, "8")) c("x86_64") else c("x86_64", "aarch64")
+      return(ir_supported_binary_distribution(distro, arch, supported))
+    }
   }
 
-  NULL
+  ir_manylinux_binary_distribution(arch)
 }
 
 ir_cache_platform <- function(platform = R.version$platform) {
