@@ -1,7 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,6 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 
+use crate::driver;
+use crate::lock::{resolver_lock_path, FileLock};
+use crate::python;
 use crate::quarto::{self, RenderSource};
 use crate::resolve_cache;
 use crate::rig;
@@ -18,7 +21,11 @@ use crate::spec::RuntimeSpec;
 
 /// The R resolution driver, embedded at compile time so `ir` ships as one
 /// self-contained binary while the source stays editable as real R.
-const RESOLVE_DRIVER: &str = include_str!("../driver/resolve.R");
+const RESOLVE_DRIVER: &str = concat!(
+    include_str!("../driver/tooling.R"),
+    "\n",
+    include_str!("../driver/resolve.R")
+);
 
 /// Resolve dependencies for `source`, then run it against the resulting
 /// library. Exits the process with the program's own exit code.
@@ -72,9 +79,12 @@ pub(crate) fn cmd_render(
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
     let library = resolve_library(&rscript, &spec)?;
+    let cache_dir = ir_cache_dir()?;
+    let python = python::resolve_env(&rscript, &cache_dir, spec.python.as_ref())?;
     let code = quarto::run(
         &rscript,
         library.as_deref(),
+        python.as_deref(),
         source.path(),
         render_args,
         isolated,
@@ -180,6 +190,12 @@ fn apply_exclude_newer_override(
     spec: &mut RuntimeSpec,
     cli_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
+    if spec.python.is_some() {
+        apply_python_exclude_newer_override(spec, cli_exclude_newer)?;
+        spec.exclude_newer = None;
+        return Ok(());
+    }
+
     if let Some(exclude_newer) = cli_exclude_newer {
         spec.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
         return Ok(());
@@ -193,6 +209,28 @@ fn apply_exclude_newer_override(
 
     if let Some(exclude_newer) = spec.exclude_newer.take() {
         spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
+    }
+
+    Ok(())
+}
+
+fn apply_python_exclude_newer_override(
+    spec: &mut RuntimeSpec,
+    cli_exclude_newer: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    let Some(python) = spec.python.as_mut() else {
+        return Ok(());
+    };
+
+    if let Some(exclude_newer) = cli_exclude_newer {
+        python.exclude_newer = Some(exclude_newer.to_string());
+        return Ok(());
+    }
+
+    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
+        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
+        python.exclude_newer = Some(exclude_newer);
+        return Ok(());
     }
 
     Ok(())
@@ -273,11 +311,10 @@ fn resolve_library_inner(
         });
     }
 
+    let driver = driver::cached_path(&cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
     let tmp = env::temp_dir();
-    let driver = unique_path(&tmp, "ir-resolve", "R");
     let result_file = unique_path(&tmp, "ir-libpath", "txt");
     let package_result_file = primary_package.then(|| unique_path(&tmp, "ir-package", "txt"));
-    fs::write(&driver, RESOLVE_DRIVER)?;
 
     let mut cmd = Command::new(rscript);
     cmd.arg(&driver)
@@ -324,7 +361,6 @@ fn resolve_library_inner(
         .wait()
         .map_err(|e| format!("failed to wait for dependency resolver: {e}"))?;
 
-    let _ = fs::remove_file(&driver);
     let result = fs::read_to_string(&result_file).unwrap_or_default();
     let _ = fs::remove_file(&result_file);
     let package_result = package_result_file
@@ -357,27 +393,6 @@ fn resolve_library_inner(
         library,
         primary_package,
     })
-}
-
-struct FileLock {
-    _file: fs::File,
-}
-
-impl FileLock {
-    fn acquire(path: &Path) -> Result<Self, Box<dyn Error>> {
-        fs::create_dir_all(path.parent().ok_or("resolver lock path has no parent")?)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|e| format!("failed to open resolver lock `{}`: {e}", path.display()))?;
-        file.lock()
-            .map_err(|e| format!("failed to lock resolver cache `{}`: {e}", path.display()))?;
-
-        Ok(Self { _file: file })
-    }
 }
 
 fn normalized_dependencies(dependencies: &[String]) -> Vec<String> {
@@ -717,10 +732,6 @@ pub(crate) fn ir_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
     }
 
     Ok(r_user_cache_dir()?.join("R").join("ir"))
-}
-
-fn resolver_lock_path(root: &Path) -> PathBuf {
-    root.join("locks").join("resolver.lock")
 }
 
 pub(crate) fn nonempty_env(name: &str) -> Option<OsString> {
