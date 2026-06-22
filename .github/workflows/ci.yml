@@ -9,12 +9,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  R_USER_CACHE_DIR: ${{ github.workspace }}/.cache/R
 
 jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      R_USER_CACHE_DIR: ${{ runner.temp }}/ir-r-user-cache
     strategy:
       fail-fast: false
       matrix:
@@ -33,10 +34,11 @@ jobs:
           use-public-rspm: true
       - name: Prepare daily R cache
         id: r-cache-date
-        shell: bash
+        shell: Rscript {0}
         run: |
-          mkdir -p .cache/R
-          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          dir.create(Sys.getenv("R_USER_CACHE_DIR"), recursive = TRUE, showWarnings = FALSE)
+          date <- format(as.Date(Sys.time(), tz = "UTC"))
+          cat("date=", date, "\n", sep = "", file = Sys.getenv("GITHUB_OUTPUT"), append = TRUE)
       - name: Cache R user cache
         uses: actions/cache@v4
         with:

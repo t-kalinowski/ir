@@ -166,9 +166,16 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("any::xfun"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
-    assert!(workflow.contains("R_USER_CACHE_DIR: ${{ github.workspace }}/.cache/R"));
+    assert!(!workflow
+        .lines()
+        .any(|line| line == "  R_USER_CACHE_DIR: ${{ github.workspace }}/.cache"));
+    assert!(workflow
+        .lines()
+        .any(|line| line == "      R_USER_CACHE_DIR: ${{ runner.temp }}/ir-r-user-cache"));
     assert!(workflow.contains("id: r-cache-date"));
-    assert!(workflow.contains("date -u +%Y-%m-%d"));
+    assert!(workflow.contains("shell: Rscript {0}"));
+    assert!(workflow.contains("dir.create(Sys.getenv(\"R_USER_CACHE_DIR\")"));
+    assert!(workflow.contains("tz = \"UTC\""));
     assert!(workflow.contains("actions/cache@v4"));
     assert!(workflow.contains("path: ${{ env.R_USER_CACHE_DIR }}"));
     assert!(workflow
