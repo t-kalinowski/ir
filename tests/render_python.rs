@@ -19,7 +19,6 @@ fn render_quarto_ir_python_frontmatter_sets_quarto_python() {
     let quarto = bin_dir.join("quarto");
     let r_deps = temp_path("ir-render-python-r-deps", "txt");
     let r_driver = temp_path("ir-render-python-r-driver", "txt");
-    let py_driver = temp_path("ir-render-python-py-driver", "txt");
     let python_packages = temp_path("ir-render-python-packages", "txt");
     let python_env = temp_path("ir-render-python-env", "txt");
 
@@ -49,14 +48,6 @@ print("ok")
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   printf '%s\\n' \"$1\" > {}\n\
-  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
-  cat >> {}\n\
-  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
-  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  printf '%s\\n' \"$1\" > {}\n\
   if grep -q 'ir_ensure_python_pak' \"$1\"; then\n\
     echo python resolver should use shared tooling bootstrap >&2\n\
     exit 1\n\
@@ -66,21 +57,40 @@ if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
     exit 1\n\
   fi\n\
   if ! grep -q 'ir_ensure_tooling' \"$1\"; then\n\
-    echo python resolver should include shared tooling bootstrap >&2\n\
+    echo resolver should include shared tooling bootstrap >&2\n\
     exit 1\n\
   fi\n\
-  cat > {}\n\
+  if ! grep -q 'ir_resolve_python_env' \"$1\"; then\n\
+    echo resolver should include the Python environment helper >&2\n\
+    exit 1\n\
+  fi\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
             r_driver.display(),
             r_deps.display(),
             r_deps.display(),
-            py_driver.display(),
             python_packages.display(),
             python_env.display(),
             python_env.display(),
@@ -93,16 +103,11 @@ exit 1\n",
     );
     let expected_driver_dir = cache_dir.join("drivers");
     let stale_r_driver = expected_driver_dir.join("resolve.R");
-    let stale_py_driver = expected_driver_dir.join("resolve-python.R");
     fs::create_dir_all(&expected_driver_dir).unwrap();
     fs::write(&stale_r_driver, "stale\n").unwrap();
-    fs::write(&stale_py_driver, "stale\n").unwrap();
     let mut permissions = fs::metadata(&stale_r_driver).unwrap().permissions();
     permissions.set_readonly(true);
     fs::set_permissions(&stale_r_driver, permissions).unwrap();
-    let mut permissions = fs::metadata(&stale_py_driver).unwrap().permissions();
-    permissions.set_readonly(true);
-    fs::set_permissions(&stale_py_driver, permissions).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -127,32 +132,17 @@ exit 1\n",
         "Python-only frontmatter should not inject user-library reticulate\n{deps}"
     );
     let r_driver_path = Path::new(fs::read_to_string(&r_driver).unwrap().trim()).to_path_buf();
-    let py_driver_path = Path::new(fs::read_to_string(&py_driver).unwrap().trim()).to_path_buf();
     assert!(r_driver_path.starts_with(&expected_driver_dir));
-    assert!(py_driver_path.starts_with(&expected_driver_dir));
     assert_ne!(r_driver_path, stale_r_driver);
-    assert_ne!(py_driver_path, stale_py_driver);
     let r_driver_file = r_driver_path.file_name().unwrap().to_string_lossy();
-    let py_driver_file = py_driver_path.file_name().unwrap().to_string_lossy();
     assert!(
         r_driver_file.starts_with("resolve-") && r_driver_file.ends_with(".R"),
         "{r_driver_file}"
     );
-    assert!(
-        py_driver_file.starts_with("resolve-python-") && py_driver_file.ends_with(".R"),
-        "{py_driver_file}"
-    );
-    assert!(fs::read_to_string(&r_driver_path)
-        .unwrap()
-        .contains("ir_ensure_tooling"));
-    assert!(fs::read_to_string(&py_driver_path)
-        .unwrap()
-        .contains("ir_ensure_tooling"));
+    let driver = fs::read_to_string(&r_driver_path).unwrap();
+    assert!(driver.contains("ir_ensure_tooling"));
+    assert!(driver.contains("ir_resolve_python_env"));
     assert!(fs::metadata(&r_driver_path)
-        .unwrap()
-        .permissions()
-        .readonly());
-    assert!(fs::metadata(&py_driver_path)
         .unwrap()
         .permissions()
         .readonly());
@@ -208,14 +198,23 @@ if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > /dev/null\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
@@ -294,14 +293,18 @@ if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   cat > /dev/null\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
@@ -419,13 +422,17 @@ if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   cat > /dev/null\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",

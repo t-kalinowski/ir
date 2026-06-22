@@ -65,6 +65,7 @@ Python environment resolution uses `ir`'s private reticulate tooling.
 Declare render-time R dependencies with `ir.packages` and Python dependencies with `ir.python-packages`.
 `ir.r-version` and `ir.python-version` select independent runtimes.
 When Python metadata is present, `ir.exclude-newer` is also used during Python environment resolution.
+`ir` records the resolved Python path in a separate cache entry from the R library; if the recorded path is missing, Python is resolved again.
 
 ```yaml
 ---

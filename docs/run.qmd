@@ -66,6 +66,7 @@ Use `python-packages` or `python-version` to ask `ir run` for a Python environme
 - It sets `RETICULATE_PYTHON` to the resolved Python executable.
 
 Declare `reticulate` under `packages` when the R script loads reticulate.
+`ir` records the resolved Python path in a separate cache entry from the R library; if the recorded path is missing, Python is resolved again.
 
 ```r
 #!/usr/bin/env -S ir run

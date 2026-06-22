@@ -44,18 +44,14 @@ pub(crate) fn cmd_run(
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
-    // Reuse a warm resolution marker, or launch the private resolver R session
-    // to resolve deps and materialise the library.
-    let library = resolve_library(&rscript, &spec)?;
-    let cache_dir = ir_cache_dir()?;
-    let python = python::resolve_env(&rscript, &cache_dir, spec.python.as_ref(), false)?;
+    let resolved = resolve_runtime(&rscript, &spec, false)?;
 
     // Render the document, or run the user's program, in an isolated R session.
     let code = run_user_code(
         source,
         &rscript,
-        library.as_deref(),
-        python.as_deref(),
+        resolved.library.as_deref(),
+        resolved.python.as_deref(),
         rscript_args,
         script_args,
         isolated,
@@ -81,13 +77,11 @@ pub(crate) fn cmd_render(
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
-    let library = resolve_library(&rscript, &spec)?;
-    let cache_dir = ir_cache_dir()?;
-    let python = python::resolve_env(&rscript, &cache_dir, spec.python.as_ref(), true)?;
+    let resolved = resolve_runtime(&rscript, &spec, true)?;
     let code = quarto::run(
         &rscript,
-        library.as_deref(),
-        python.as_deref(),
+        resolved.library.as_deref(),
+        resolved.python.as_deref(),
         source.path(),
         render_args,
         isolated,
@@ -239,22 +233,12 @@ fn is_future_iso_date(value: &str) -> bool {
     date > OffsetDateTime::now_utc().date()
 }
 
-/// Return a cached materialised library path, or run the embedded driver in a
-/// private R session to resolve and materialise it. Shorthand version specs in
-/// `spec` are normalized before cache keying and resolver input; other package
-/// refs are passed through.
-pub(crate) fn resolve_library(
-    rscript: &OsStr,
-    spec: &RuntimeSpec,
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    Ok(resolve_library_inner(rscript, spec, false)?.library)
-}
-
 pub(crate) fn resolve_library_and_primary_package(
     rscript: &OsStr,
     spec: &RuntimeSpec,
 ) -> Result<(PathBuf, String), Box<dyn Error>> {
-    let resolved = resolve_library_inner(rscript, spec, true)?;
+    let cache_dir = ir_cache_dir()?;
+    let resolved = resolve_library_inner(rscript, spec, true, None, &cache_dir)?;
     let library = resolved
         .library
         .ok_or("dependency resolver did not return a library path")?;
@@ -264,77 +248,137 @@ pub(crate) fn resolve_library_and_primary_package(
     Ok((library, package))
 }
 
+fn resolve_runtime(
+    rscript: &OsStr,
+    spec: &RuntimeSpec,
+    include_jupyter: bool,
+) -> Result<ResolvedLibrary, Box<dyn Error>> {
+    let cache_dir = ir_cache_dir()?;
+    let python_request = python::request(&cache_dir, spec.python.as_ref(), include_jupyter)?;
+    resolve_library_inner(rscript, spec, false, python_request.as_ref(), &cache_dir)
+}
+
 struct ResolvedLibrary {
     library: Option<PathBuf>,
     primary_package: Option<String>,
+    python: Option<PathBuf>,
 }
 
 fn resolve_library_inner(
     rscript: &OsStr,
     spec: &RuntimeSpec,
     primary_package: bool,
+    python_request: Option<&python::EnvRequest>,
+    cache_dir: &Path,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
     let dependencies = normalized_dependencies(&spec.dependencies);
-    let cache_dir = ir_cache_dir()?;
     let resolution_cache_paths = resolve_cache::paths(
-        &cache_dir,
+        cache_dir,
         rscript,
         &dependencies,
         spec.exclude_newer.as_deref(),
         spec.quarto_render,
     )?;
-    if let Some(resolved) = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)? {
+    let cached_library = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)?;
+    let cached_python = python::read_cache(python_request)?;
+    if let Some(resolved) = &cached_library {
+        if python_request.is_none() || cached_python.is_some() {
+            return Ok(ResolvedLibrary {
+                library: Some(resolved.library.clone()),
+                primary_package: resolved.primary_package.clone(),
+                python: cached_python,
+            });
+        }
+    }
+
+    let _resolver_lock = FileLock::acquire(&resolver_lock_path(cache_dir))?;
+    let cached_library = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)?;
+    let cached_python = python::read_cache(python_request)?;
+    if let Some(resolved) = &cached_library {
+        if python_request.is_none() || cached_python.is_some() {
+            return Ok(ResolvedLibrary {
+                library: Some(resolved.library.clone()),
+                primary_package: resolved.primary_package.clone(),
+                python: cached_python,
+            });
+        }
+    }
+
+    let resolve_r = cached_library.is_none();
+    let resolve_python = python_request.is_some() && cached_python.is_none();
+    if !resolve_r && !resolve_python {
+        let resolved = cached_library.expect("cached library was checked above");
         return Ok(ResolvedLibrary {
             library: Some(resolved.library),
             primary_package: resolved.primary_package,
+            python: cached_python,
         });
     }
 
-    let _resolver_lock = FileLock::acquire(&resolver_lock_path(&cache_dir))?;
-    if let Some(resolved) = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)? {
-        return Ok(ResolvedLibrary {
-            library: Some(resolved.library),
-            primary_package: resolved.primary_package,
-        });
-    }
-
-    let driver = driver::cached_path(&cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
+    let driver = driver::cached_path(cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
     let tmp = env::temp_dir();
-    let result_file = unique_path(&tmp, "ir-libpath", "txt");
-    let package_result_file = primary_package.then(|| unique_path(&tmp, "ir-package", "txt"));
+    let result_file = resolve_r.then(|| unique_path(&tmp, "ir-libpath", "txt"));
+    let package_result_file =
+        (resolve_r && primary_package).then(|| unique_path(&tmp, "ir-package", "txt"));
+    let python_result_file = resolve_python.then(|| unique_path(&tmp, "ir-python", "txt"));
+    let python_packages_file = if let (true, Some(request)) = (resolve_python, python_request) {
+        let path = unique_path(&tmp, "ir-python-packages", "txt");
+        fs::write(&path, request.packages.join("\n") + "\n")?;
+        Some(path)
+    } else {
+        None
+    };
 
     let mut cmd = Command::new(rscript);
     cmd.arg(&driver)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .env("IR_RESOLVE_RESULT_FILE", &result_file)
-        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_CACHE_DIR", cache_dir)
         // pak suppresses progress in noninteractive Rscript unless this is set.
         // Resolution cache hits return before pak, so this adds no cache-hit pak output.
         .env("R_PKG_SHOW_PROGRESS", "true")
         // The RuntimeSpec owns snapshot selection. Do not let unsupported
         // commands accidentally reach the resolver through ambient process env.
         .env_remove("IR_EXCLUDE_NEWER");
-    if let Some(paths) = &resolution_cache_paths {
-        cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
+    if let Some(result_file) = &result_file {
+        cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
     }
-    if let Some(package_result_file) = &package_result_file {
-        cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
-        if let Some(package_marker) = resolution_cache_paths
-            .as_ref()
-            .and_then(|paths| paths.package_marker.as_ref())
-        {
-            cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+    if resolve_r {
+        if let Some(paths) = &resolution_cache_paths {
+            cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
+        }
+        if let Some(package_result_file) = &package_result_file {
+            cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
+            if let Some(package_marker) = resolution_cache_paths
+                .as_ref()
+                .and_then(|paths| paths.package_marker.as_ref())
+            {
+                cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+            }
+        }
+        if let Some(exclude_newer) = &spec.exclude_newer {
+            cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
+        }
+        if spec.quarto_render {
+            // Distinct from IR_QUARTO (the quarto executable, read in quarto.rs):
+            // this flag tells the resolver a Quarto render needs rmarkdown.
+            cmd.env("IR_QUARTO_RENDER", "1");
         }
     }
-    if let Some(exclude_newer) = &spec.exclude_newer {
-        cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
-    }
-    if spec.quarto_render {
-        // Distinct from IR_QUARTO (the quarto executable, read in quarto.rs):
-        // this flag tells the resolver a Quarto render needs rmarkdown.
-        cmd.env("IR_QUARTO_RENDER", "1");
+    if let (Some(request), Some(result_file), Some(packages_file)) =
+        (python_request, &python_result_file, &python_packages_file)
+    {
+        cmd.env("IR_PYTHON_RESULT_FILE", result_file)
+            .env("IR_PYTHON_PACKAGES_FILE", packages_file)
+            .env_remove("IR_PYTHON_VERSION")
+            .env_remove("IR_PYTHON_EXCLUDE_NEWER");
+        if let Some(python_version) = &request.python_version {
+            cmd.env("IR_PYTHON_VERSION", python_version);
+        }
+        if let Some(exclude_newer) = &request.exclude_newer {
+            cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
+        }
     }
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
@@ -348,8 +392,11 @@ fn resolve_library_inner(
         .wait()
         .map_err(|e| format!("failed to wait for dependency resolver: {e}"))?;
 
-    let result = fs::read_to_string(&result_file).unwrap_or_default();
-    let _ = fs::remove_file(&result_file);
+    let result = result_file
+        .as_ref()
+        .map(|path| fs::read_to_string(path).unwrap_or_default())
+        .unwrap_or_default();
+    let _ = result_file.as_ref().map(fs::remove_file);
     let package_result = package_result_file
         .as_ref()
         .map(|path| {
@@ -358,27 +405,63 @@ fn resolve_library_inner(
             result
         })
         .unwrap_or_default();
+    let python_result = python_result_file
+        .as_ref()
+        .map(|path| {
+            let result = fs::read_to_string(path).unwrap_or_default();
+            let _ = fs::remove_file(path);
+            result
+        })
+        .unwrap_or_default();
+    let _ = python_packages_file.as_ref().map(fs::remove_file);
 
     if !status.success() {
         return Err("dependency resolution failed".into());
     }
 
     let path = result.trim();
-    let library = if path.is_empty() {
-        None
+    let (library, primary_package) = if resolve_r {
+        let library = if path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(path))
+        };
+        let package = package_result.trim();
+        let primary_package = if package.is_empty() {
+            None
+        } else {
+            Some(package.to_string())
+        };
+        (library, primary_package)
     } else {
-        Some(PathBuf::from(path))
+        let resolved = cached_library.expect("cached library exists when R resolution is skipped");
+        (Some(resolved.library), resolved.primary_package)
     };
-    let package = package_result.trim();
-    let primary_package = if package.is_empty() {
-        None
+    let python = if resolve_python {
+        let path = python_result.trim();
+        if path.is_empty() {
+            return Err("Python environment resolver did not return a Python path".into());
+        }
+        let path = PathBuf::from(path);
+        if !path.exists() {
+            return Err(format!(
+                "Python environment resolver returned a missing path `{}`",
+                path.display()
+            )
+            .into());
+        }
+        if let Some(request) = python_request {
+            python::write_cache(request, &path)?;
+        }
+        Some(path)
     } else {
-        Some(package.to_string())
+        cached_python
     };
 
     Ok(ResolvedLibrary {
         library,
         primary_package,
+        python,
     })
 }
 

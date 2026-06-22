@@ -169,20 +169,38 @@ ir_install_specs <- function(res) {
 
 ir_resolve_main <- function() {
 
-  ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
-  ## before any secretbase/pak/renv use below.
-  ir_ensure_tooling()
-
   deps        <- readLines(file("stdin"), warn = FALSE)
   result_file <- ir_env_optional("IR_RESOLVE_RESULT_FILE")
   package_result_file <- ir_env_optional("IR_RESOLVE_PACKAGE_RESULT_FILE")
-  stopifnot(!is.null(result_file))
+  python_result_file <- ir_env_optional("IR_PYTHON_RESULT_FILE")
+  stopifnot(!is.null(result_file) || !is.null(python_result_file))
   cache_dir   <- ir_cache_dir()
 
   ## 1. Consume inputs parsed by Rust from script frontmatter
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
   repos <- ir_repos(exclude_newer)
   options(repos = repos)
+
+  if (!is.null(python_result_file)) {
+    python_packages_file <- ir_env_optional("IR_PYTHON_PACKAGES_FILE")
+    stopifnot(!is.null(python_packages_file))
+    python_packages <- readLines(python_packages_file, warn = FALSE)
+    python_version <- ir_env_optional("IR_PYTHON_VERSION")
+    python_exclude_newer <- ir_env_optional("IR_PYTHON_EXCLUDE_NEWER")
+    python <- ir_resolve_python_env(
+      packages = python_packages,
+      python_version = python_version,
+      exclude_newer = python_exclude_newer
+    )
+    writeLines(python, python_result_file)
+  }
+
+  if (is.null(result_file)) return(invisible())
+
+  ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
+  ## before any secretbase/pak/renv use below. A Python-only cache miss returns
+  ## above after bootstrapping only the Python resolver tooling.
+  ir_ensure_tooling()
 
   # A Quarto render needs rmarkdown for the knitr engine; Rust sets
   # IR_QUARTO_RENDER so the resolver can inject it when the resolved set does not

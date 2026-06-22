@@ -387,6 +387,8 @@ fn run_script_frontmatter_sets_reticulate_python_and_activates_env() {
     let r_deps = temp_path("ir-run-python-r-deps", "txt");
     let python_packages = temp_path("ir-run-python-packages", "txt");
     let python_env = temp_path("ir-run-python-env", "txt");
+    let resolved_again = temp_path("ir-run-python-resolved-again", "txt");
+    let _ = fs::remove_dir_all(cache_dir.join("python"));
 
     fs::write(
         &script,
@@ -412,14 +414,31 @@ if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'exclude-newer: %s\\n%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+      echo expected Python packages file in the R resolver invocation >&2\n\
+      exit 1\n\
+    fi\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+    if [ ! -e {} ]; then\n\
+      printf 'resolved_again\\n' > {}\n\
+      mkdir -p {}\n\
+      : > {}\n\
+      chmod +x {}\n\
+    fi\n\
+    printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
+    printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
   exit 0\n\
 fi\n\
 if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > {}\n\
-  printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
-  printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
-  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
-  exit 0\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n\
 printf 'virtual_env=%s\\n' \"${{VIRTUAL_ENV:-}}\"\n\
@@ -427,6 +446,11 @@ printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
             r_deps.display(),
             r_deps.display(),
             python_packages.display(),
+            fake_python.display(),
+            resolved_again.display(),
+            venv_bin.display(),
+            fake_python.display(),
+            fake_python.display(),
             python_env.display(),
             python_env.display(),
             fake_python.display()
@@ -463,6 +487,35 @@ printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
     assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(
+        &out,
+        &format!("reticulate_python={}", fake_python.display()),
+    );
+
+    fs::remove_file(&fake_python).unwrap();
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(
+        resolved_again.exists(),
+        "missing cached Python path should invoke the shared resolver again"
+    );
 }
 
 #[test]

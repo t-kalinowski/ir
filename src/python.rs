@@ -1,86 +1,94 @@
 use std::error::Error;
-use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::driver;
-use crate::lock::{resolver_lock_path, FileLock};
+use sha2::{Digest, Sha256};
+
 use crate::spec::PythonSpec;
 
-/// The Python resolution driver is embedded for the same reason as the R
-/// package resolver: ir ships as one self-contained binary.
-const PYTHON_RESOLVE_DRIVER: &str = concat!(
-    include_str!("../driver/tooling.R"),
-    "\n",
-    include_str!("../driver/resolve_python.R")
-);
+const DEFAULT_LATEST_MAX_AGE_SECONDS: u64 = 24 * 60 * 60;
+const LATEST_MAX_AGE_SECONDS_ENV: &str = "IR_LATEST_RESOLUTION_MAX_AGE_SECONDS";
 
-pub(crate) fn resolve_env(
-    rscript: &OsStr,
+pub(crate) struct EnvRequest {
+    pub(crate) packages: Vec<String>,
+    pub(crate) python_version: Option<String>,
+    pub(crate) exclude_newer: Option<String>,
+    marker: PathBuf,
+    source: String,
+    latest_max_age_seconds: Option<u64>,
+}
+
+pub(crate) fn request(
     cache_dir: &Path,
     python: Option<&PythonSpec>,
     include_jupyter: bool,
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
+) -> Result<Option<EnvRequest>, Box<dyn Error>> {
     let Some(python) = python else {
         return Ok(None);
     };
 
-    let _resolver_lock = FileLock::acquire(&resolver_lock_path(cache_dir))?;
-    let driver = driver::cached_path(
-        cache_dir,
-        driver::PYTHON_RESOLVE_FILE,
-        PYTHON_RESOLVE_DRIVER,
-    )?;
-    let tmp = std::env::temp_dir();
-    let result_file = unique_path(&tmp, "ir-python", "txt");
+    let packages = python_packages(python, include_jupyter);
+    let latest_max_age_seconds = if python.exclude_newer.is_none() {
+        Some(latest_max_age_seconds()?)
+    } else {
+        None
+    };
+    let source = cache_source(python.exclude_newer.as_deref())?;
+    let marker = cache_dir.join("python").join(cache_key(
+        &packages,
+        python.python_version.as_deref(),
+        python.exclude_newer.as_deref(),
+    ));
 
-    let mut cmd = Command::new(rscript);
-    cmd.arg(&driver)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env("IR_PYTHON_RESULT_FILE", &result_file)
-        .env("IR_CACHE_DIR", cache_dir)
-        .env_remove("IR_EXCLUDE_NEWER")
-        .env_remove("IR_PYTHON_VERSION")
-        .env_remove("IR_PYTHON_EXCLUDE_NEWER");
-    if let Some(python_version) = &python.python_version {
-        cmd.env("IR_PYTHON_VERSION", python_version);
-    }
-    if let Some(exclude_newer) = &python.exclude_newer {
-        cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
-    }
+    Ok(Some(EnvRequest {
+        packages,
+        python_version: python.python_version.clone(),
+        exclude_newer: python.exclude_newer.clone(),
+        marker,
+        source,
+        latest_max_age_seconds,
+    }))
+}
 
-    let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or("failed to open Python resolver stdin")?;
-        for package in python_packages(python, include_jupyter) {
-            writeln!(stdin, "{package}")?;
-        }
-    }
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait for Python resolver: {e}"))?;
+pub(crate) fn read_cache(request: Option<&EnvRequest>) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    let Some(request) = request else {
+        return Ok(None);
+    };
 
-    let result = fs::read_to_string(&result_file).unwrap_or_default();
-    let _ = fs::remove_file(&result_file);
-
-    if !status.success() {
-        return Err("Python environment resolution failed".into());
+    if !request.marker.exists() {
+        return Ok(None);
     }
 
-    let path = result.trim();
-    if path.is_empty() {
-        return Err("Python environment resolver did not return a Python path".into());
+    let marker = fs::read_to_string(&request.marker)
+        .map_err(|e| format!("failed to read `{}`: {e}", request.marker.display()))?;
+    let mut lines = marker.lines();
+    let source = lines.next().unwrap_or_default();
+    if !source_is_current(source, request)? {
+        return Ok(None);
     }
 
-    Ok(Some(PathBuf::from(path)))
+    let python = lines.next().unwrap_or_default().trim();
+    if python.is_empty() || !Path::new(python).exists() {
+        return Ok(None);
+    }
+
+    Ok(Some(PathBuf::from(python)))
+}
+
+pub(crate) fn write_cache(request: &EnvRequest, python: &Path) -> Result<(), Box<dyn Error>> {
+    let parent = request
+        .marker
+        .parent()
+        .ok_or("Python cache marker path has no parent")?;
+    fs::create_dir_all(parent)?;
+    fs::write(
+        &request.marker,
+        format!("{}\n{}\n", request.source, python.display()),
+    )
+    .map_err(|e| format!("failed to write `{}`: {e}", request.marker.display()))?;
+    Ok(())
 }
 
 fn python_packages(python: &PythonSpec, include_jupyter: bool) -> Vec<String> {
@@ -108,28 +116,83 @@ fn python_package_name(package: &str) -> &str {
     &package[..end]
 }
 
-fn unique_path(dir: &Path, prefix: &str, ext: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let mut path = dir.join(format!("{prefix}-{}-{nanos}", std::process::id()));
-    if !ext.is_empty() {
-        path.set_extension(ext);
-    }
-    path
+fn cache_key(
+    packages: &[String],
+    python_version: Option<&str>,
+    exclude_newer: Option<&str>,
+) -> String {
+    let mut parts = packages.to_vec();
+    parts.sort();
+    parts.push(
+        python_version
+            .map(|version| format!("python-version: {version}"))
+            .unwrap_or_else(|| "python-version: default".to_string()),
+    );
+    parts.push(
+        exclude_newer
+            .map(|date| format!("exclude-newer: {date}"))
+            .unwrap_or_else(|| "latest".to_string()),
+    );
+    sha256_fields(&parts)
 }
 
-fn spawn_error(rscript: &OsStr, err: io::Error) -> String {
-    if err.kind() == io::ErrorKind::NotFound {
-        format!(
-            "could not find Rscript `{}` while resolving Python environment",
-            rscript.to_string_lossy()
-        )
-    } else {
-        format!(
-            "failed to launch Python resolver with `{}`: {err}",
-            rscript.to_string_lossy()
-        )
+fn cache_source(exclude_newer: Option<&str>) -> Result<String, Box<dyn Error>> {
+    Ok(match exclude_newer {
+        Some(date) => format!("exclude-newer: {date}"),
+        None => format!("latest: {}", current_utc_seconds()?),
+    })
+}
+
+fn source_is_current(source: &str, request: &EnvRequest) -> Result<bool, Box<dyn Error>> {
+    let Some(max_age_seconds) = request.latest_max_age_seconds else {
+        return Ok(source == request.source.as_str());
+    };
+
+    let Some(created_at) = source.strip_prefix("latest: ") else {
+        return Ok(false);
+    };
+    let Ok(created_at) = created_at.parse::<u64>() else {
+        return Ok(false);
+    };
+    let now = current_utc_seconds()?;
+    if created_at > now {
+        return Ok(false);
     }
+    Ok(now - created_at <= max_age_seconds)
+}
+
+fn latest_max_age_seconds() -> Result<u64, Box<dyn Error>> {
+    let Some(value) = std::env::var_os(LATEST_MAX_AGE_SECONDS_ENV) else {
+        return Ok(DEFAULT_LATEST_MAX_AGE_SECONDS);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| format!("{LATEST_MAX_AGE_SECONDS_ENV} must be valid UTF-8"))?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(DEFAULT_LATEST_MAX_AGE_SECONDS);
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{LATEST_MAX_AGE_SECONDS_ENV} must be an integer").into())
+}
+
+fn current_utc_seconds() -> Result<u64, Box<dyn Error>> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("system clock is before UNIX epoch: {e}"))?
+        .as_secs())
+}
+
+fn sha256_fields(parts: &[String]) -> String {
+    let mut input = String::new();
+    for part in parts {
+        writeln!(&mut input, "{part}").expect("writing to a String cannot fail");
+    }
+    let hash = Sha256::digest(input.as_bytes());
+    let mut output = String::with_capacity(hash.len() * 2);
+    for byte in hash {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }

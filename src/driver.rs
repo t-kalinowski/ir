@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const RESOLVE_FILE: &str = env!("IR_RESOLVE_DRIVER_FILE");
-pub(crate) const PYTHON_RESOLVE_FILE: &str = env!("IR_PYTHON_RESOLVE_DRIVER_FILE");
 
 pub(crate) fn cached_path(
     cache_dir: &Path,

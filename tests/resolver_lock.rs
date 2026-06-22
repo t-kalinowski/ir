@@ -41,6 +41,26 @@ if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
   library <- file.path(Sys.getenv("IR_CACHE_DIR"), "fake-library")
   dir.create(library, recursive = TRUE, showWarnings = FALSE)
   cat(library, "\n", file = Sys.getenv("IR_RESOLVE_RESULT_FILE"))
+  marker <- Sys.getenv("IR_RESOLUTION_MARKER")
+  if (nzchar(marker)) {
+    dir.create(dirname(marker), recursive = TRUE, showWarnings = FALSE)
+    cat("latest: ", as.integer(Sys.time()), "\n", library, "\n",
+        sep = "", file = marker)
+  }
+  if (nzchar(Sys.getenv("IR_PYTHON_RESULT_FILE"))) {
+    local({
+      active <- Sys.getenv("IR_TEST_ACTIVE")
+      if (!dir.create(active, recursive = TRUE, showWarnings = FALSE)) {
+        writeLines("overlap", Sys.getenv("IR_TEST_OVERLAP"))
+        stop("resolve.R Python step overlapped", call. = FALSE)
+      }
+      on.exit(unlink(active, recursive = TRUE, force = TRUE), add = TRUE)
+      cat(Sys.getpid(), "\n", file = Sys.getenv("IR_TEST_ENTERED"), append = TRUE)
+      Sys.sleep(as.numeric(Sys.getenv("IR_TEST_SLEEP", "0")))
+      cat(Sys.getenv("IR_TEST_PYTHON"), "\n",
+          file = Sys.getenv("IR_PYTHON_RESULT_FILE"))
+    })
+  }
   q("no", status = 0, runLast = FALSE)
 }
 
@@ -50,7 +70,7 @@ if (nzchar(Sys.getenv("IR_PYTHON_RESULT_FILE"))) {
     active <- Sys.getenv("IR_TEST_ACTIVE")
     if (!dir.create(active, recursive = TRUE, showWarnings = FALSE)) {
       writeLines("overlap", Sys.getenv("IR_TEST_OVERLAP"))
-      stop("resolve_python.R overlapped", call. = FALSE)
+      stop("resolve.R Python step overlapped", call. = FALSE)
     }
     on.exit(unlink(active, recursive = TRUE, force = TRUE), add = TRUE)
     cat(Sys.getpid(), "\n", file = Sys.getenv("IR_TEST_ENTERED"), append = TRUE)
@@ -200,11 +220,14 @@ ir:
 
     assert_success(&first);
     assert_success(&second);
-    assert!(!overlap.exists(), "resolve_python.R should not overlap");
+    assert!(
+        !overlap.exists(),
+        "resolve.R Python step should not overlap"
+    );
     assert_eq!(
         resolver_probe_count(&entered),
-        2,
-        "both uv renders should resolve Python, but not concurrently"
+        1,
+        "second render should reuse the completed R and Python markers"
     );
 }
 
