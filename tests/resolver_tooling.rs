@@ -314,3 +314,88 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
         "resolver should prune wrong-R-minor R_LIBS_USER even when private tooling is warm"
     );
 }
+
+#[test]
+fn resolver_tooling_ignores_wrong_platform_user_library_package() {
+    let cache_dir = temp_dir("ir-platform-tooling-cache");
+    let ambient_library = temp_dir("ir-platform-tooling-user-library");
+    let fake_secretbase_load_marker = temp_path("ir-platform-secretbase-loaded", "txt");
+    let fake_pillar_load_marker = temp_path("ir-platform-pillar-loaded", "txt");
+    let profile = temp_path("ir-platform-tooling-profile", "R");
+
+    fs::write(
+        &profile,
+        format!(
+            r#"
+{}
+ir_test_private_lib <- file.path(
+  Sys.getenv("IR_CACHE_DIR"),
+  "tooling",
+  paste0(getRversion(), "-", R.version$platform)
+)
+
+ir_test_write_secretbase(
+  Sys.getenv("R_LIBS_USER"),
+  marker = {},
+  hash = "ambienthash"
+)
+ir_test_write_pillar(
+  Sys.getenv("R_LIBS_USER"),
+  marker = {}
+)
+for (pkg in c("secretbase", "pillar")) {{
+  metadata <- file.path(Sys.getenv("R_LIBS_USER"), pkg, "Meta", "package.rds")
+  info <- readRDS(metadata)
+  info$Built$Platform <- "wrong-platform"
+  saveRDS(info, metadata)
+}}
+
+ir_test_write_pak(
+  ir_test_private_lib,
+  namespace = "export(pkg_deps)\nexport(pkg_install)",
+  code = ir_test_fake_pak_code(
+    allowed_installs = "secretbase",
+    require_pillar = TRUE
+  )
+)
+ir_test_write_renv(ir_test_private_lib)
+
+utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
+  stop("install.packages should not install resolver tooling when pak exists",
+       call. = FALSE)
+}}, ns = "utils")
+"#,
+            resolver_tooling_fixture_source(),
+            r_string(&fake_secretbase_load_marker),
+            r_string(&fake_pillar_load_marker)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &ambient_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=platform-tooling\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=platform-tooling");
+    assert!(
+        !fake_secretbase_load_marker.exists(),
+        "resolver should not load secretbase from a wrong-platform R_LIBS_USER"
+    );
+    assert!(
+        !fake_pillar_load_marker.exists(),
+        "resolver should remove wrong-platform R_LIBS_USER before pak loads auxiliary packages"
+    );
+}

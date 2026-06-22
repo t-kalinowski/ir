@@ -59,7 +59,9 @@ pub(crate) fn select_installed_r<'a>(
     installed
         .iter()
         .filter(|version| requirement.matches_installed(version))
-        .max_by(|a, b| compare_versions(&a.version, &b.version))
+        .max_by(|a, b| {
+            compare_versions(&a.version, &b.version).then_with(|| a.is_default.cmp(&b.is_default))
+        })
 }
 
 pub(crate) fn rig_install_hint(requirement: &VersionRequirement) -> Option<&str> {

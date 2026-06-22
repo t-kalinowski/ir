@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 pub(crate) struct InstalledR {
     pub(crate) name: String,
     pub(crate) version: String,
+    #[serde(default, rename = "default")]
+    pub(crate) is_default: bool,
     #[serde(default)]
     pub(crate) aliases: Vec<String>,
     binary: PathBuf,

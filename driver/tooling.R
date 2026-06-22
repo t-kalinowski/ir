@@ -70,7 +70,7 @@ ir_reset_tooling_namespace <- function(package) {
 
 # Tooling packages not already usable by the resolver. Prefer the private
 # tooling library, but accept ambient packages unless they come from R_LIBS_USER
-# and were built under a different R minor version.
+# and were built under a different R runtime.
 ir_missing_tooling <- function(packages = ir_tooling_packages(),
                                lib = ir_tooling_lib(),
                                min_versions = character()) {
@@ -83,9 +83,10 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
   }
 
   current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
+  current_platform <- R.version$platform
   missing <- character()
   bad_user_libs <- character()
-  package_r_minor <- function(path) {
+  package_runtime_ok <- function(path) {
     metadata <- file.path(path, "Meta", "package.rds")
     info <- if (file.exists(metadata)) {
       tryCatch(readRDS(metadata), error = function(e) NULL)
@@ -94,9 +95,17 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
     }
 
     built_r <- if (is.null(info)) character() else as.character(info$Built$R)
-    if (length(built_r))
-      built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
-    built_r
+    if (!length(built_r)) return(FALSE)
+    built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
+    if (!identical(built_r, current_r)) return(FALSE)
+
+    built_platform <- as.character(info$Built$Platform)
+    if (!length(built_platform) || is.na(built_platform[[1L]]) ||
+        !nzchar(built_platform[[1L]])) {
+      return(TRUE)
+    }
+
+    identical(built_platform[[1L]], current_platform)
   }
 
   if (length(user_libs)) {
@@ -105,7 +114,7 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
     if (length(user_secretbase)) {
       pkg_lib <- normalizePath(dirname(user_secretbase[[1L]]), winslash = "/",
                                mustWork = FALSE)
-      if (!identical(package_r_minor(user_secretbase[[1L]]), current_r))
+      if (!package_runtime_ok(user_secretbase[[1L]]))
         bad_user_libs <- c(bad_user_libs, pkg_lib)
     }
   }
@@ -128,7 +137,7 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
         next
       }
 
-      if (!identical(package_r_minor(path[[1L]]), current_r)) {
+      if (!package_runtime_ok(path[[1L]])) {
         bad_user_libs <- c(bad_user_libs, pkg_lib)
         missing <- c(missing, pkg)
         next

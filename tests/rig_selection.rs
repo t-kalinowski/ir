@@ -267,6 +267,59 @@ fn run_with_r_version_selects_highest_matching_installed_r() {
 
 #[cfg(unix)]
 #[test]
+fn run_with_exclude_newer_prefers_rig_default_for_equal_versions() {
+    let cache_dir = temp_dir("ir-exclude-newer-r-default-tie-cache");
+    let bin_dir = temp_dir("ir-exclude-newer-r-default-tie-bin");
+    let default_dir = temp_dir("ir-exclude-newer-r-default-tie-default");
+    let alternate_dir = temp_dir("ir-exclude-newer-r-default-tie-alternate");
+
+    let default_binary = selected_r_binary(&default_dir, "default");
+    let alternate_binary = selected_r_binary(&alternate_dir, "alternate");
+
+    write_executable(
+        &bin_dir.join("rig"),
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in\n",
+                "  list)\n",
+                "    cat <<'JSON'\n",
+                r#"[
+{{"name":"4.6","default":true,"version":"4.6.0","aliases":["release"],"binary":"{}"}},
+{{"name":"4.6-arm64","default":false,"version":"4.6.0","aliases":["devel"],"binary":"{}"}}
+]"#,
+                "\nJSON\n",
+                "    ;;\n",
+                "  available) echo unexpected available >&2; exit 65 ;;\n",
+                "  *) exit 64 ;;\n",
+                "esac\n",
+            ),
+            default_binary.display(),
+            alternate_binary.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", path_with_bin_dir(&bin_dir))
+        .env_remove("IR_RSCRIPT")
+        .args([
+            "run",
+            "--exclude-newer",
+            "2026-06-01",
+            "-e",
+            "cat('ignored')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "selected=default");
+    assert_stderr_lacks(&out, "unexpected available");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_with_exact_minor_r_version_errors_when_no_installed_patch_matches() {
     let cache_dir = temp_dir("ir-exact-minor-missing-cache");
     let bin_dir = temp_dir("ir-exact-minor-missing-bin");
