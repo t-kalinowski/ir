@@ -297,8 +297,9 @@ fn linux_binary_distribution_from_os_release(os_release: &str) -> Option<String>
         },
         "opensuse-leap" | "sles" => {
             let version = version_id.as_deref()?;
-            match version {
-                "15.6" => Some("opensuse156".to_string()),
+            match (id.as_str(), version) {
+                (_, "15.6") => Some("opensuse156".to_string()),
+                ("sles", "15.7") => Some("opensuse156".to_string()),
                 _ => None,
             }
         }
@@ -548,6 +549,14 @@ mod tests {
             linux_binary_distribution_from_os_release("ID=opensuse-leap\nVERSION_ID=\"15.6\"\n")
                 .as_deref(),
             Some("opensuse156")
+        );
+        assert_eq!(
+            linux_binary_distribution_from_os_release("ID=sles\nVERSION_ID=\"15.7\"\n").as_deref(),
+            Some("opensuse156")
+        );
+        assert_eq!(
+            linux_binary_distribution_from_os_release("ID=opensuse-leap\nVERSION_ID=\"15.7\"\n"),
+            None
         );
     }
 

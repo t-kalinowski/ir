@@ -1653,6 +1653,20 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {
   writeLines(code, file.path(path, "R", pkg))
 }
 
+ir_test_simulated_os_release <- Sys.getenv("IR_TEST_OS_RELEASE", unset = "")
+if (nzchar(ir_test_simulated_os_release)) {
+  Sys.info <- function() c(sysname = "Linux")
+  file.exists <- function(path) {
+    if (identical(path, "/etc/os-release")) TRUE else base::file.exists(path)
+  }
+  readLines <- function(con, warn = TRUE, ...) {
+    if (identical(con, "/etc/os-release"))
+      strsplit(ir_test_simulated_os_release, "\n", fixed = TRUE)[[1]]
+    else
+      base::readLines(con, warn = warn, ...)
+  }
+}
+
 ir_test_cache_platform <- function() {
   distro <- Sys.getenv("IR_TEST_PPM_LINUX_DISTRIBUTION", unset = "")
   if (nzchar(distro))
@@ -1661,60 +1675,67 @@ ir_test_cache_platform <- function() {
     R.version$platform
 }
 
-ir_test_private_lib <- file.path(
+ir_test_private_libs <- unique(file.path(
   Sys.getenv("IR_CACHE_DIR"),
   "tooling",
-  paste0(getRversion(), "-", ir_test_cache_platform())
-)
-
-ir_test_write_pkg(
-  ir_test_private_lib,
-  "secretbase",
-  "export(sha256)",
-  "sha256 <- function(x) paste(c('hash', nchar(paste(x, collapse = '\n'))), collapse = '-')"
-)
-ir_test_write_pkg(
-  ir_test_private_lib,
-  "pak",
-  "export(pkg_deps)",
-  paste(
-    "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
-    "  refs <- as.character(refs)",
-    "  data.frame(",
-    "    status = rep('OK', length(refs)),",
-    "    ref = refs,",
-    "    package = sub('@.*$', '', refs),",
-    "    version = rep('0.0.1', length(refs)),",
-    "    type = rep('standard', length(refs)),",
-    "    priority = NA_character_,",
-    "    direct = TRUE,",
-    "    stringsAsFactors = FALSE",
-    "  )",
-    "}",
-    sep = "\n"
-  )
-)
-ir_test_write_pkg(
-  ir_test_private_lib,
-  "renv",
-  "export(use)",
-  paste(
-    "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
-    "  writeLines(unname(repos[['CRAN']]), Sys.getenv('IR_TEST_REPOS_FILE'))",
-    "  specs <- unlist(list(...), use.names = FALSE)",
-    "  for (spec in specs) {",
-    "    pkg <- sub('@.*$', '', spec)",
-    "    dir.create(file.path(library, pkg), recursive = TRUE, showWarnings = FALSE)",
-    "  }",
-    "  invisible(TRUE)",
-    "}",
-    sep = "\n"
-  )
-)
-
-options(repos = c(
-  CRAN = Sys.getenv("IR_TEST_PROFILE_REPOS", unset = "https://packagemanager.posit.co/cran/latest")
+  paste0(getRversion(), "-", c(R.version$platform, ir_test_cache_platform()))
 ))
+
+for (ir_test_private_lib in ir_test_private_libs) {
+  ir_test_write_pkg(
+    ir_test_private_lib,
+    "secretbase",
+    "export(sha256)",
+    "sha256 <- function(x) paste(c('hash', nchar(paste(x, collapse = '\n'))), collapse = '-')"
+  )
+  ir_test_write_pkg(
+    ir_test_private_lib,
+    "pak",
+    "export(pkg_deps)",
+    paste(
+      "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
+      "  refs <- as.character(refs)",
+      "  data.frame(",
+      "    status = rep('OK', length(refs)),",
+      "    ref = refs,",
+      "    package = sub('@.*$', '', refs),",
+      "    version = rep('0.0.1', length(refs)),",
+      "    type = rep('standard', length(refs)),",
+      "    priority = NA_character_,",
+      "    direct = TRUE,",
+      "    stringsAsFactors = FALSE",
+      "  )",
+      "}",
+      sep = "\n"
+    )
+  )
+  ir_test_write_pkg(
+    ir_test_private_lib,
+    "renv",
+    "export(use)",
+    paste(
+      "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
+      "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
+      "  specs <- unlist(list(...), use.names = FALSE)",
+      "  for (spec in specs) {",
+      "    pkg <- sub('@.*$', '', spec)",
+      "    dir.create(file.path(library, pkg), recursive = TRUE, showWarnings = FALSE)",
+      "  }",
+      "  invisible(TRUE)",
+      "}",
+      sep = "\n"
+    )
+  )
+}
+
+ir_test_profile_repos <- Sys.getenv(
+  "IR_TEST_PROFILE_REPOS",
+  unset = "https://packagemanager.posit.co/cran/latest"
+)
+ir_test_repos <- c(CRAN = ir_test_profile_repos)
+if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
+  ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
+options(repos = ir_test_repos)
 "#,
     )
     .unwrap();
@@ -1742,7 +1763,7 @@ options(repos = c(
     assert_stdout_contains(&default, "ir.fixture=ppm-default");
     assert_eq!(
         fs::read_to_string(&default_repos).unwrap().trim(),
-        expected_ppm_latest_url()
+        format!("CRAN={}", expected_ppm_latest_url())
     );
 
     let mut latest_cmd = ir();
@@ -1752,6 +1773,7 @@ options(repos = c(
         .env("IR_RSCRIPT", rscript())
         .env("R_PROFILE_USER", &profile)
         .env("IR_TEST_REPOS_FILE", &latest_repos)
+        .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
         .args([
             "run",
             "--isolated",
@@ -1767,7 +1789,10 @@ options(repos = c(
     assert_stdout_contains(&latest, "ir.fixture=linux-binary-latest");
     assert_eq!(
         fs::read_to_string(&latest_repos).unwrap().trim(),
-        expected_ppm_latest_url()
+        format!(
+            "CRAN={}\nInternal=https://internal.example.test/repo",
+            expected_ppm_latest_url()
+        )
     );
 
     let mut snapshot_cmd = ir();
@@ -1794,7 +1819,34 @@ options(repos = c(
     assert_stdout_contains(&snapshot, "ir.fixture=linux-binary-snapshot");
     assert_eq!(
         fs::read_to_string(&snapshot_repos).unwrap().trim(),
-        expected_ppm_cran_url("2024-03-15")
+        format!("CRAN={}", expected_ppm_cran_url("2024-03-15"))
+    );
+
+    let sles_cache_dir = temp_dir("ir-linux-binary-repos-sles-cache");
+    let sles_repos = temp_path("ir-linux-binary-repos-sles", "txt");
+    let sles = ir()
+        .env("IR_CACHE_DIR", &sles_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_REPOS_FILE", &sles_repos)
+        .env("IR_TEST_PPM_LINUX_DISTRIBUTION", "opensuse156")
+        .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=sles-binary-latest\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&sles);
+    assert_stdout_contains(&sles, "ir.fixture=sles-binary-latest");
+    assert_eq!(
+        fs::read_to_string(&sles_repos).unwrap().trim(),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
     );
 }
 

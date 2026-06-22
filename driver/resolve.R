@@ -199,18 +199,23 @@ ir_linux_os_release <- function(path = "/etc/os-release") {
   values
 }
 
+ir_named_value <- function(values, name) {
+  if (is.null(values) || !(name %in% names(values))) return(NULL)
+  unname(values[[name]])
+}
+
 ir_linux_binary_distribution <- function() {
   if (!identical(unname(Sys.info()[["sysname"]]), "Linux")) return(NULL)
 
   os_release <- ir_linux_os_release()
-  id <- os_release[["ID"]]
-  ubuntu_codename <- os_release[["UBUNTU_CODENAME"]]
+  id <- ir_named_value(os_release, "ID")
+  ubuntu_codename <- ir_named_value(os_release, "UBUNTU_CODENAME")
   ubuntu_supported <- c("xenial", "bionic", "focal", "jammy", "noble",
                         "resolute")
   if (!is.null(ubuntu_codename) && ubuntu_codename %in% ubuntu_supported)
     return(ubuntu_codename)
 
-  codename <- os_release[["VERSION_CODENAME"]]
+  codename <- ir_named_value(os_release, "VERSION_CODENAME")
   if (identical(id, "ubuntu")) {
     if (!is.null(codename) && codename %in% ubuntu_supported) return(codename)
   }
@@ -222,13 +227,15 @@ ir_linux_binary_distribution <- function() {
 
   if (id %in% c("opensuse-leap", "sles")) {
     suse_supported <- c("15.6" = "opensuse156")
-    version <- os_release[["VERSION_ID"]]
+    if (identical(id, "sles"))
+      suse_supported <- c(suse_supported, "15.7" = "opensuse156")
+    version <- ir_named_value(os_release, "VERSION_ID")
     distro <- if (!is.null(version)) suse_supported[[version]] else NULL
     if (!is.null(distro)) return(distro)
   }
   if (identical(id, "centos")) {
     centos_supported <- c("7" = "centos7", "8" = "centos8")
-    version <- os_release[["VERSION_ID"]]
+    version <- ir_named_value(os_release, "VERSION_ID")
     major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
     distro <- centos_supported[[major]]
     if (!is.null(distro)) return(distro)
@@ -236,7 +243,7 @@ ir_linux_binary_distribution <- function() {
   if (id %in% c("rhel", "redhat", "rocky", "almalinux")) {
     rhel_supported <- c("7" = "centos7", "8" = "centos8", "9" = "rhel9",
                         "10" = "rhel10")
-    version <- os_release[["VERSION_ID"]]
+    version <- ir_named_value(os_release, "VERSION_ID")
     major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
     distro <- rhel_supported[[major]]
     if (!is.null(distro)) return(distro)
@@ -251,7 +258,7 @@ ir_cache_platform <- function(platform = R.version$platform) {
 }
 
 ir_configure_ppm_user_agent <- function(repos) {
-  cran <- repos[["CRAN"]]
+  cran <- ir_named_value(repos, "CRAN")
   if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
     return(invisible())
 
@@ -270,10 +277,13 @@ ir_plain_ppm_latest <- function(url) {
 }
 
 ir_normalize_repos <- function(repos) {
-  cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
+  cran <- ir_named_value(repos, "CRAN")
   if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@") ||
       ir_plain_ppm_latest(cran)) {
-    c(CRAN = ir_ppm_cran_url("latest"))
+    if (is.null(repos))
+      return(c(CRAN = ir_ppm_cran_url("latest")))
+    repos[["CRAN"]] <- ir_ppm_cran_url("latest")
+    repos
   } else {
     repos
   }

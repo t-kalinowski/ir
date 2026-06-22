@@ -163,8 +163,9 @@ pub(crate) fn linux_distribution() -> Option<String> {
             "10" => Some("rhel10".to_string()),
             _ => None,
         },
-        "opensuse-leap" | "sles" => match version_id.as_str() {
-            "15.6" => Some("opensuse156".to_string()),
+        "opensuse-leap" | "sles" => match (id.as_str(), version_id.as_str()) {
+            (_, "15.6") => Some("opensuse156".to_string()),
+            ("sles", "15.7") => Some("opensuse156".to_string()),
             _ => None,
         },
         _ => None,

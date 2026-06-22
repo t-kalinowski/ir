@@ -264,6 +264,20 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {
   writeLines(code, file.path(path, "R", pkg))
 }
 
+ir_test_simulated_os_release <- Sys.getenv("IR_TEST_OS_RELEASE", unset = "")
+if (nzchar(ir_test_simulated_os_release)) {
+  Sys.info <- function() c(sysname = "Linux")
+  file.exists <- function(path) {
+    if (identical(path, "/etc/os-release")) TRUE else base::file.exists(path)
+  }
+  readLines <- function(con, warn = TRUE, ...) {
+    if (identical(con, "/etc/os-release"))
+      strsplit(ir_test_simulated_os_release, "\n", fixed = TRUE)[[1]]
+    else
+      base::readLines(con, warn = warn, ...)
+  }
+}
+
 ir_test_write_pkg(
   Sys.getenv("R_LIBS_USER"),
   "pak",
@@ -282,16 +296,21 @@ ir_test_write_pkg(
   "export(use)",
   paste(
     "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
-    "  writeLines(unname(repos[['CRAN']]), Sys.getenv('IR_TEST_REPOS_FILE'))",
+    "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
     "  invisible(TRUE)",
     "}",
     sep = "\n"
   )
 )
 
-options(repos = c(
-  CRAN = Sys.getenv("IR_TEST_PROFILE_REPOS", unset = "https://packagemanager.posit.co/cran/latest")
-))
+ir_test_profile_repos <- Sys.getenv(
+  "IR_TEST_PROFILE_REPOS",
+  unset = "https://packagemanager.posit.co/cran/latest"
+)
+ir_test_repos <- c(CRAN = ir_test_profile_repos)
+if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
+  ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
+options(repos = ir_test_repos)
 "#,
     )
     .unwrap();
@@ -308,7 +327,7 @@ options(repos = c(
     assert_success(&default);
     assert_eq!(
         fs::read_to_string(&default_repos).unwrap().trim(),
-        expected_ppm_latest_url()
+        format!("CRAN={}", expected_ppm_latest_url())
     );
 
     let latest = Command::new(rscript())
@@ -316,13 +335,17 @@ options(repos = c(
         .env("R_PROFILE_USER", &profile)
         .env("R_LIBS_USER", &user_library)
         .env("IR_TEST_REPOS_FILE", &latest_repos)
+        .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
         .args(["scripts/warm-renv-cache.R", "cli"])
         .output()
         .unwrap();
     assert_success(&latest);
     assert_eq!(
         fs::read_to_string(&latest_repos).unwrap().trim(),
-        expected_ppm_latest_url()
+        format!(
+            "CRAN={}\nInternal=https://internal.example.test/repo",
+            expected_ppm_latest_url()
+        )
     );
 
     let snapshot = Command::new(rscript())
@@ -341,7 +364,23 @@ options(repos = c(
     assert_success(&snapshot);
     assert_eq!(
         fs::read_to_string(&snapshot_repos).unwrap().trim(),
-        expected_ppm_cran_url("2026-06-01")
+        format!("CRAN={}", expected_ppm_cran_url("2026-06-01"))
+    );
+
+    let sles_repos = temp_path("ir-warm-linux-binary-repos-sles", "txt");
+    let sles = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_TEST_REPOS_FILE", &sles_repos)
+        .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&sles);
+    assert_eq!(
+        fs::read_to_string(&sles_repos).unwrap().trim(),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
     );
 }
 
@@ -584,6 +623,7 @@ fn test_r_metadata_resolution_is_shared() {
     assert!(helper_text.contains("write.dcf"));
     assert!(helper_text.contains("from email.parser import Parser"));
     assert!(helper_text.contains(r#"source(file("stdin"))"#));
+    assert!(!helper_text.contains("\"--vanilla\""));
     assert!(!helper_text.contains("cat(sprintf"));
     assert!(!helper_text.contains("def output_field"));
     assert!(!helper_text.contains("available\", \"--all\", \"--json"));
@@ -669,7 +709,7 @@ fi
         format!(
             r#"#!/usr/bin/env sh
 set -eu
-if [ "$1" = "--vanilla" ] && [ "$2" = "--slave" ] && [ "$3" = "-e" ] && [ "$4" = 'source(file("stdin"))' ]; then
+if [ "$1" = "--slave" ] && [ "$2" = "-e" ] && [ "$3" = 'source(file("stdin"))' ]; then
   script="$(cat)"
   printf '%s\n' "$script" | grep -q 'write[.]dcf' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
   printf '%s\n' "$script" | grep -q 'width *= *100000' || {{ echo "metadata script should disable DCF wrapping" >&2; exit 98; }}

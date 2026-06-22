@@ -69,7 +69,7 @@ def installed_r_for_version(version: str, spec: str) -> tuple[str, str]:
 def release_metadata(binary: str) -> tuple[str, str, str]:
     output = run_r(
         binary,
-        ["--vanilla", "--slave", "-e", 'source(file("stdin"))'],
+        ["--slave", "-e", 'source(file("stdin"))'],
         # fmt: r
         stdin="""
             rscript <- file.path(
