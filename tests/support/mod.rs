@@ -110,7 +110,7 @@ pub(crate) fn renviron_path(path: &Path) -> String {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn linux_distribution() -> String {
+pub(crate) fn linux_distribution() -> Option<String> {
     let os_release = fs::read_to_string("/etc/os-release").expect("failed to read /etc/os-release");
     let mut id = String::new();
     let mut ubuntu_codename = String::new();
@@ -131,37 +131,61 @@ pub(crate) fn linux_distribution() -> String {
         }
     }
 
-    if !ubuntu_codename.is_empty() {
-        return ubuntu_codename;
+    let ubuntu_supported = ["xenial", "bionic", "focal", "jammy", "noble", "resolute"];
+    if ubuntu_supported.contains(&ubuntu_codename.as_str()) {
+        return Some(ubuntu_codename);
     }
-    if (id == "ubuntu" || id == "debian") && !version_codename.is_empty() {
-        return version_codename;
+    if id == "ubuntu" {
+        if ubuntu_supported.contains(&version_codename.as_str()) {
+            return Some(version_codename);
+        }
+        return None;
+    }
+    if id == "debian" {
+        let debian_supported = ["buster", "bullseye", "bookworm", "trixie"];
+        if debian_supported.contains(&version_codename.as_str()) {
+            return Some(version_codename);
+        }
+        return None;
     }
 
-    let major = version_id
-        .split('.')
-        .next()
-        .expect("VERSION_ID should have a major version");
+    let major = version_id.split('.').next().unwrap_or_default();
     match id.as_str() {
-        "centos" => format!("centos{major}"),
-        "rhel" | "rocky" | "almalinux" => format!("rhel{major}"),
-        "opensuse-leap" => format!("opensuse{}", version_id.replace('.', "")),
-        _ => panic!("unsupported Linux distribution in /etc/os-release"),
+        "centos" => match major {
+            "7" => Some("centos7".to_string()),
+            "8" => Some("centos8".to_string()),
+            _ => None,
+        },
+        "rhel" | "redhat" | "rocky" | "almalinux" => match major {
+            "7" => Some("centos7".to_string()),
+            "8" => Some("centos8".to_string()),
+            "9" => Some("rhel9".to_string()),
+            "10" => Some("rhel10".to_string()),
+            _ => None,
+        },
+        "opensuse-leap" | "sles" => match version_id.as_str() {
+            "15.6" => Some("opensuse156".to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn linux_distribution() -> Option<String> {
+    None
+}
+
+pub(crate) fn set_ppm_linux_distribution_env(command: &mut Command) {
+    if let Some(distribution) = linux_distribution() {
+        command.env("IR_TEST_PPM_LINUX_DISTRIBUTION", distribution);
     }
 }
 
 pub(crate) fn expected_ppm_cran_url(snapshot: &str) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        format!(
-            "https://packagemanager.posit.co/cran/__linux__/{}/{}",
-            linux_distribution(),
-            snapshot
-        )
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
+    if let Some(distribution) = linux_distribution() {
+        format!("https://packagemanager.posit.co/cran/__linux__/{distribution}/{snapshot}")
+    } else {
         format!("https://packagemanager.posit.co/cran/{snapshot}")
     }
 }

@@ -39,24 +39,63 @@ linux_binary_distribution <- function() {
   os_release <- linux_os_release()
   id <- os_release[["ID"]]
   ubuntu_codename <- os_release[["UBUNTU_CODENAME"]]
-  if (!is.null(ubuntu_codename) && nzchar(ubuntu_codename))
+  ubuntu_supported <- c("xenial", "bionic", "focal", "jammy", "noble",
+                        "resolute")
+  if (!is.null(ubuntu_codename) && ubuntu_codename %in% ubuntu_supported)
     return(ubuntu_codename)
 
   codename <- os_release[["VERSION_CODENAME"]]
-  if (identical(id, "ubuntu") || identical(id, "debian")) {
-    if (!is.null(codename) && nzchar(codename)) return(codename)
+  if (identical(id, "ubuntu")) {
+    if (!is.null(codename) && codename %in% ubuntu_supported) return(codename)
+  }
+  if (identical(id, "debian")) {
+    debian_supported <- c("buster", "bullseye", "bookworm", "trixie")
+    if (!is.null(codename) && codename %in% debian_supported) return(codename)
+  }
+  if (is.null(id)) return(NULL)
+
+  if (id %in% c("opensuse-leap", "sles")) {
+    suse_supported <- c("15.6" = "opensuse156")
+    version <- os_release[["VERSION_ID"]]
+    distro <- if (!is.null(version)) suse_supported[[version]] else NULL
+    if (!is.null(distro)) return(distro)
+  }
+  if (identical(id, "centos")) {
+    centos_supported <- c("7" = "centos7", "8" = "centos8")
+    version <- os_release[["VERSION_ID"]]
+    major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
+    distro <- centos_supported[[major]]
+    if (!is.null(distro)) return(distro)
+  }
+  if (id %in% c("rhel", "redhat", "rocky", "almalinux")) {
+    rhel_supported <- c("7" = "centos7", "8" = "centos8", "9" = "rhel9",
+                        "10" = "rhel10")
+    version <- os_release[["VERSION_ID"]]
+    major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
+    distro <- rhel_supported[[major]]
+    if (!is.null(distro)) return(distro)
   }
 
-  version <- os_release[["VERSION_ID"]]
-  if (is.null(id) || is.null(version) || !nzchar(version)) return(NULL)
-
-  major <- strsplit(version, ".", fixed = TRUE)[[1L]][[1L]]
-  if (identical(id, "centos")) return(paste0("centos", major))
-  if (id %in% c("rhel", "rocky", "almalinux")) return(paste0("rhel", major))
-  if (identical(id, "opensuse-leap"))
-    return(paste0("opensuse", gsub(".", "", version, fixed = TRUE)))
-
   NULL
+}
+
+configure_ppm_user_agent <- function(repos) {
+  cran <- repos[["CRAN"]]
+  if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
+    return(invisible())
+
+  options(HTTPUserAgent = sprintf(
+    "R/%s R (%s)",
+    getRversion(),
+    paste(getRversion(), R.version["platform"], R.version["arch"],
+          R.version["os"])
+  ))
+  invisible()
+}
+
+plain_ppm_latest <- function(url) {
+  if (is.null(url) || is.na(url)) return(FALSE)
+  identical(sub("/+$", "", url), "https://packagemanager.posit.co/cran/latest")
 }
 
 ppm_cran_url <- function(snapshot) {
@@ -70,8 +109,9 @@ ppm_cran_url <- function(snapshot) {
 
 default_repos <- function(repos) {
   cran <- repos[["CRAN"]]
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    c(CRAN = "https://packagemanager.posit.co/cran/latest")
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@") ||
+      plain_ppm_latest(cran))
+    c(CRAN = ppm_cran_url("latest"))
   else
     repos
 }
@@ -82,12 +122,13 @@ repos <- if (!is.null(snapshot)) {
 } else if (is.null(repos)) {
   default_repos(getOption("repos"))
 } else {
-  c(CRAN = repos)
+  default_repos(c(CRAN = repos))
 }
 
 if (explicit_repos)
   Sys.unsetenv("RENV_CONFIG_REPOS_OVERRIDE")
 options(repos = repos, renv.consent = TRUE)
+configure_ppm_user_agent(repos)
 
 r_libs_user <- Sys.getenv("R_LIBS_USER", unset = "")
 if (nzchar(r_libs_user)) {

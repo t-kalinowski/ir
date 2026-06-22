@@ -75,7 +75,7 @@ ir_tooling_packages <- function() c("pak", "renv", "secretbase")
 # packages match the running R, mirroring renv's cache layout.
 ir_tooling_lib <- function(cache_dir = ir_cache_dir())
   file.path(cache_dir, "tooling",
-            paste0(getRversion(), "-", R.version$platform))
+            paste0(getRversion(), "-", ir_cache_platform()))
 
 # Tooling packages not already usable by the resolver. Prefer the private
 # tooling library, but accept ambient packages unless they come from R_LIBS_USER
@@ -165,6 +165,7 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
 # into the tooling library, which is then put first on the search path.
 ir_ensure_tooling <- function(cache_dir = ir_cache_dir(),
                               repos = ir_tooling_repos()) {
+  ir_configure_ppm_user_agent(repos)
   lib <- ir_tooling_lib(cache_dir)
   dir.create(lib, recursive = TRUE, showWarnings = FALSE)
   .libPaths(c(lib, .libPaths()))
@@ -204,24 +205,78 @@ ir_linux_binary_distribution <- function() {
   os_release <- ir_linux_os_release()
   id <- os_release[["ID"]]
   ubuntu_codename <- os_release[["UBUNTU_CODENAME"]]
-  if (!is.null(ubuntu_codename) && nzchar(ubuntu_codename))
+  ubuntu_supported <- c("xenial", "bionic", "focal", "jammy", "noble",
+                        "resolute")
+  if (!is.null(ubuntu_codename) && ubuntu_codename %in% ubuntu_supported)
     return(ubuntu_codename)
 
   codename <- os_release[["VERSION_CODENAME"]]
-  if (identical(id, "ubuntu") || identical(id, "debian")) {
-    if (!is.null(codename) && nzchar(codename)) return(codename)
+  if (identical(id, "ubuntu")) {
+    if (!is.null(codename) && codename %in% ubuntu_supported) return(codename)
+  }
+  if (identical(id, "debian")) {
+    debian_supported <- c("buster", "bullseye", "bookworm", "trixie")
+    if (!is.null(codename) && codename %in% debian_supported) return(codename)
+  }
+  if (is.null(id)) return(NULL)
+
+  if (id %in% c("opensuse-leap", "sles")) {
+    suse_supported <- c("15.6" = "opensuse156")
+    version <- os_release[["VERSION_ID"]]
+    distro <- if (!is.null(version)) suse_supported[[version]] else NULL
+    if (!is.null(distro)) return(distro)
+  }
+  if (identical(id, "centos")) {
+    centos_supported <- c("7" = "centos7", "8" = "centos8")
+    version <- os_release[["VERSION_ID"]]
+    major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
+    distro <- centos_supported[[major]]
+    if (!is.null(distro)) return(distro)
+  }
+  if (id %in% c("rhel", "redhat", "rocky", "almalinux")) {
+    rhel_supported <- c("7" = "centos7", "8" = "centos8", "9" = "rhel9",
+                        "10" = "rhel10")
+    version <- os_release[["VERSION_ID"]]
+    major <- if (!is.null(version)) strsplit(version, ".", fixed = TRUE)[[1L]][[1L]] else NULL
+    distro <- rhel_supported[[major]]
+    if (!is.null(distro)) return(distro)
   }
 
-  version <- os_release[["VERSION_ID"]]
-  if (is.null(id) || is.null(version) || !nzchar(version)) return(NULL)
-
-  major <- strsplit(version, ".", fixed = TRUE)[[1L]][[1L]]
-  if (identical(id, "centos")) return(paste0("centos", major))
-  if (id %in% c("rhel", "rocky", "almalinux")) return(paste0("rhel", major))
-  if (identical(id, "opensuse-leap"))
-    return(paste0("opensuse", gsub(".", "", version, fixed = TRUE)))
-
   NULL
+}
+
+ir_cache_platform <- function(platform = R.version$platform) {
+  distro <- ir_linux_binary_distribution()
+  if (is.null(distro)) platform else paste0(platform, ";ppm-linux=", distro)
+}
+
+ir_configure_ppm_user_agent <- function(repos) {
+  cran <- repos[["CRAN"]]
+  if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
+    return(invisible())
+
+  options(HTTPUserAgent = sprintf(
+    "R/%s R (%s)",
+    getRversion(),
+    paste(getRversion(), R.version["platform"], R.version["arch"],
+          R.version["os"])
+  ))
+  invisible()
+}
+
+ir_plain_ppm_latest <- function(url) {
+  if (is.null(url) || is.na(url)) return(FALSE)
+  identical(sub("/+$", "", url), "https://packagemanager.posit.co/cran/latest")
+}
+
+ir_normalize_repos <- function(repos) {
+  cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@") ||
+      ir_plain_ppm_latest(cran)) {
+    c(CRAN = ir_ppm_cran_url("latest"))
+  } else {
+    repos
+  }
 }
 
 ir_ppm_cran_url <- function(snapshot) {
@@ -248,11 +303,7 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
   if (!is.null(exclude_newer))
     return(c(CRAN = ir_ppm_snapshot_url(exclude_newer)))
 
-  cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    c(CRAN = ir_ppm_cran_url("latest"))
-  else
-    repos
+  ir_normalize_repos(repos)
 }
 
 ## --- resolution cache -------------------------------------------------------
@@ -263,7 +314,7 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
 # a stable key and stores the creation time in the marker value.
 ir_input_key <- function(deps,
                          rversion      = getRversion(),
-                         platform      = R.version$platform,
+                         platform      = ir_cache_platform(),
                          exclude_newer = NULL,
                          quarto        = FALSE) {
   source_key <- if (is.null(exclude_newer))
@@ -367,6 +418,7 @@ ir_resolve_main <- function() {
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
   repos <- ir_repos(exclude_newer)
   options(repos = repos)
+  ir_configure_ppm_user_agent(repos)
 
   # A Quarto render needs rmarkdown for the knitr engine; Rust sets
   # IR_QUARTO_RENDER so the resolver can inject it when the resolved set does not
@@ -462,7 +514,7 @@ ir_resolve_main <- function() {
   # renv cache, whose layout is itself keyed by R version and platform.
   key <- paste(c(install_specs,
                  as.character(getRversion()),
-                 R.version$platform),
+                 ir_cache_platform()),
                collapse = "\n")
   library_path <- file.path(cache_dir, "libraries", secretbase::sha256(key))
 

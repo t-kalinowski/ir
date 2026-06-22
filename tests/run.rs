@@ -1653,10 +1653,18 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code) {
   writeLines(code, file.path(path, "R", pkg))
 }
 
+ir_test_cache_platform <- function() {
+  distro <- Sys.getenv("IR_TEST_PPM_LINUX_DISTRIBUTION", unset = "")
+  if (nzchar(distro))
+    paste0(R.version$platform, ";ppm-linux=", distro)
+  else
+    R.version$platform
+}
+
 ir_test_private_lib <- file.path(
   Sys.getenv("IR_CACHE_DIR"),
   "tooling",
-  paste0(getRversion(), "-", R.version$platform)
+  paste0(getRversion(), "-", ir_test_cache_platform())
 )
 
 ir_test_write_pkg(
@@ -1711,7 +1719,9 @@ options(repos = c(
     )
     .unwrap();
 
-    let default = ir()
+    let mut default_cmd = ir();
+    set_ppm_linux_distribution_env(&mut default_cmd);
+    let default = default_cmd
         .env("IR_CACHE_DIR", &default_cache_dir)
         .env("IR_RSCRIPT", rscript())
         .env("R_PROFILE_USER", &profile)
@@ -1735,7 +1745,9 @@ options(repos = c(
         expected_ppm_latest_url()
     );
 
-    let latest = ir()
+    let mut latest_cmd = ir();
+    set_ppm_linux_distribution_env(&mut latest_cmd);
+    let latest = latest_cmd
         .env("IR_CACHE_DIR", &latest_cache_dir)
         .env("IR_RSCRIPT", rscript())
         .env("R_PROFILE_USER", &profile)
@@ -1758,7 +1770,9 @@ options(repos = c(
         expected_ppm_latest_url()
     );
 
-    let snapshot = ir()
+    let mut snapshot_cmd = ir();
+    set_ppm_linux_distribution_env(&mut snapshot_cmd);
+    let snapshot = snapshot_cmd
         .env("IR_CACHE_DIR", &snapshot_cache_dir)
         .env("IR_RSCRIPT", rscript())
         .env("R_PROFILE_USER", &profile)
@@ -1992,10 +2006,18 @@ ir_test_write_pkg <- function(lib, pkg, namespace, code, built = NULL) {{
   }}
 }}
 
+ir_test_cache_platform <- function() {{
+  distro <- Sys.getenv("IR_TEST_PPM_LINUX_DISTRIBUTION", unset = "")
+  if (nzchar(distro))
+    paste0(R.version$platform, ";ppm-linux=", distro)
+  else
+    R.version$platform
+}}
+
 ir_test_private_lib <- file.path(
   Sys.getenv("IR_CACHE_DIR"),
   "tooling",
-  paste0(getRversion(), "-", R.version$platform)
+  paste0(getRversion(), "-", ir_test_cache_platform())
 )
 ir_test_r_parts <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1]]
 ir_test_wrong_minor <- if (identical(ir_test_r_parts[[2]], "0")) "1" else "0"
@@ -2082,7 +2104,9 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     )
     .unwrap();
 
-    let first = ir()
+    let mut first_cmd = ir();
+    set_ppm_linux_distribution_env(&mut first_cmd);
+    let first = first_cmd
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_LIBS_USER", &ambient_library)
         .env("R_PROFILE_USER", &profile)
@@ -2109,7 +2133,9 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
         "resolver should remove wrong-R-minor R_LIBS_USER before pak loads auxiliary packages"
     );
 
-    let second = ir()
+    let mut second_cmd = ir();
+    set_ppm_linux_distribution_env(&mut second_cmd);
+    let second = second_cmd
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_LIBS_USER", &ambient_library)
         .env("R_PROFILE_USER", &profile)
