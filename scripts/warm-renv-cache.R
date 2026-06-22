@@ -2,10 +2,16 @@
 
 args <- commandArgs(TRUE)
 repos <- NULL
+snapshot <- NULL
 explicit_repos <- FALSE
 
 if (length(args) >= 2L && identical(args[[1L]], "--repos")) {
   repos <- args[[2L]]
+  explicit_repos <- TRUE
+  args <- args[-c(1L, 2L)]
+}
+if (length(args) >= 2L && identical(args[[1L]], "--snapshot")) {
+  snapshot <- args[[2L]]
   explicit_repos <- TRUE
   args <- args[-c(1L, 2L)]
 }
@@ -62,31 +68,22 @@ ppm_cran_url <- function(snapshot) {
   sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
 }
 
-ppm_snapshot_id <- function(url) {
-  prefix <- "https://packagemanager.posit.co/cran/"
-  if (!startsWith(url, prefix)) return(NULL)
-
-  snapshot <- sub("/+$", "", substring(url, nchar(prefix) + 1L))
-  if (!nzchar(snapshot) || grepl("/", snapshot, fixed = TRUE)) return(NULL)
-  snapshot
-}
-
-linux_binary_repos <- function(repos) {
+default_repos <- function(repos) {
   cran <- repos[["CRAN"]]
-  if (is.null(cran) || is.na(cran) || !nzchar(cran)) return(repos)
-
-  snapshot <- ppm_snapshot_id(cran)
-  if (is.null(snapshot)) return(repos)
-
-  repos[["CRAN"]] <- ppm_cran_url(snapshot)
-  repos
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    c(CRAN = "https://packagemanager.posit.co/cran/latest")
+  else
+    repos
 }
 
-tooling_repos <- linux_binary_repos(
-  c(CRAN = "https://packagemanager.posit.co/cran/latest")
-)
-repos <- if (is.null(repos)) getOption("repos") else c(CRAN = repos)
-repos <- linux_binary_repos(repos)
+tooling_repos <- c(CRAN = ppm_cran_url("latest"))
+repos <- if (!is.null(snapshot)) {
+  c(CRAN = ppm_cran_url(snapshot))
+} else if (is.null(repos)) {
+  default_repos(getOption("repos"))
+} else {
+  c(CRAN = repos)
+}
 
 if (explicit_repos)
   Sys.unsetenv("RENV_CONFIG_REPOS_OVERRIDE")

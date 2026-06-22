@@ -233,32 +233,12 @@ ir_ppm_cran_url <- function(snapshot) {
   sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
 }
 
-ir_ppm_snapshot_id <- function(url) {
-  prefix <- "https://packagemanager.posit.co/cran/"
-  if (!startsWith(url, prefix)) return(NULL)
-
-  snapshot <- sub("/+$", "", substring(url, nchar(prefix) + 1L))
-  if (!nzchar(snapshot) || grepl("/", snapshot, fixed = TRUE)) return(NULL)
-  snapshot
-}
-
-ir_linux_binary_repos <- function(repos) {
-  cran <- repos[["CRAN"]]
-  if (is.null(cran) || is.na(cran) || !nzchar(cran)) return(repos)
-
-  snapshot <- ir_ppm_snapshot_id(cran)
-  if (is.null(snapshot)) return(repos)
-
-  repos[["CRAN"]] <- ir_ppm_cran_url(snapshot)
-  repos
-}
-
 # Repository for tooling installs: always the latest PPM snapshot, independent
 # of the user's `exclude-newer`. ir's own tooling is not pinned to a user's
 # reproducibility date. PPM serves binaries for Windows and macOS, and Linux
 # binary repositories are selected when the host distribution is known.
 ir_tooling_repos <- function()
-  ir_linux_binary_repos(c(CRAN = "https://packagemanager.posit.co/cran/latest"))
+  c(CRAN = ir_ppm_cran_url("latest"))
 
 ir_ppm_snapshot_url <- function(exclude_newer) {
   ir_ppm_cran_url(exclude_newer)
@@ -270,9 +250,9 @@ ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
 
   cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
   if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    c(CRAN = "https://cran.r-project.org")
+    c(CRAN = ir_ppm_cran_url("latest"))
   else
-    ir_linux_binary_repos(repos)
+    repos
 }
 
 ## --- resolution cache -------------------------------------------------------

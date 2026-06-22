@@ -150,6 +150,26 @@ pub(crate) fn linux_distribution() -> String {
     }
 }
 
+pub(crate) fn expected_ppm_cran_url(snapshot: &str) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        format!(
+            "https://packagemanager.posit.co/cran/__linux__/{}/{}",
+            linux_distribution(),
+            snapshot
+        )
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        format!("https://packagemanager.posit.co/cran/{snapshot}")
+    }
+}
+
+pub(crate) fn expected_ppm_latest_url() -> String {
+    expected_ppm_cran_url("latest")
+}
+
 #[cfg(unix)]
 pub(crate) fn r_string(path: &Path) -> String {
     serde_json::to_string(&renviron_path(path)).unwrap()

@@ -1626,15 +1626,15 @@ fn run_passes_rust_owned_cache_dir_to_resolver() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn run_uses_linux_binary_repos_for_ambient_ppm_and_snapshot_resolution() {
+fn run_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots() {
+    let default_cache_dir = temp_dir("ir-linux-binary-repos-default-cache");
     let latest_cache_dir = temp_dir("ir-linux-binary-repos-latest-cache");
     let snapshot_cache_dir = temp_dir("ir-linux-binary-repos-snapshot-cache");
     let profile = temp_path("ir-linux-binary-repos-profile", "R");
+    let default_repos = temp_path("ir-linux-binary-repos-default", "txt");
     let latest_repos = temp_path("ir-linux-binary-repos-latest", "txt");
     let snapshot_repos = temp_path("ir-linux-binary-repos-snapshot", "txt");
-    let distro = linux_distribution();
 
     fs::write(
         &profile,
@@ -1704,10 +1704,36 @@ ir_test_write_pkg(
   )
 )
 
-options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
+options(repos = c(
+  CRAN = Sys.getenv("IR_TEST_PROFILE_REPOS", unset = "https://packagemanager.posit.co/cran/latest")
+))
 "#,
     )
     .unwrap();
+
+    let default = ir()
+        .env("IR_CACHE_DIR", &default_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_PROFILE_REPOS", "@CRAN@")
+        .env("IR_TEST_REPOS_FILE", &default_repos)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=ppm-default\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&default);
+    assert_stdout_contains(&default, "ir.fixture=ppm-default");
+    assert_eq!(
+        fs::read_to_string(&default_repos).unwrap().trim(),
+        expected_ppm_latest_url()
+    );
 
     let latest = ir()
         .env("IR_CACHE_DIR", &latest_cache_dir)
@@ -1729,7 +1755,7 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
     assert_stdout_contains(&latest, "ir.fixture=linux-binary-latest");
     assert_eq!(
         fs::read_to_string(&latest_repos).unwrap().trim(),
-        format!("https://packagemanager.posit.co/cran/__linux__/{distro}/latest")
+        expected_ppm_latest_url()
     );
 
     let snapshot = ir()
@@ -1754,7 +1780,7 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
     assert_stdout_contains(&snapshot, "ir.fixture=linux-binary-snapshot");
     assert_eq!(
         fs::read_to_string(&snapshot_repos).unwrap().trim(),
-        format!("https://packagemanager.posit.co/cran/__linux__/{distro}/2024-03-15")
+        expected_ppm_cran_url("2024-03-15")
     );
 }
 

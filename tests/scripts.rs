@@ -1,7 +1,6 @@
 mod support;
 
-#[cfg(target_os = "linux")]
-use support::{linux_distribution, rscript, temp_dir, temp_path};
+use support::{expected_ppm_cran_url, expected_ppm_latest_url, rscript, temp_dir, temp_path};
 
 use std::fs;
 use std::path::Path;
@@ -174,7 +173,8 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
     assert!(workflow.contains("Warm non-default R package cache"));
-    assert!(workflow.contains("--repos https://packagemanager.posit.co/cran/2026-06-01"));
+    assert!(workflow.contains("--snapshot latest"));
+    assert!(workflow.contains("--snapshot 2026-06-01"));
     assert!(workflow.contains("github::rstudio/reticulate fansi"));
     assert!(workflow.contains("rmarkdown xfun quarto"));
     assert!(workflow.contains("rmarkdown bookdown tinytex xfun"));
@@ -188,8 +188,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
         .nth(1)
         .and_then(|block| block.split("      - run: cargo nextest").next())
         .expect("workflow should warm the non-default R package cache before tests");
-    assert!(warm_non_default_cache
-        .contains("--repos https://packagemanager.posit.co/cran/${IR_TEST_R_EXCLUDE_NEWER}"));
+    assert!(warm_non_default_cache.contains("--snapshot ${IR_TEST_R_EXCLUDE_NEWER}"));
     assert!(!warm_non_default_cache.contains("2026-06-01"));
     assert!(warm_non_default_cache.contains("R_LIBS_USER: ${{ runner.temp }}/ir-test-r-library"));
     let warm_default_cache = workflow
@@ -238,17 +237,15 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(warm_script.contains("__linux__"));
     assert!(warm_script.contains("VERSION_CODENAME"));
     assert!(!warm_script.contains("https://cran.r-project.org"));
-    assert!(!warm_script.contains("default_repos"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn warm_renv_cache_uses_linux_binary_repos_for_ambient_ppm_and_snapshot() {
+fn warm_renv_cache_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots() {
     let user_library = temp_dir("ir-warm-linux-binary-repos-library");
     let profile = temp_path("ir-warm-linux-binary-repos-profile", "R");
+    let default_repos = temp_path("ir-warm-linux-binary-repos-default", "txt");
     let latest_repos = temp_path("ir-warm-linux-binary-repos-latest", "txt");
     let snapshot_repos = temp_path("ir-warm-linux-binary-repos-snapshot", "txt");
-    let distro = linux_distribution();
 
     fs::write(
         &profile,
@@ -292,10 +289,27 @@ ir_test_write_pkg(
   )
 )
 
-options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
+options(repos = c(
+  CRAN = Sys.getenv("IR_TEST_PROFILE_REPOS", unset = "https://packagemanager.posit.co/cran/latest")
+))
 "#,
     )
     .unwrap();
+
+    let default = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_TEST_PROFILE_REPOS", "@CRAN@")
+        .env("IR_TEST_REPOS_FILE", &default_repos)
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&default);
+    assert_eq!(
+        fs::read_to_string(&default_repos).unwrap().trim(),
+        expected_ppm_latest_url()
+    );
 
     let latest = Command::new(rscript())
         .current_dir(repo_root())
@@ -308,7 +322,7 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
     assert_success(&latest);
     assert_eq!(
         fs::read_to_string(&latest_repos).unwrap().trim(),
-        format!("https://packagemanager.posit.co/cran/__linux__/{distro}/latest")
+        expected_ppm_latest_url()
     );
 
     let snapshot = Command::new(rscript())
@@ -318,8 +332,8 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
         .env("IR_TEST_REPOS_FILE", &snapshot_repos)
         .args([
             "scripts/warm-renv-cache.R",
-            "--repos",
-            "https://packagemanager.posit.co/cran/2026-06-01",
+            "--snapshot",
+            "2026-06-01",
             "cli",
         ])
         .output()
@@ -327,7 +341,7 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
     assert_success(&snapshot);
     assert_eq!(
         fs::read_to_string(&snapshot_repos).unwrap().trim(),
-        format!("https://packagemanager.posit.co/cran/__linux__/{distro}/2026-06-01")
+        expected_ppm_cran_url("2026-06-01")
     );
 }
 
