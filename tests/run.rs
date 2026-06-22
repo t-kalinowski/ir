@@ -1630,10 +1630,12 @@ fn run_passes_rust_owned_cache_dir_to_resolver() {
 fn run_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots() {
     let default_cache_dir = temp_dir("ir-linux-binary-repos-default-cache");
     let latest_cache_dir = temp_dir("ir-linux-binary-repos-latest-cache");
+    let dated_cache_dir = temp_dir("ir-linux-binary-repos-dated-cache");
     let snapshot_cache_dir = temp_dir("ir-linux-binary-repos-snapshot-cache");
     let profile = temp_path("ir-linux-binary-repos-profile", "R");
     let default_repos = temp_path("ir-linux-binary-repos-default", "txt");
     let latest_repos = temp_path("ir-linux-binary-repos-latest", "txt");
+    let dated_repos = temp_path("ir-linux-binary-repos-dated", "txt");
     let snapshot_repos = temp_path("ir-linux-binary-repos-snapshot", "txt");
 
     fs::write(
@@ -1716,6 +1718,16 @@ for (ir_test_private_lib in ir_test_private_libs) {
     paste(
       "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
       "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
+      "  options_file <- Sys.getenv('IR_TEST_OPTIONS_FILE', unset = '')",
+      "  if (nzchar(options_file)) {",
+      "    writeLines(c(",
+      "      paste0('HTTPUserAgent=', getOption('HTTPUserAgent', '')),",
+      "      paste0('download.file.extra=', getOption('download.file.extra', ''))",
+      "    ), options_file)",
+      "  }",
+      "  prefix_file <- Sys.getenv('IR_TEST_PREFIX_FILE', unset = '')",
+      "  if (nzchar(prefix_file))",
+      "    writeLines(Sys.getenv('RENV_PATHS_PREFIX', unset = ''), prefix_file)",
       "  specs <- unlist(list(...), use.names = FALSE)",
       "  for (spec in specs) {",
       "    pkg <- sub('@.*$', '', spec)",
@@ -1736,6 +1748,10 @@ ir_test_repos <- c(CRAN = ir_test_profile_repos)
 if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
   ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
 options(repos = ir_test_repos)
+ir_test_download_method <- Sys.getenv("IR_TEST_DOWNLOAD_METHOD", unset = "")
+if (nzchar(ir_test_download_method))
+  options(download.file.method = ir_test_download_method,
+          download.file.extra = "--compressed")
 "#,
     )
     .unwrap();
@@ -1803,6 +1819,38 @@ options(repos = ir_test_repos)
         )
     );
 
+    let mut dated_cmd = ir();
+    set_ppm_linux_distribution_env(&mut dated_cmd);
+    let dated = dated_cmd
+        .env("IR_CACHE_DIR", &dated_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env(
+            "IR_TEST_PROFILE_REPOS",
+            "https://packagemanager.posit.co/cran/2026-06-01",
+        )
+        .env("IR_TEST_REPOS_FILE", &dated_repos)
+        .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
+        .env("IR_TEST_PPM_LINUX_DISTRIBUTION", "opensuse156")
+        .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=linux-binary-dated\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&dated);
+    assert_stdout_contains(&dated, "ir.fixture=linux-binary-dated");
+    assert_eq!(
+        read_repos(&dated_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/2026-06-01\nInternal=https://internal.example.test/repo"
+    );
+
     let mut snapshot_cmd = ir();
     set_ppm_linux_distribution_env(&mut snapshot_cmd);
     let snapshot = snapshot_cmd
@@ -1832,11 +1880,16 @@ options(repos = ir_test_repos)
 
     let sles_cache_dir = temp_dir("ir-linux-binary-repos-sles-cache");
     let sles_repos = temp_path("ir-linux-binary-repos-sles", "txt");
+    let sles_options = temp_path("ir-linux-binary-repos-sles-options", "txt");
+    let sles_prefix = temp_path("ir-linux-binary-repos-sles-prefix", "txt");
     let sles = ir()
         .env("IR_CACHE_DIR", &sles_cache_dir)
         .env("IR_RSCRIPT", rscript())
         .env("R_PROFILE_USER", &profile)
         .env("IR_TEST_REPOS_FILE", &sles_repos)
+        .env("IR_TEST_OPTIONS_FILE", &sles_options)
+        .env("IR_TEST_PREFIX_FILE", &sles_prefix)
+        .env("IR_TEST_DOWNLOAD_METHOD", "curl")
         .env("IR_TEST_PPM_LINUX_DISTRIBUTION", "opensuse156")
         .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
         .args([
@@ -1856,6 +1909,11 @@ options(repos = ir_test_repos)
         read_repos(&sles_repos),
         "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
     );
+    let options = read_repos(&sles_options);
+    assert!(options.contains("HTTPUserAgent=R/"));
+    assert!(options.contains("download.file.extra=--compressed"));
+    assert!(options.contains("--user-agent"));
+    assert_eq!(read_repos(&sles_prefix), "opensuse156");
 }
 
 fn resolver_probe_count(entered: &Path) -> usize {

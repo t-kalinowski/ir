@@ -91,18 +91,46 @@ configure_ppm_user_agent <- function(repos) {
   if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
     return(invisible())
 
-  options(HTTPUserAgent = sprintf(
+  user_agent <- sprintf(
     "R/%s R (%s)",
     getRversion(),
     paste(getRversion(), R.version["platform"], R.version["arch"],
           R.version["os"])
-  ))
+  )
+  options(HTTPUserAgent = user_agent)
+
+  method <- getOption("download.file.method")
+  if (identical(method, "curl") || identical(method, "wget")) {
+    extra <- getOption("download.file.extra", "")
+    if (is.null(extra)) extra <- ""
+    if (!grepl(user_agent, extra, fixed = TRUE)) {
+      extra <- trimws(paste(extra, "--user-agent", shQuote(user_agent)))
+      options(download.file.extra = extra)
+    }
+  }
+
   invisible()
 }
 
-plain_ppm_latest <- function(url) {
-  if (is.null(url) || is.na(url)) return(FALSE)
-  identical(sub("/+$", "", url), "https://packagemanager.posit.co/cran/latest")
+configure_renv_cache_prefix <- function() {
+  distro <- linux_binary_distribution()
+  if (is.null(distro) || nzchar(Sys.getenv("RENV_PATHS_PREFIX", unset = "")))
+    return(invisible())
+
+  Sys.setenv(RENV_PATHS_PREFIX = distro)
+  invisible()
+}
+
+plain_ppm_snapshot <- function(url) {
+  if (is.null(url) || is.na(url)) return(NULL)
+
+  url <- sub("/+$", "", url)
+  prefix <- "https://packagemanager.posit.co/cran/"
+  if (!startsWith(url, prefix)) return(NULL)
+
+  snapshot <- substring(url, nchar(prefix) + 1L)
+  if (!nzchar(snapshot) || grepl("/", snapshot, fixed = TRUE)) return(NULL)
+  snapshot
 }
 
 ppm_cran_url <- function(snapshot) {
@@ -116,11 +144,14 @@ ppm_cran_url <- function(snapshot) {
 
 default_repos <- function(repos) {
   cran <- named_value(repos, "CRAN")
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@") ||
-      plain_ppm_latest(cran)) {
+  snapshot <- plain_ppm_snapshot(cran)
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    snapshot <- "latest"
+
+  if (!is.null(snapshot)) {
     if (is.null(repos))
-      return(c(CRAN = ppm_cran_url("latest")))
-    repos[["CRAN"]] <- ppm_cran_url("latest")
+      return(c(CRAN = ppm_cran_url(snapshot)))
+    repos[["CRAN"]] <- ppm_cran_url(snapshot)
   }
   repos
 }
@@ -138,6 +169,7 @@ if (explicit_repos)
   Sys.unsetenv("RENV_CONFIG_REPOS_OVERRIDE")
 options(repos = repos, renv.consent = TRUE)
 configure_ppm_user_agent(repos)
+configure_renv_cache_prefix()
 
 r_libs_user <- Sys.getenv("R_LIBS_USER", unset = "")
 if (nzchar(r_libs_user)) {
@@ -150,8 +182,10 @@ if (nzchar(r_libs_user)) {
 
 tooling <- c("pak", "renv", "secretbase")
 missing <- tooling[!vapply(tooling, requireNamespace, logical(1), quietly = TRUE)]
-if (length(missing))
+if (length(missing)) {
+  configure_ppm_user_agent(tooling_repos)
   utils::install.packages(missing, repos = tooling_repos)
+}
 
 project <- tempfile("ir-renv-warm-project-")
 library <- tempfile("ir-renv-warm-library-")

@@ -245,6 +245,7 @@ fn warm_renv_cache_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots(
     let profile = temp_path("ir-warm-linux-binary-repos-profile", "R");
     let default_repos = temp_path("ir-warm-linux-binary-repos-default", "txt");
     let latest_repos = temp_path("ir-warm-linux-binary-repos-latest", "txt");
+    let dated_repos = temp_path("ir-warm-linux-binary-repos-dated", "txt");
     let snapshot_repos = temp_path("ir-warm-linux-binary-repos-snapshot", "txt");
 
     fs::write(
@@ -297,6 +298,16 @@ ir_test_write_pkg(
   paste(
     "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
     "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
+    "  options_file <- Sys.getenv('IR_TEST_OPTIONS_FILE', unset = '')",
+    "  if (nzchar(options_file)) {",
+    "    writeLines(c(",
+    "      paste0('HTTPUserAgent=', getOption('HTTPUserAgent', '')),",
+    "      paste0('download.file.extra=', getOption('download.file.extra', ''))",
+    "    ), options_file)",
+    "  }",
+    "  prefix_file <- Sys.getenv('IR_TEST_PREFIX_FILE', unset = '')",
+    "  if (nzchar(prefix_file))",
+    "    writeLines(Sys.getenv('RENV_PATHS_PREFIX', unset = ''), prefix_file)",
     "  invisible(TRUE)",
     "}",
     sep = "\n"
@@ -311,6 +322,10 @@ ir_test_repos <- c(CRAN = ir_test_profile_repos)
 if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
   ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
 options(repos = ir_test_repos)
+ir_test_download_method <- Sys.getenv("IR_TEST_DOWNLOAD_METHOD", unset = "")
+if (nzchar(ir_test_download_method))
+  options(download.file.method = ir_test_download_method,
+          download.file.extra = "--compressed")
 "#,
     )
     .unwrap();
@@ -356,6 +371,26 @@ options(repos = ir_test_repos)
         )
     );
 
+    let dated = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env(
+            "IR_TEST_PROFILE_REPOS",
+            "https://packagemanager.posit.co/cran/2026-06-01",
+        )
+        .env("IR_TEST_REPOS_FILE", &dated_repos)
+        .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
+        .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .args(["scripts/warm-renv-cache.R", "cli"])
+        .output()
+        .unwrap();
+    assert_success(&dated);
+    assert_eq!(
+        read_repos(&dated_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/2026-06-01\nInternal=https://internal.example.test/repo"
+    );
+
     let snapshot = Command::new(rscript())
         .current_dir(repo_root())
         .env("R_PROFILE_USER", &profile)
@@ -376,11 +411,16 @@ options(repos = ir_test_repos)
     );
 
     let sles_repos = temp_path("ir-warm-linux-binary-repos-sles", "txt");
+    let sles_options = temp_path("ir-warm-linux-binary-repos-sles-options", "txt");
+    let sles_prefix = temp_path("ir-warm-linux-binary-repos-sles-prefix", "txt");
     let sles = Command::new(rscript())
         .current_dir(repo_root())
         .env("R_PROFILE_USER", &profile)
         .env("R_LIBS_USER", &user_library)
         .env("IR_TEST_REPOS_FILE", &sles_repos)
+        .env("IR_TEST_OPTIONS_FILE", &sles_options)
+        .env("IR_TEST_PREFIX_FILE", &sles_prefix)
+        .env("IR_TEST_DOWNLOAD_METHOD", "wget")
         .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
         .args(["scripts/warm-renv-cache.R", "cli"])
         .output()
@@ -390,6 +430,93 @@ options(repos = ir_test_repos)
         read_repos(&sles_repos),
         "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
     );
+    let options = read_repos(&sles_options);
+    assert!(options.contains("HTTPUserAgent=R/"));
+    assert!(options.contains("download.file.extra=--compressed"));
+    assert!(options.contains("--user-agent"));
+    assert_eq!(read_repos(&sles_prefix), "opensuse156");
+}
+
+#[test]
+fn warm_renv_cache_configures_ppm_user_agent_for_tooling_installs() {
+    let user_library = temp_dir("ir-warm-tooling-user-agent-library");
+    let profile = temp_path("ir-warm-tooling-user-agent-profile", "R");
+    let options_file = temp_path("ir-warm-tooling-user-agent-options", "txt");
+
+    fs::write(
+        &profile,
+        r#"
+ir_test_write_pkg <- function(lib, pkg, namespace, code) {
+  path <- file.path(lib, pkg)
+  dir.create(file.path(path, "R"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(c(
+    paste("Package:", pkg),
+    "Version: 0.0.1",
+    paste("Title:", pkg),
+    paste("Description:", pkg),
+    "License: MIT"
+  ), file.path(path, "DESCRIPTION"))
+  writeLines(namespace, file.path(path, "NAMESPACE"))
+  writeLines(code, file.path(path, "R", pkg))
+}
+
+Sys.info <- function() c(sysname = "Linux")
+file.exists <- function(path) {
+  if (identical(path, "/etc/os-release")) TRUE else base::file.exists(path)
+}
+readLines <- function(con, warn = TRUE, ...) {
+  if (identical(con, "/etc/os-release"))
+    c("ID=sles", "VERSION_ID=\"15.7\"")
+  else
+    base::readLines(con, warn = warn, ...)
+}
+options(download.file.method = "curl", download.file.extra = "--compressed")
+
+utils::assignInNamespace("install.packages", function(pkgs, repos, ...) {
+  writeLines(c(
+    paste0("repos=", unname(repos[["CRAN"]])),
+    paste0("HTTPUserAgent=", getOption("HTTPUserAgent", "")),
+    paste0("download.file.extra=", getOption("download.file.extra", ""))
+  ), Sys.getenv("IR_TEST_OPTIONS_FILE"))
+
+  for (pkg in pkgs) {
+    namespace <- if (identical(pkg, "renv")) "export(use)" else paste0("export(ir_test_", pkg, ")")
+    code <- if (identical(pkg, "renv")) {
+      "use <- function(..., library, repos, attach, sandbox, isolate, verbose) invisible(TRUE)"
+    } else {
+      paste0("ir_test_", pkg, " <- function() TRUE")
+    }
+    ir_test_write_pkg(Sys.getenv("R_LIBS_USER"), pkg, namespace, code)
+  }
+}, ns = "utils")
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("R_PROFILE_USER", &profile)
+        .env("R_LIBS_USER", &user_library)
+        .env("IR_TEST_OPTIONS_FILE", &options_file)
+        .args([
+            "scripts/warm-renv-cache.R",
+            "--repos",
+            "https://cran.r-project.org",
+            "cli",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let options = fs::read_to_string(&options_file)
+        .unwrap()
+        .replace("\r\n", "\n");
+    assert!(
+        options.contains("repos=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest")
+    );
+    assert!(options.contains("HTTPUserAgent=R/"));
+    assert!(options.contains("download.file.extra=--compressed"));
+    assert!(options.contains("--user-agent"));
 }
 
 #[test]
@@ -624,14 +751,14 @@ fn test_r_metadata_resolution_is_shared() {
     let helper_text = fs::read_to_string(&helper)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", helper.display()));
     assert!(
-        helper_text.contains(r#"if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript""#),
-        "test R metadata resolution should ask Windows R for Rscript.exe"
+        helper_text.contains(r#"binary_path.with_name("Rscript.exe")"#),
+        "test R metadata resolution should derive Rscript.exe from Windows R.exe"
     );
     assert!(helper_text.contains("stdin=\"\"\""));
     assert!(helper_text.contains("write.dcf"));
     assert!(helper_text.contains("from email.parser import Parser"));
-    assert!(helper_text.contains(r#"source(file("stdin"))"#));
-    assert!(!helper_text.contains("\"--vanilla\""));
+    assert!(helper_text.contains("\"--vanilla\""));
+    assert!(!helper_text.contains("\"--slave\""));
     assert!(!helper_text.contains("cat(sprintf"));
     assert!(!helper_text.contains("def output_field"));
     assert!(!helper_text.contains("available\", \"--all\", \"--json"));
@@ -714,14 +841,22 @@ fi
     .unwrap();
     fs::write(
         &r,
+        r#"#!/usr/bin/env sh
+echo "metadata probe should invoke the resolved Rscript directly" >&2
+exit 99
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &rscript,
         format!(
             r#"#!/usr/bin/env sh
 set -eu
-if [ "$1" = "--slave" ] && [ "$2" = "-e" ] && [ "$3" = 'source(file("stdin"))' ]; then
+if [ "$1" = "--vanilla" ] && [ "$2" = "-" ]; then
   script="$(cat)"
   printf '%s\n' "$script" | grep -q 'write[.]dcf' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
   printf '%s\n' "$script" | grep -q 'width *= *100000' || {{ echo "metadata script should disable DCF wrapping" >&2; exit 98; }}
-  printf '%s\n' "$script" | grep -q 'Rscript[.]exe' || {{ echo "metadata script was not passed on stdin" >&2; exit 98; }}
+  printf '%s\n' "$script" | grep -q 'IR_TEST_METADATA_RSCRIPT' || {{ echo "metadata script should normalize the resolved Rscript path" >&2; exit 98; }}
   cat <<'EOF'
 version: 4.4.3
 date: 2025-02-28
@@ -742,6 +877,9 @@ fi
     let mut permissions = fs::metadata(&r).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&r, permissions).unwrap();
+    let mut permissions = fs::metadata(&rscript).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&rscript, permissions).unwrap();
 
     let old_path = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![temp.clone()];

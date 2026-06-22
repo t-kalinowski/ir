@@ -224,100 +224,8 @@ fn rscript_identity(rscript: &OsStr) -> Option<String> {
     }
     append_runtime_env(&mut identity, "R_ARCH");
     append_runtime_env(&mut identity, "R_HOME");
-    append_linux_distribution(&mut identity);
 
     Some(identity)
-}
-
-fn append_linux_distribution(identity: &mut String) {
-    if let Some(distribution) = linux_binary_distribution() {
-        identity.push_str(";ppm-linux=");
-        identity.push_str(&distribution);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_binary_distribution() -> Option<String> {
-    let os_release = fs::read_to_string("/etc/os-release").ok()?;
-    linux_binary_distribution_from_os_release(&os_release)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_binary_distribution() -> Option<String> {
-    None
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn linux_binary_distribution_from_os_release(os_release: &str) -> Option<String> {
-    let id = os_release_value(os_release, "ID")?;
-    let ubuntu_codename = os_release_value(os_release, "UBUNTU_CODENAME");
-    let version_codename = os_release_value(os_release, "VERSION_CODENAME");
-    let version_id = os_release_value(os_release, "VERSION_ID");
-
-    let ubuntu_supported = ["xenial", "bionic", "focal", "jammy", "noble", "resolute"];
-    if let Some(codename) = ubuntu_codename {
-        if ubuntu_supported.contains(&codename.as_str()) {
-            return Some(codename);
-        }
-    }
-    if id == "ubuntu" {
-        if let Some(codename) = version_codename {
-            if ubuntu_supported.contains(&codename.as_str()) {
-                return Some(codename);
-            }
-        }
-        return None;
-    }
-    if id == "debian" {
-        if let Some(codename) = version_codename {
-            let debian_supported = ["buster", "bullseye", "bookworm", "trixie"];
-            if debian_supported.contains(&codename.as_str()) {
-                return Some(codename);
-            }
-        }
-        return None;
-    }
-
-    let major = version_id
-        .as_deref()
-        .and_then(|version| version.split('.').next())?;
-
-    match id.as_str() {
-        "centos" => match major {
-            "7" => Some("centos7".to_string()),
-            "8" => Some("centos8".to_string()),
-            _ => None,
-        },
-        "rhel" | "redhat" | "rocky" | "almalinux" => match major {
-            "7" => Some("centos7".to_string()),
-            "8" => Some("centos8".to_string()),
-            "9" => Some("rhel9".to_string()),
-            "10" => Some("rhel10".to_string()),
-            _ => None,
-        },
-        "opensuse-leap" | "sles" => {
-            let version = version_id.as_deref()?;
-            match (id.as_str(), version) {
-                (_, "15.6") => Some("opensuse156".to_string()),
-                ("sles", "15.7") => Some("opensuse156".to_string()),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn os_release_value(os_release: &str, key: &str) -> Option<String> {
-    for line in os_release.lines() {
-        let Some((line_key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if line_key == key {
-            return Some(value.trim_matches('"').to_string());
-        }
-    }
-    None
 }
 
 fn append_runtime_env(identity: &mut String, name: &str) {
@@ -520,44 +428,6 @@ mod tests {
         assert_ne!(x64_marker, r_home_marker);
 
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn linux_distribution_mapping_uses_supported_ppm_tokens() {
-        assert_eq!(
-            linux_binary_distribution_from_os_release(
-                "ID=ubuntu\nVERSION_CODENAME=noble\nVERSION_ID=\"24.04\"\n"
-            )
-            .as_deref(),
-            Some("noble")
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release(
-                "ID=ubuntu\nVERSION_CODENAME=oracular\nVERSION_ID=\"24.10\"\n"
-            ),
-            None
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release("ID=rocky\nVERSION_ID=\"8.10\"\n").as_deref(),
-            Some("centos8")
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release("ID=rhel\nVERSION_ID=\"9.6\"\n").as_deref(),
-            Some("rhel9")
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release("ID=opensuse-leap\nVERSION_ID=\"15.6\"\n")
-                .as_deref(),
-            Some("opensuse156")
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release("ID=sles\nVERSION_ID=\"15.7\"\n").as_deref(),
-            Some("opensuse156")
-        );
-        assert_eq!(
-            linux_binary_distribution_from_os_release("ID=opensuse-leap\nVERSION_ID=\"15.7\"\n"),
-            None
-        );
     }
 
     #[test]

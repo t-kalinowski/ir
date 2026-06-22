@@ -262,27 +262,58 @@ ir_configure_ppm_user_agent <- function(repos) {
   if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
     return(invisible())
 
-  options(HTTPUserAgent = sprintf(
+  user_agent <- sprintf(
     "R/%s R (%s)",
     getRversion(),
     paste(getRversion(), R.version["platform"], R.version["arch"],
           R.version["os"])
-  ))
+  )
+  options(HTTPUserAgent = user_agent)
+
+  method <- getOption("download.file.method")
+  if (identical(method, "curl") || identical(method, "wget")) {
+    extra <- getOption("download.file.extra", "")
+    if (is.null(extra)) extra <- ""
+    if (!grepl(user_agent, extra, fixed = TRUE)) {
+      extra <- trimws(paste(extra, "--user-agent", shQuote(user_agent)))
+      options(download.file.extra = extra)
+    }
+  }
+
   invisible()
 }
 
-ir_plain_ppm_latest <- function(url) {
-  if (is.null(url) || is.na(url)) return(FALSE)
-  identical(sub("/+$", "", url), "https://packagemanager.posit.co/cran/latest")
+ir_configure_renv_cache_prefix <- function() {
+  distro <- ir_linux_binary_distribution()
+  if (is.null(distro) || nzchar(Sys.getenv("RENV_PATHS_PREFIX", unset = "")))
+    return(invisible())
+
+  Sys.setenv(RENV_PATHS_PREFIX = distro)
+  invisible()
+}
+
+ir_plain_ppm_snapshot <- function(url) {
+  if (is.null(url) || is.na(url)) return(NULL)
+
+  url <- sub("/+$", "", url)
+  prefix <- "https://packagemanager.posit.co/cran/"
+  if (!startsWith(url, prefix)) return(NULL)
+
+  snapshot <- substring(url, nchar(prefix) + 1L)
+  if (!nzchar(snapshot) || grepl("/", snapshot, fixed = TRUE)) return(NULL)
+  snapshot
 }
 
 ir_normalize_repos <- function(repos) {
   cran <- ir_named_value(repos, "CRAN")
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@") ||
-      ir_plain_ppm_latest(cran)) {
+  snapshot <- ir_plain_ppm_snapshot(cran)
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    snapshot <- "latest"
+
+  if (!is.null(snapshot)) {
     if (is.null(repos))
-      return(c(CRAN = ir_ppm_cran_url("latest")))
-    repos[["CRAN"]] <- ir_ppm_cran_url("latest")
+      return(c(CRAN = ir_ppm_cran_url(snapshot)))
+    repos[["CRAN"]] <- ir_ppm_cran_url(snapshot)
     repos
   } else {
     repos
@@ -416,6 +447,7 @@ ir_resolve_main <- function() {
 
   ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
   ## before any secretbase/pak/renv use below.
+  ir_configure_renv_cache_prefix()
   ir_ensure_tooling()
 
   deps        <- readLines(file("stdin"), warn = FALSE)
