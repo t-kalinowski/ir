@@ -240,6 +240,53 @@ ir_source_install_specs <- function(res) {
   sort(unique(stats::na.omit(specs)))
 }
 
+ir_dependency_packages <- function(res, roots) {
+  if (!length(roots) || !("deps" %in% names(res))) return(character())
+
+  packages <- res$package
+  selected <- character()
+  visited <- character()
+  queue <- roots
+  while (length(queue)) {
+    package <- queue[[1L]]
+    queue <- queue[-1L]
+    if (package %in% visited) next
+    visited <- c(visited, package)
+
+    i <- match(package, packages)
+    if (is.na(i)) next
+
+    deps <- res$deps[[i]]
+    if (is.null(deps) || !NROW(deps)) next
+
+    dep_types <- c("depends", "imports", "linkingto")
+    if ("dep_types" %in% names(res) && length(res$dep_types[[i]]))
+      dep_types <- tolower(res$dep_types[[i]])
+
+    dep_packages <- deps$package[tolower(deps$type) %in% dep_types]
+    dep_packages <- intersect(dep_packages, packages)
+    selected <- union(selected, dep_packages)
+    queue <- c(queue, setdiff(dep_packages, c(visited, queue)))
+  }
+
+  setdiff(selected, roots)
+}
+
+ir_install_specs_for_packages <- function(res, packages) {
+  if (!length(packages)) return(character())
+  ir_install_specs(res[res$package %in% packages, , drop = FALSE])
+}
+
+ir_source_dependency_install_specs <- function(res) {
+  source_packages <- res$package[
+    ir_is_standard_resolved_ref(res) &
+      vapply(res$ref, ir_ref_has_source_parameter, logical(1))
+  ]
+  dependency_packages <- ir_dependency_packages(res, source_packages)
+  setdiff(ir_install_specs_for_packages(res, dependency_packages),
+          ir_source_install_specs(res))
+}
+
 ir_renv_use <- function(specs, library_path, repos) {
   if (!length(specs)) return(invisible())
 
@@ -256,10 +303,25 @@ ir_renv_use <- function(specs, library_path, repos) {
   ))
 }
 
+ir_renv_install_source <- function(specs, library_path, repos) {
+  if (!length(specs)) return(invisible())
+
+  do.call(renv::install, list(
+    packages      = specs,
+    library       = library_path,
+    repos         = repos,
+    type          = "source",
+    rebuild       = TRUE,
+    prompt        = FALSE,
+    dependencies  = FALSE
+  ))
+}
+
 ir_renv_use_source <- function(specs, library_path, repos) {
   if (!length(specs)) return(invisible())
 
-  old_options <- options(pkgType = "source", pkg.platforms = "source")
+  old_options <- options(pkgType = "source", pkg.platforms = "source",
+                         renv.config.pak.enabled = FALSE)
   old_platforms <- Sys.getenv("PKG_PLATFORMS", unset = NA_character_)
   Sys.setenv(PKG_PLATFORMS = "source")
   on.exit({
@@ -270,7 +332,7 @@ ir_renv_use_source <- function(specs, library_path, repos) {
       Sys.setenv(PKG_PLATFORMS = old_platforms)
   }, add = TRUE)
 
-  ir_renv_use(specs, library_path, repos)
+  ir_renv_install_source(specs, library_path, repos)
 }
 
 ## --- pipeline ---------------------------------------------------------------
@@ -381,6 +443,7 @@ ir_resolve_main <- function() {
     install_specs <- character()
     install_key_specs <- character()
     source_install_specs <- character()
+    source_dependency_install_specs <- character()
     has_source_ref <- FALSE
   } else {
     # Drop base / recommended packages: those are supplied by R itself.
@@ -390,6 +453,7 @@ ir_resolve_main <- function() {
     install_specs <- ir_install_specs(res)
     install_key_specs <- ir_install_specs(res, key = TRUE)
     source_install_specs <- ir_source_install_specs(res)
+    source_dependency_install_specs <- ir_source_dependency_install_specs(res)
     has_source_ref <- any(!ir_is_standard_resolved_ref(res)) ||
       length(source_install_specs) > 0L
   }
@@ -409,11 +473,13 @@ ir_resolve_main <- function() {
   dir.create(library_path, recursive = TRUE, showWarnings = FALSE)
   have <- list.files(library_path)
   if (length(pkgs) && (has_source_ref || !all(pkgs %in% have))) {
-    # renv::use() installs into the renv cache and links the packages into
-    # `library` as symlinks. Because `library` lives in our cache (not the R
-    # temp dir), renv leaves it in place when the session ends.
+    # renv materializes packages into `library`. Because `library` lives in our
+    # cache (not the R temp dir), renv leaves it in place when the session ends.
+    ir_renv_use(source_dependency_install_specs, library_path, repos)
     ir_renv_use_source(source_install_specs, library_path, repos)
-    ir_renv_use(setdiff(install_specs, source_install_specs), library_path, repos)
+    ir_renv_use(setdiff(install_specs,
+                        c(source_install_specs, source_dependency_install_specs)),
+                library_path, repos)
   }
 
   ## 4b. Record the resolution so an identical request skips pak.

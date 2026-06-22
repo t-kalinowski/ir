@@ -1648,6 +1648,9 @@ if (nzchar(ir_test_glibc_version)) {
 ir_test_r_arch <- Sys.getenv("IR_TEST_R_ARCH", unset = "")
 if (nzchar(ir_test_r_arch))
   R.version$arch <- ir_test_r_arch
+ir_test_r_version <- Sys.getenv("IR_TEST_R_VERSION", unset = "")
+if (nzchar(ir_test_r_version))
+  getRversion <- function() numeric_version(ir_test_r_version)
 
 ir_test_cache_platform <- function() {
   distro <- Sys.getenv("IR_TEST_PPM_LINUX_DISTRIBUTION", unset = "")
@@ -1855,10 +1858,11 @@ if (nzchar(ir_test_download_method))
         "RSPM=https://packagemanager.posit.co/cran/__linux__/manylinux_2_28/latest\nCRAN=https://cran.r-project.org"
     );
     let options = read_repos(&alias_options);
-    assert!(options.contains("HTTPUserAgent=R ("));
-    assert!(!options.contains("HTTPUserAgent=R/"));
+    assert!(options.contains("HTTPUserAgent=R/"));
+    assert!(options.contains(" R ("));
     assert!(options.contains("download.file.extra=--compressed"));
-    assert!(options.contains("--user-agent"));
+    assert!(options.contains("--header"));
+    assert!(options.contains("User-Agent: R ("));
     assert!(options.contains("R ("));
     assert_eq!(read_repos(&alias_prefix), "manylinux_2_28");
 
@@ -1960,6 +1964,33 @@ if (nzchar(ir_test_download_method))
     assert!(!binary_options.contains("pkgType=source"));
     assert!(!binary_options.contains("pkg.platforms=source"));
     assert!(!binary_options.contains("PKG_PLATFORMS=source"));
+
+    let old_r_cache_dir = temp_dir("ir-linux-binary-repos-old-r-cache");
+    let mut old_r_cmd = ir();
+    configure_manylinux(&mut old_r_cmd);
+    let old_r = old_r_cmd
+        .env("IR_CACHE_DIR", &old_r_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_PACKAGE_TYPE", "binary")
+        .env("IR_TEST_R_VERSION", "4.1.0")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=old-r-binary-package-type\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert!(!old_r.status.success());
+    let old_r_stderr = String::from_utf8_lossy(&old_r.stderr);
+    assert!(
+        old_r_stderr.contains("IR_PACKAGE_TYPE=binary requires an R version supported by Posit Package Manager binaries"),
+        "{old_r_stderr}"
+    );
 }
 
 #[test]
@@ -2009,18 +2040,32 @@ for (ir_test_private_lib in ir_test_private_libs) {
     paste(
       "pkg_deps <- function(refs, dependencies = NA, upgrade = TRUE) {",
       "  refs <- as.character(refs)",
+      "  direct_refs <- refs",
       "  packages <- sub('[?].*$', '', refs)",
       "  packages <- sub('@.*$', '', packages)",
-      "  data.frame(",
+      "  if ('dplyr' %in% packages && !('cli' %in% packages)) {",
+      "    refs <- c(refs, 'cli')",
+      "    packages <- c(packages, 'cli')",
+      "  }",
+      "  direct <- refs %in% direct_refs",
+      "  out <- data.frame(",
       "    status = rep('OK', length(refs)),",
       "    ref = refs,",
       "    package = packages,",
       "    version = rep('0.0.1', length(refs)),",
       "    type = rep('standard', length(refs)),",
       "    priority = NA_character_,",
-      "    direct = TRUE,",
+      "    direct = direct,",
       "    stringsAsFactors = FALSE",
       "  )",
+      "  out$deps <- I(lapply(out$package, function(package) {",
+      "    if (identical(package, 'dplyr'))",
+      "      data.frame(ref = 'cli', type = 'imports', package = 'cli', op = '', version = '')",
+      "    else",
+      "      data.frame(ref = character(), type = character(), package = character(), op = character(), version = character())",
+      "  }))",
+      "  out$dep_types <- I(rep(list(c('Depends', 'Imports', 'LinkingTo')), nrow(out)))",
+      "  out",
       "}",
       sep = "\n"
     )
@@ -2028,15 +2073,23 @@ for (ir_test_private_lib in ir_test_private_libs) {
   ir_test_write_pkg(
     ir_test_private_lib,
     "renv",
-    "export(use)",
+    "export(use)\nexport(install)",
     paste(
       "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
       "  specs <- unlist(list(...), use.names = FALSE)",
+      "  ir_test_log('use', specs, library)",
+      "}",
+      "install <- function(packages, library, repos, type, rebuild, prompt, dependencies, ...) {",
+      "  ir_test_log('install', packages, library, type = type, dependencies = dependencies)",
+      "}",
+      "ir_test_log <- function(kind, specs, library, type = getOption('pkgType', ''), dependencies = NA) {",
       "  cat(",
+      "    paste0('kind=', kind),",
       "    paste0('library=', library),",
-      "    paste0('pkgType=', getOption('pkgType', '')),",
+      "    paste0('pkgType=', type),",
       "    paste0('pkg.platforms=', paste(getOption('pkg.platforms', ''), collapse = ',')),",
       "    paste0('PKG_PLATFORMS=', Sys.getenv('PKG_PLATFORMS', unset = '')),",
+      "    paste0('dependencies=', paste(dependencies, collapse = ',')),",
       "    paste0('specs=', paste(specs, collapse = ',')),",
       "    sep = '\n',",
       "    file = Sys.getenv('IR_TEST_INSTALLS_FILE'),",
@@ -2135,6 +2188,42 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
         .find("specs=dplyr@0.0.1\n")
         .expect("normal install should be recorded");
     assert!(source_install < normal_install, "{combo_installs}");
+
+    let _ = fs::remove_file(&installs);
+    let source_with_deps = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_INSTALLS_FILE", &installs)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "dplyr?source",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=source-ref-deps\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&source_with_deps);
+
+    let source_with_deps_installs = fs::read_to_string(&installs).unwrap().replace("\r\n", "\n");
+    let dependency_install = source_with_deps_installs
+        .find("kind=use\n")
+        .expect("source dependency install should be recorded");
+    let source_install = source_with_deps_installs
+        .find("kind=install\n")
+        .expect("source package install should be recorded");
+    assert!(
+        dependency_install < source_install,
+        "{source_with_deps_installs}"
+    );
+    assert!(source_with_deps_installs.contains("kind=use\n"));
+    assert!(source_with_deps_installs.contains("specs=cli@0.0.1\n"));
+    assert!(source_with_deps_installs.contains("kind=install\n"));
+    assert!(source_with_deps_installs.contains("dependencies=FALSE\n"));
+    assert!(source_with_deps_installs.contains("specs=dplyr@0.0.1\n"));
 }
 
 fn resolver_probe_count(entered: &Path) -> usize {

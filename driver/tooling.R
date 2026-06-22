@@ -66,9 +66,14 @@ ir_manylinux_binary_distribution <- function(arch = ir_linux_arch()) {
   NULL
 }
 
+ir_ppm_r_version_supported <- function(version = getRversion()) {
+  version >= numeric_version("4.2")
+}
+
 ir_linux_binary_distribution <- function(package_type = ir_package_type()) {
   if (identical(package_type, "source")) return(NULL)
   if (!ir_linux_host()) return(NULL)
+  if (!ir_ppm_r_version_supported()) return(NULL)
 
   ir_manylinux_binary_distribution()
 }
@@ -103,9 +108,13 @@ ir_ppm_cran_url <- function(snapshot) {
     return(sprintf("https://packagemanager.posit.co/cran/__linux__/%s/%s",
                    distro, snapshot))
 
-  if (identical(package_type, "binary") && ir_linux_host())
+  if (identical(package_type, "binary") && ir_linux_host()) {
+    if (!ir_ppm_r_version_supported())
+      stop("IR_PACKAGE_TYPE=binary requires an R version supported by ",
+           "Posit Package Manager binaries", call. = FALSE)
     stop("IR_PACKAGE_TYPE=binary requires x86_64 or ARM64 Linux with ",
          "glibc 2.28 or newer", call. = FALSE)
+  }
 
   sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
 }
@@ -116,21 +125,23 @@ ir_configure_ppm_user_agent <- function(repos) {
   if (!linux_ppm)
     return(invisible())
 
-  user_agent <- sprintf(
+  default_user_agent <- sprintf(
     "R (%s %s %s %s)",
     getRversion(),
     R.version[["platform"]],
     R.version[["arch"]],
     R.version[["os"]]
   )
-  options(HTTPUserAgent = user_agent)
+  libcurl_user_agent <- sprintf("R/%s %s", getRversion(), default_user_agent)
+  options(HTTPUserAgent = libcurl_user_agent)
 
   method <- getOption("download.file.method")
   if (identical(method, "curl") || identical(method, "wget")) {
     extra <- getOption("download.file.extra", "")
     if (is.null(extra)) extra <- ""
-    if (!grepl(user_agent, extra, fixed = TRUE)) {
-      extra <- trimws(paste(extra, "--user-agent", shQuote(user_agent)))
+    header <- sprintf("User-Agent: %s", default_user_agent)
+    if (!grepl(header, extra, fixed = TRUE)) {
+      extra <- trimws(paste(extra, "--header", shQuote(header)))
       options(download.file.extra = extra)
     }
   }
