@@ -1,15 +1,23 @@
+#[cfg(any(not(target_os = "linux"), test))]
 use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
+#[cfg(not(target_os = "linux"))]
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(not(target_os = "linux"))]
+use std::fs::File;
+#[cfg(not(target_os = "linux"))]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "linux"))]
 use sha2::{Digest, Sha256};
 
+#[cfg(not(target_os = "linux"))]
 const DEFAULT_LATEST_MAX_AGE_SECONDS: u64 = 24 * 60 * 60;
+#[cfg(not(target_os = "linux"))]
 const LATEST_MAX_AGE_SECONDS_ENV: &str = "IR_LATEST_RESOLUTION_MAX_AGE_SECONDS";
 
 pub(crate) struct Paths {
@@ -24,6 +32,22 @@ pub(crate) struct CachedResolution {
     pub(crate) primary_package: Option<String>,
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn paths(
+    _cache_dir: &Path,
+    _rscript: &OsStr,
+    _dependencies: &[String],
+    _exclude_newer: Option<&str>,
+    _quarto_render: bool,
+) -> Result<Option<Paths>, Box<dyn Error>> {
+    // Linux binary repository selection is owned by the R resolver because it
+    // depends on the distro-specific PPM URL selected there. Let Linux runs
+    // enter the resolver so the R-side marker key can include that distro
+    // without duplicating OS-release parsing in Rust.
+    Ok(None)
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn paths(
     cache_dir: &Path,
     rscript: &OsStr,
@@ -31,14 +55,6 @@ pub(crate) fn paths(
     exclude_newer: Option<&str>,
     quarto_render: bool,
 ) -> Result<Option<Paths>, Box<dyn Error>> {
-    // Linux binary repository selection is owned by the R resolver because it
-    // depends on the distro-specific PPM URL selected there. Let Linux runs
-    // enter the resolver so the R-side marker key can include that distro
-    // without duplicating OS-release parsing in Rust.
-    if cfg!(target_os = "linux") {
-        return Ok(None);
-    }
-
     if !dependencies
         .iter()
         .all(|dependency| is_standard_ref(dependency))
@@ -126,6 +142,7 @@ pub(crate) fn read(
     }))
 }
 
+#[cfg(not(target_os = "linux"))]
 fn resolution_cache_key(
     dependencies: &[String],
     exclude_newer: Option<&str>,
@@ -146,6 +163,7 @@ fn resolution_cache_key(
     sha256_fields(&parts)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn is_standard_ref(dependency: &str) -> bool {
     let dependency = dependency.trim();
 
@@ -156,6 +174,7 @@ fn is_standard_ref(dependency: &str) -> bool {
     is_package_name(package) && is_standard_version(version)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn is_standard_version(version: &str) -> bool {
     let version = version.strip_prefix(">=").unwrap_or(version);
     if matches!(version, "current" | "last") {
@@ -173,6 +192,7 @@ fn is_standard_version(version: &str) -> bool {
     part_count >= 2
 }
 
+#[cfg(not(target_os = "linux"))]
 fn is_package_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -186,6 +206,7 @@ fn is_package_name(name: &str) -> bool {
             .is_some_and(|ch| ch.is_ascii_alphanumeric())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn resolution_cache_source(exclude_newer: Option<&str>) -> Result<String, Box<dyn Error>> {
     Ok(match exclude_newer {
         Some(date) => format!("exclude-newer: {date}"),
@@ -212,6 +233,7 @@ fn source_is_current(source: &str, cache: &Paths) -> Result<bool, Box<dyn Error>
     Ok(age_seconds <= max_age_seconds)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn rscript_identity(rscript: &OsStr) -> Option<String> {
     let command = rscript_command_path(rscript);
     let path = fs::canonicalize(&command).ok()?;
@@ -236,6 +258,7 @@ fn rscript_identity(rscript: &OsStr) -> Option<String> {
     Some(identity)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn append_runtime_env(identity: &mut String, name: &str) {
     if let Some(value) = env::var_os(name) {
         identity.push(';');
@@ -245,6 +268,7 @@ fn append_runtime_env(identity: &mut String, name: &str) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn is_rscript_executable(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(OsStr::to_str) else {
         return false;
@@ -255,6 +279,7 @@ fn is_rscript_executable(path: &Path) -> bool {
     ) && !is_script_launcher(path)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn is_script_launcher(path: &Path) -> bool {
     if path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
         matches!(
@@ -272,6 +297,7 @@ fn is_script_launcher(path: &Path) -> bool {
     matches!(file.read(&mut magic), Ok(2)) && magic == *b"#!"
 }
 
+#[cfg(not(target_os = "linux"))]
 fn rscript_command_path(rscript: &OsStr) -> PathBuf {
     let path = Path::new(rscript);
     if path.components().count() > 1 {
@@ -281,6 +307,7 @@ fn rscript_command_path(rscript: &OsStr) -> PathBuf {
     find_on_path(rscript).unwrap_or_else(|| path.to_path_buf())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn find_on_path(command: &OsStr) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     for dir in env::split_paths(&path) {
@@ -305,6 +332,7 @@ fn find_on_path(command: &OsStr) -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(target_os = "linux"))]
 fn latest_max_age_seconds() -> Result<u64, Box<dyn Error>> {
     let Some(value) = env::var_os(LATEST_MAX_AGE_SECONDS_ENV) else {
         return Ok(DEFAULT_LATEST_MAX_AGE_SECONDS);
@@ -326,6 +354,7 @@ fn current_utc_seconds() -> Result<u64, Box<dyn Error>> {
         .as_secs())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn sha256_hex(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -335,6 +364,7 @@ fn sha256_hex(value: &str) -> String {
     hex
 }
 
+#[cfg(not(target_os = "linux"))]
 fn sha256_fields(fields: &[String]) -> String {
     let mut encoded = String::new();
     for field in fields {
@@ -348,17 +378,22 @@ fn sha256_fields(fields: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "linux"))]
     use std::ffi::OsString;
+    #[cfg(not(target_os = "linux"))]
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(not(target_os = "linux"))]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[cfg(not(target_os = "linux"))]
     struct EnvVarGuard {
         name: &'static str,
         previous: Option<OsString>,
     }
 
+    #[cfg(not(target_os = "linux"))]
     impl EnvVarGuard {
         fn capture(name: &'static str) -> Self {
             Self {
@@ -368,6 +403,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(previous) = &self.previous {
