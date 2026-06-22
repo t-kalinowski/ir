@@ -188,33 +188,35 @@ fn apply_exclude_newer_override(
     cli_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(exclude_newer) = cli_exclude_newer {
-        apply_python_exclude_newer_override(spec, Some(exclude_newer));
-        spec.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
+        let normalized = normalize_exclude_newer_override(exclude_newer)?;
+        spec.exclude_newer = normalized.clone();
+        set_python_exclude_newer(spec, normalized.as_deref());
         return Ok(());
     }
 
     if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
         let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
-        apply_python_exclude_newer_override(spec, Some(&exclude_newer));
-        spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
+        let normalized = normalize_exclude_newer_override(&exclude_newer)?;
+        spec.exclude_newer = normalized.clone();
+        set_python_exclude_newer(spec, normalized.as_deref());
         return Ok(());
     }
 
     if let Some(exclude_newer) = spec.exclude_newer.take() {
-        spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
+        let normalized = normalize_exclude_newer_override(&exclude_newer)?;
+        spec.exclude_newer = normalized.clone();
+        set_python_exclude_newer(spec, normalized.as_deref());
     }
 
     Ok(())
 }
 
-fn apply_python_exclude_newer_override(spec: &mut RuntimeSpec, exclude_newer: Option<&str>) {
+fn set_python_exclude_newer(spec: &mut RuntimeSpec, exclude_newer: Option<&str>) {
     let Some(python) = spec.python.as_mut() else {
         return;
     };
 
-    if let Some(exclude_newer) = exclude_newer {
-        python.exclude_newer = Some(exclude_newer.to_string());
-    }
+    python.exclude_newer = exclude_newer.map(str::to_string);
 }
 
 fn normalize_exclude_newer_override(value: &str) -> Result<Option<String>, Box<dyn Error>> {
@@ -323,7 +325,12 @@ fn resolve_library_inner(
     let python_result_file = resolve_python.then(|| unique_path(&tmp, "ir-python", "txt"));
     let python_packages_file = if let (true, Some(request)) = (resolve_python, python_request) {
         let path = unique_path(&tmp, "ir-python-packages", "txt");
-        fs::write(&path, request.packages.join("\n") + "\n")?;
+        let contents = if request.packages.is_empty() {
+            String::new()
+        } else {
+            request.packages.join("\n") + "\n"
+        };
+        fs::write(&path, contents)?;
         Some(path)
     } else {
         None
@@ -684,6 +691,7 @@ fn activate_python_env(cmd: &mut Command, python: &Path) -> Result<(), Box<dyn E
 
     if let Some(env_dir) = python_virtual_env(bin_dir) {
         cmd.env("VIRTUAL_ENV", env_dir);
+        cmd.env_remove("PYTHONHOME");
     }
 
     Ok(())

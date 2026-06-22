@@ -518,6 +518,139 @@ printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn run_python_version_only_writes_empty_package_file_and_clears_pythonhome() {
+    let cache_dir = temp_dir("ir-run-python-version-only-cache");
+    let bin_dir = temp_dir("ir-run-python-version-only-bin");
+    let script = temp_path("ir-run-python-version-only", "R");
+    let venv = bin_dir.join("venv");
+    let venv_bin = venv.join("bin");
+    let fake_python = venv_bin.join("python");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-version: "3.11"
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(&venv_bin).unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -s \"$IR_PYTHON_PACKAGES_FILE\" ]; then\n\
+    echo expected empty Python packages file >&2\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" >&2\n\
+    exit 1\n\
+  fi\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'pythonhome=%s\\n' \"${{PYTHONHOME:-<unset>}}\"\n\
+printf 'virtual_env=%s\\n' \"${{VIRTUAL_ENV:-}}\"\n\
+printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PYTHONHOME", "/old/python")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "pythonhome=<unset>");
+    assert_stdout_contains(&out, &format!("virtual_env={}", venv.display()));
+    assert_stdout_contains(&out, &format!("path_first={}", venv_bin.display()));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_exclude_newer_override_uses_normalized_latest() {
+    for exclude_newer in [" \t ", "2999-01-01"] {
+        let cache_dir = temp_dir("ir-run-python-exclude-newer-latest-cache");
+        let bin_dir = temp_dir("ir-run-python-exclude-newer-latest-bin");
+        let script = temp_path("ir-run-python-exclude-newer-latest", "R");
+        let fake_python = bin_dir.join("python");
+        let rscript = bin_dir.join("Rscript");
+
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+#| exclude-newer: "2024-01-01"
+
+cat("ignored\n")
+"#,
+        )
+        .unwrap();
+        write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+        write_executable(
+            &rscript,
+            &format!(
+                "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" ]; then\n\
+    echo \"unexpected Python exclude-newer: $IR_PYTHON_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-exclude-newer-latest\\n'\n",
+                fake_python.display()
+            ),
+        );
+
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--exclude-newer", exclude_newer, "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-exclude-newer-latest");
+
+        let python_dir = cache_dir.join("python");
+        let markers = fs::read_dir(&python_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", python_dir.display()))
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(markers.len(), 1);
+        let marker_text = fs::read_to_string(&markers[0])
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", markers[0].display()));
+        assert!(
+            marker_text
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with("latest: ")),
+            "{marker_text}"
+        );
+    }
+}
+
 #[test]
 fn cache_dir_reports_override_and_process_env_defaults() {
     let cache_dir = temp_dir("ir-cache-override");

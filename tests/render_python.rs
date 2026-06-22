@@ -257,7 +257,7 @@ exit 1\n",
 
 #[cfg(unix)]
 #[test]
-fn render_quarto_ir_python_frontmatter_passes_exclude_newer_override_raw() {
+fn render_quarto_ir_python_frontmatter_uses_normalized_exclude_newer_override() {
     let cache_dir = temp_dir("ir-render-python-env-cache");
     let bin_dir = temp_dir("ir-render-python-env-bin");
     let doc = temp_path("ir-render-python-env", "qmd");
@@ -330,7 +330,7 @@ exit 1\n",
     assert_success(&out);
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=\n"), "{env}");
-    assert!(env.contains("exclude_newer= \t \n"), "{env}");
+    assert!(env.contains("exclude_newer=\n"), "{env}");
 }
 
 #[cfg(unix)]
