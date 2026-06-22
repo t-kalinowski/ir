@@ -328,6 +328,8 @@ title: python render
 format: html
 jupyter: python3
 ir:
+  packages:
+    - reticulate
   python-packages:
     - pandas
   python-version: "3.11"
@@ -422,8 +424,8 @@ exit 1\n",
 
     let deps = fs::read_to_string(&r_deps).unwrap();
     assert!(
-        !deps.lines().any(|line| line == "reticulate"),
-        "Python resolution should not inject user-library reticulate\n{deps}"
+        deps.lines().any(|line| line == "reticulate"),
+        "R dependencies should still be resolved with Python frontmatter\n{deps}"
     );
     let r_driver_path = Path::new(fs::read_to_string(&r_driver).unwrap().trim()).to_path_buf();
     let py_driver_path = Path::new(fs::read_to_string(&py_driver).unwrap().trim()).to_path_buf();
@@ -587,34 +589,6 @@ exit 1\n",
 
     assert_success(&out);
     assert_stdout_contains(&out, "quarto_python=\n");
-}
-
-#[test]
-fn render_quarto_rejects_r_and_python_package_frontmatter() {
-    let doc = temp_path("ir-render-r-python-package-conflict", "qmd");
-    fs::write(
-        &doc,
-        r#"---
-title: package conflict
-ir:
-  packages:
-    - reticulate
-  python-packages:
-    - pandas
----
-"#,
-    )
-    .unwrap();
-
-    let out = ir().args(["render"]).arg(&doc).output().unwrap();
-
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("frontmatter cannot set both `ir.packages` and `ir.python-packages`"),
-        "{}",
-        output_text(&out)
-    );
 }
 
 #[test]

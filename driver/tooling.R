@@ -177,6 +177,12 @@ ir_install_tooling_with_pak <- function(missing, refs, lib) {
   invisible()
 }
 
+ir_bootstrap_pak <- function(missing, lib, repos) {
+  if ("pak" %in% missing)
+    utils::install.packages("pak", lib = lib, repos = repos)
+  invisible()
+}
+
 # Ensure resolver tooling is available. `pak` itself is bootstrapped with
 # install.packages(); every other tooling package is installed with pak.
 ir_ensure_tooling <- function(packages = ir_tooling_packages(),
@@ -194,8 +200,11 @@ ir_ensure_tooling <- function(packages = ir_tooling_packages(),
                                 min_versions = min_versions)
   if (!length(missing)) return(invisible())
 
-  if ("pak" %in% missing)
-    utils::install.packages("pak", lib = lib, repos = repos)
+  ir_bootstrap_pak(missing, lib, repos)
+
+  missing <- ir_missing_tooling(packages = packages, lib = lib,
+                                min_versions = min_versions)
+  ir_bootstrap_pak(missing, lib, repos)
 
   missing <- ir_missing_tooling(packages = packages, lib = lib,
                                 min_versions = min_versions)

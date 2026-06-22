@@ -60,7 +60,7 @@ pub(crate) fn parse_quarto_frontmatter(document: &str) -> Result<RuntimeSpec, Bo
     }
 
     let mut spec = runtime_spec_from_yaml_mapping(spec_node)?;
-    reject_r_python_conflicts(spec_node)?;
+    reject_r_python_version_conflict(spec_node)?;
     spec.python = frontmatter_python_spec(spec_node)?;
     Ok(spec)
 }
@@ -115,10 +115,7 @@ fn frontmatter_dependencies(doc: &Yaml<'_>) -> Result<Vec<String>, Box<dyn Error
     Ok(dependencies)
 }
 
-fn reject_r_python_conflicts(doc: &Yaml<'_>) -> Result<(), Box<dyn Error>> {
-    if doc.as_mapping_get("packages").is_some() && doc.as_mapping_get("python-packages").is_some() {
-        return Err("frontmatter cannot set both `ir.packages` and `ir.python-packages`".into());
-    }
+fn reject_r_python_version_conflict(doc: &Yaml<'_>) -> Result<(), Box<dyn Error>> {
     if doc.as_mapping_get("r-version").is_some() && doc.as_mapping_get("python-version").is_some() {
         return Err("frontmatter cannot set both `ir.r-version` and `ir.python-version`".into());
     }
