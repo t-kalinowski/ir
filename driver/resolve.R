@@ -199,6 +199,7 @@ ir_resolve_main <- function() {
 
   ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
   ## before any secretbase/pak/renv use below.
+  ir_configure_package_type()
   ir_configure_renv_cache_prefix()
   ir_ensure_tooling()
 

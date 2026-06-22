@@ -38,8 +38,31 @@ named_value <- function(values, name) {
   unname(values[[name]])
 }
 
-linux_binary_distribution <- function() {
-  if (!identical(unname(Sys.info()[["sysname"]]), "Linux")) return(NULL)
+package_type <- function() {
+  value <- Sys.getenv("IR_PACKAGE_TYPE", unset = "auto")
+  value <- tolower(trimws(value[[1L]]))
+  if (!nzchar(value)) value <- "auto"
+  if (!(value %in% c("auto", "source", "binary")))
+    stop("IR_PACKAGE_TYPE must be one of: auto, source, binary",
+         call. = FALSE)
+  value
+}
+
+configure_package_type <- function(value = package_type()) {
+  if (identical(value, "source")) {
+    options(pkgType = "source", pkg.platforms = "source")
+    Sys.setenv(PKG_PLATFORMS = "source")
+  }
+  invisible(value)
+}
+
+linux_host <- function()
+  identical(unname(Sys.info()[["sysname"]]), "Linux")
+
+linux_binary_distribution <- function(value = package_type()) {
+  if (identical(value, "source")) return(NULL)
+
+  if (!linux_host()) return(NULL)
 
   os_release <- linux_os_release()
   id <- named_value(os_release, "ID")
@@ -135,10 +158,15 @@ plain_ppm_snapshot <- function(url) {
 }
 
 ppm_cran_url <- function(snapshot) {
-  distro <- linux_binary_distribution()
+  value <- package_type()
+  distro <- linux_binary_distribution(value)
   if (!is.null(distro))
     return(sprintf("https://packagemanager.posit.co/cran/__linux__/%s/%s",
                    distro, snapshot))
+
+  if (identical(value, "binary") && linux_host())
+    stop("IR_PACKAGE_TYPE=binary requires a Linux distribution supported by ",
+         "Posit Package Manager", call. = FALSE)
 
   sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
 }
@@ -163,6 +191,7 @@ default_repos <- function(repos) {
   repos
 }
 
+configure_package_type()
 tooling_repos <- c(CRAN = ppm_cran_url("latest"))
 repos <- if (!is.null(snapshot)) {
   c(CRAN = ppm_cran_url(snapshot))

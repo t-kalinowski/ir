@@ -28,8 +28,31 @@ ir_named_value <- function(values, name) {
   unname(values[[name]])
 }
 
-ir_linux_binary_distribution <- function() {
-  if (!identical(unname(Sys.info()[["sysname"]]), "Linux")) return(NULL)
+ir_package_type <- function() {
+  package_type <- Sys.getenv("IR_PACKAGE_TYPE", unset = "auto")
+  package_type <- tolower(trimws(package_type[[1L]]))
+  if (!nzchar(package_type)) package_type <- "auto"
+  if (!(package_type %in% c("auto", "source", "binary")))
+    stop("IR_PACKAGE_TYPE must be one of: auto, source, binary",
+         call. = FALSE)
+  package_type
+}
+
+ir_configure_package_type <- function(package_type = ir_package_type()) {
+  if (identical(package_type, "source")) {
+    options(pkgType = "source", pkg.platforms = "source")
+    Sys.setenv(PKG_PLATFORMS = "source")
+  }
+  invisible(package_type)
+}
+
+ir_linux_host <- function()
+  identical(unname(Sys.info()[["sysname"]]), "Linux")
+
+ir_linux_binary_distribution <- function(package_type = ir_package_type()) {
+  if (identical(package_type, "source")) return(NULL)
+
+  if (!ir_linux_host()) return(NULL)
 
   os_release <- ir_linux_os_release()
   id <- ir_named_value(os_release, "ID")
@@ -77,15 +100,24 @@ ir_linux_binary_distribution <- function() {
 }
 
 ir_cache_platform <- function(platform = R.version$platform) {
-  distro <- ir_linux_binary_distribution()
-  if (is.null(distro)) platform else paste0(platform, ";ppm-linux=", distro)
+  package_type <- ir_package_type()
+  distro <- ir_linux_binary_distribution(package_type)
+  platform <- if (is.null(distro)) platform else paste0(platform, ";ppm-linux=", distro)
+  if (!identical(package_type, "auto"))
+    platform <- paste0(platform, ";package-type=", package_type)
+  platform
 }
 
 ir_ppm_cran_url <- function(snapshot) {
-  distro <- ir_linux_binary_distribution()
+  package_type <- ir_package_type()
+  distro <- ir_linux_binary_distribution(package_type)
   if (!is.null(distro))
     return(sprintf("https://packagemanager.posit.co/cran/__linux__/%s/%s",
                    distro, snapshot))
+
+  if (identical(package_type, "binary") && ir_linux_host())
+    stop("IR_PACKAGE_TYPE=binary requires a Linux distribution supported by ",
+         "Posit Package Manager", call. = FALSE)
 
   sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
 }
@@ -309,6 +341,7 @@ ir_ensure_tooling <- function(packages = ir_tooling_packages(),
                               min_versions = character(),
                               cache_dir = ir_cache_dir(),
                               repos = ir_tooling_repos()) {
+  ir_configure_package_type()
   ir_configure_ppm_user_agent(repos)
   lib <- ir_tooling_lib(cache_dir)
   dir.create(lib, recursive = TRUE, showWarnings = FALSE)

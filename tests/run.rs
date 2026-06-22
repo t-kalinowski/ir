@@ -1622,6 +1622,8 @@ fn run_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots() {
     let latest_repos = temp_path("ir-linux-binary-repos-latest", "txt");
     let dated_repos = temp_path("ir-linux-binary-repos-dated", "txt");
     let snapshot_repos = temp_path("ir-linux-binary-repos-snapshot", "txt");
+    let source_repos = temp_path("ir-linux-binary-repos-source", "txt");
+    let source_options = temp_path("ir-linux-binary-repos-source-options", "txt");
 
     fs::write(
         &profile,
@@ -1665,7 +1667,11 @@ ir_test_cache_platform <- function() {
 ir_test_private_libs <- unique(file.path(
   Sys.getenv("IR_CACHE_DIR"),
   "tooling",
-  paste0(getRversion(), "-", c(R.version$platform, ir_test_cache_platform()))
+  paste0(getRversion(), "-", c(
+    R.version$platform,
+    ir_test_cache_platform(),
+    paste0(R.version$platform, ";package-type=source")
+  ))
 ))
 
 for (ir_test_private_lib in ir_test_private_libs) {
@@ -1707,7 +1713,10 @@ for (ir_test_private_lib in ir_test_private_libs) {
       "  if (nzchar(options_file)) {",
       "    writeLines(c(",
       "      paste0('HTTPUserAgent=', getOption('HTTPUserAgent', '')),",
-      "      paste0('download.file.extra=', getOption('download.file.extra', ''))",
+      "      paste0('download.file.extra=', getOption('download.file.extra', '')),",
+      "      paste0('pkgType=', getOption('pkgType', '')),",
+      "      paste0('pkg.platforms=', paste(getOption('pkg.platforms', ''), collapse = ',')),",
+      "      paste0('PKG_PLATFORMS=', Sys.getenv('PKG_PLATFORMS', unset = ''))",
       "    ), options_file)",
       "  }",
       "  prefix_file <- Sys.getenv('IR_TEST_PREFIX_FILE', unset = '')",
@@ -1906,6 +1915,40 @@ if (nzchar(ir_test_download_method))
     assert!(options.contains("download.file.extra=--compressed"));
     assert!(options.contains("--user-agent"));
     assert_eq!(read_repos(&sles_prefix), "opensuse156");
+
+    let source_cache_dir = temp_dir("ir-linux-binary-repos-source-cache");
+    let source = ir()
+        .env("IR_CACHE_DIR", &source_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_PACKAGE_TYPE", "source")
+        .env("IR_TEST_REPOS_FILE", &source_repos)
+        .env("IR_TEST_OPTIONS_FILE", &source_options)
+        .env("IR_TEST_PPM_ALIAS", "RSPM")
+        .env("IR_TEST_INCLUDE_INTERNAL_REPO", "1")
+        .env("IR_TEST_PPM_LINUX_DISTRIBUTION", "opensuse156")
+        .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=source-package-type\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&source);
+    assert_stdout_contains(&source, "ir.fixture=source-package-type");
+    assert_eq!(
+        read_repos(&source_repos),
+        "RSPM=https://packagemanager.posit.co/cran/latest\nCRAN=https://cran.r-project.org\nInternal=https://internal.example.test/repo"
+    );
+    let source_options = read_repos(&source_options);
+    assert!(source_options.contains("pkgType=source"));
+    assert!(source_options.contains("pkg.platforms=source"));
+    assert!(source_options.contains("PKG_PLATFORMS=source"));
 }
 
 fn resolver_probe_count(entered: &Path) -> usize {

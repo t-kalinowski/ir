@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_LATEST_MAX_AGE_SECONDS: u64 = 24 * 60 * 60;
 const LATEST_MAX_AGE_SECONDS_ENV: &str = "IR_LATEST_RESOLUTION_MAX_AGE_SECONDS";
+const PACKAGE_TYPE_ENV: &str = "IR_PACKAGE_TYPE";
 
 pub(crate) struct Paths {
     pub(crate) marker: PathBuf,
@@ -49,11 +50,13 @@ pub(crate) fn paths(
         None
     };
     let source = resolution_cache_source(exclude_newer)?;
+    let package_type = package_type_key()?;
     let marker = cache_dir.join("resolutions").join(resolution_cache_key(
         dependencies,
         exclude_newer,
         quarto_render,
         &rscript_identity,
+        package_type.as_deref(),
     ));
     let marker_name = marker
         .file_name()
@@ -124,6 +127,7 @@ fn resolution_cache_key(
     exclude_newer: Option<&str>,
     quarto_render: bool,
     rscript_identity: &str,
+    package_type: Option<&str>,
 ) -> String {
     let source_key = exclude_newer
         .map(|date| format!("exclude-newer: {date}"))
@@ -135,9 +139,27 @@ fn resolution_cache_key(
         parts.push("quarto".to_string());
     }
     parts.push(format!("rscript: {rscript_identity}"));
+    if let Some(package_type) = package_type {
+        parts.push(format!("package-type: {package_type}"));
+    }
     append_resolution_platform_key(&mut parts);
 
     sha256_fields(&parts)
+}
+
+fn package_type_key() -> Result<Option<String>, Box<dyn Error>> {
+    let Ok(value) = env::var(PACKAGE_TYPE_ENV) else {
+        return Ok(None);
+    };
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() || value == "auto" {
+        return Ok(None);
+    }
+    if matches!(value.as_str(), "source" | "binary") {
+        return Ok(Some(value));
+    }
+
+    Err(format!("{PACKAGE_TYPE_ENV} must be one of: auto, source, binary").into())
 }
 
 #[cfg(target_os = "linux")]
