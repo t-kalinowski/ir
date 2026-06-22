@@ -269,18 +269,20 @@ ir_renv_use_source <- function(specs, library_path, repos) {
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
+  cache_dir <- ir_cache_dir()
+  ir_configure_child_tempdir()
+  on.exit(ir_close_pak_remote(), add = TRUE)
 
   ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
   ## before any secretbase/pak/renv use below.
   ir_configure_package_type()
   ir_configure_renv_cache_prefix()
-  ir_ensure_tooling()
+  ir_ensure_tooling(cache_dir = cache_dir)
 
   deps        <- readLines(file("stdin"), warn = FALSE)
   result_file <- ir_env_optional("IR_RESOLVE_RESULT_FILE")
   package_result_file <- ir_env_optional("IR_RESOLVE_PACKAGE_RESULT_FILE")
   stopifnot(!is.null(result_file))
-  cache_dir   <- ir_cache_dir()
 
   ## 1. Consume inputs parsed by Rust from script frontmatter
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
@@ -307,7 +309,10 @@ ir_resolve_main <- function() {
                                      quarto = quarto))
   }
   package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
-  if (is.null(package_marker) && !is.null(marker) && !is.null(primary_ref)) {
+  if (!is.null(package_result_file) &&
+      is.null(package_marker) &&
+      !is.null(marker) &&
+      !is.null(primary_ref)) {
     package_marker <- file.path(cache_dir, "resolutions",
                                 paste0(basename(marker), "-primary-",
                                        secretbase::sha256(primary_ref)))
