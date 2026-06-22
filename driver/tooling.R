@@ -91,8 +91,9 @@ ir_ppm_cran_url <- function(snapshot) {
 }
 
 ir_configure_ppm_user_agent <- function(repos) {
-  cran <- ir_named_value(repos, "CRAN")
-  if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
+  linux_ppm <- !is.null(repos) &&
+    any(grepl("/__linux__/", unname(repos), fixed = TRUE), na.rm = TRUE)
+  if (!linux_ppm)
     return(invisible())
 
   user_agent <- sprintf(

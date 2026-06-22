@@ -87,8 +87,9 @@ linux_binary_distribution <- function() {
 }
 
 configure_ppm_user_agent <- function(repos) {
-  cran <- named_value(repos, "CRAN")
-  if (is.null(cran) || is.na(cran) || !grepl("/__linux__/", cran, fixed = TRUE))
+  linux_ppm <- !is.null(repos) &&
+    any(grepl("/__linux__/", unname(repos), fixed = TRUE), na.rm = TRUE)
+  if (!linux_ppm)
     return(invisible())
 
   user_agent <- sprintf(
@@ -143,16 +144,22 @@ ppm_cran_url <- function(snapshot) {
 }
 
 default_repos <- function(repos) {
-  cran <- named_value(repos, "CRAN")
-  snapshot <- plain_ppm_snapshot(cran)
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    snapshot <- "latest"
+  if (is.null(repos))
+    return(c(CRAN = ppm_cran_url("latest")))
 
-  if (!is.null(snapshot)) {
-    if (is.null(repos))
-      return(c(CRAN = ppm_cran_url(snapshot)))
-    repos[["CRAN"]] <- ppm_cran_url(snapshot)
+  snapshots <- vapply(repos, function(repo) {
+    snapshot <- plain_ppm_snapshot(repo)
+    if (is.null(snapshot)) NA_character_ else snapshot
+  }, character(1))
+  ppm <- !is.na(snapshots)
+  if (any(ppm)) {
+    repos[ppm] <- vapply(snapshots[ppm], ppm_cran_url, character(1))
   }
+
+  cran <- named_value(repos, "CRAN")
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    repos[["CRAN"]] <- ppm_cran_url("latest")
+
   repos
 }
 

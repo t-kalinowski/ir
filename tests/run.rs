@@ -1729,7 +1729,13 @@ ir_test_profile_repos <- Sys.getenv(
   "IR_TEST_PROFILE_REPOS",
   unset = "https://packagemanager.posit.co/cran/latest"
 )
-ir_test_repos <- c(CRAN = ir_test_profile_repos)
+ir_test_ppm_alias <- Sys.getenv("IR_TEST_PPM_ALIAS", unset = "")
+ir_test_repos <- if (nzchar(ir_test_ppm_alias)) {
+  c(stats::setNames(ir_test_profile_repos, ir_test_ppm_alias),
+    CRAN = "https://cran.r-project.org")
+} else {
+  c(CRAN = ir_test_profile_repos)
+}
 if (identical(Sys.getenv("IR_TEST_INCLUDE_INTERNAL_REPO", unset = ""), "1"))
   ir_test_repos <- c(ir_test_repos, Internal = "https://internal.example.test/repo")
 options(repos = ir_test_repos)
@@ -1875,6 +1881,7 @@ if (nzchar(ir_test_download_method))
         .env("IR_TEST_OPTIONS_FILE", &sles_options)
         .env("IR_TEST_PREFIX_FILE", &sles_prefix)
         .env("IR_TEST_DOWNLOAD_METHOD", "curl")
+        .env("IR_TEST_PPM_ALIAS", "RSPM")
         .env("IR_TEST_PPM_LINUX_DISTRIBUTION", "opensuse156")
         .env("IR_TEST_OS_RELEASE", "ID=sles\nVERSION_ID=\"15.7\"")
         .args([
@@ -1892,7 +1899,7 @@ if (nzchar(ir_test_download_method))
     assert_stdout_contains(&sles, "ir.fixture=sles-binary-latest");
     assert_eq!(
         read_repos(&sles_repos),
-        "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
+        "RSPM=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest\nCRAN=https://cran.r-project.org"
     );
     let options = read_repos(&sles_options);
     assert!(options.contains("HTTPUserAgent=R/"));

@@ -69,19 +69,23 @@ ir_plain_ppm_snapshot <- function(url) {
 }
 
 ir_normalize_repos <- function(repos) {
-  cran <- ir_named_value(repos, "CRAN")
-  snapshot <- ir_plain_ppm_snapshot(cran)
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    snapshot <- "latest"
+  if (is.null(repos))
+    return(c(CRAN = ir_ppm_cran_url("latest")))
 
-  if (!is.null(snapshot)) {
-    if (is.null(repos))
-      return(c(CRAN = ir_ppm_cran_url(snapshot)))
-    repos[["CRAN"]] <- ir_ppm_cran_url(snapshot)
-    repos
-  } else {
-    repos
+  snapshots <- vapply(repos, function(repo) {
+    snapshot <- ir_plain_ppm_snapshot(repo)
+    if (is.null(snapshot)) NA_character_ else snapshot
+  }, character(1))
+  ppm <- !is.na(snapshots)
+  if (any(ppm)) {
+    repos[ppm] <- vapply(snapshots[ppm], ir_ppm_cran_url, character(1))
   }
+
+  cran <- ir_named_value(repos, "CRAN")
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
+    repos[["CRAN"]] <- ir_ppm_cran_url("latest")
+
+  repos
 }
 
 ir_ppm_snapshot_url <- function(exclude_newer) {
