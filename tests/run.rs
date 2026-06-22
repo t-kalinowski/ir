@@ -1740,6 +1740,14 @@ options(repos = ir_test_repos)
     )
     .unwrap();
 
+    let read_repos = |path: &Path| {
+        fs::read_to_string(path)
+            .unwrap()
+            .replace("\r\n", "\n")
+            .trim()
+            .to_string()
+    };
+
     let mut default_cmd = ir();
     set_ppm_linux_distribution_env(&mut default_cmd);
     let default = default_cmd
@@ -1762,7 +1770,7 @@ options(repos = ir_test_repos)
     assert_success(&default);
     assert_stdout_contains(&default, "ir.fixture=ppm-default");
     assert_eq!(
-        fs::read_to_string(&default_repos).unwrap().trim(),
+        read_repos(&default_repos),
         format!("CRAN={}", expected_ppm_latest_url())
     );
 
@@ -1788,7 +1796,7 @@ options(repos = ir_test_repos)
     assert_success(&latest);
     assert_stdout_contains(&latest, "ir.fixture=linux-binary-latest");
     assert_eq!(
-        fs::read_to_string(&latest_repos).unwrap().trim(),
+        read_repos(&latest_repos),
         format!(
             "CRAN={}\nInternal=https://internal.example.test/repo",
             expected_ppm_latest_url()
@@ -1818,7 +1826,7 @@ options(repos = ir_test_repos)
     assert_success(&snapshot);
     assert_stdout_contains(&snapshot, "ir.fixture=linux-binary-snapshot");
     assert_eq!(
-        fs::read_to_string(&snapshot_repos).unwrap().trim(),
+        read_repos(&snapshot_repos),
         format!("CRAN={}", expected_ppm_cran_url("2024-03-15"))
     );
 
@@ -1845,7 +1853,7 @@ options(repos = ir_test_repos)
     assert_success(&sles);
     assert_stdout_contains(&sles, "ir.fixture=sles-binary-latest");
     assert_eq!(
-        fs::read_to_string(&sles_repos).unwrap().trim(),
+        read_repos(&sles_repos),
         "CRAN=https://packagemanager.posit.co/cran/__linux__/opensuse156/latest"
     );
 }
