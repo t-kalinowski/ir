@@ -10,6 +10,12 @@ if (length(args) >= 2L && identical(args[[1L]], "--repos")) {
 
 stopifnot(length(args) > 0L)
 
+public_repos <- function() {
+  rspm <- Sys.getenv("RSPM", unset = "")
+  if (nzchar(rspm)) c(CRAN = rspm)
+  else c(CRAN = "https://packagemanager.posit.co/cran/latest")
+}
+
 default_repos <- function() {
   repos <- getOption("repos")
   cran <- repos[["CRAN"]]
@@ -20,6 +26,8 @@ default_repos <- function() {
        identical(cran, "@CRAN@"))) {
     return(c(CRAN = rspm))
   }
+  if (identical(cran, "@CRAN@"))
+    return(public_repos())
 
   repos
 }
@@ -31,7 +39,7 @@ if (is.null(repos)) {
   repos <- c(CRAN = repos)
 }
 
-tooling_repos <- default_repos()
+tooling_repos <- public_repos()
 options(repos = repos, renv.consent = TRUE)
 
 r_libs_user <- Sys.getenv("R_LIBS_USER", unset = "")

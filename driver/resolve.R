@@ -249,6 +249,23 @@ ir_renv_use <- function(specs, library_path, repos) {
   ))
 }
 
+ir_renv_use_source <- function(specs, library_path, repos) {
+  if (!length(specs)) return(invisible())
+
+  old_options <- options(pkgType = "source", pkg.platforms = "source")
+  old_platforms <- Sys.getenv("PKG_PLATFORMS", unset = NA_character_)
+  Sys.setenv(PKG_PLATFORMS = "source")
+  on.exit({
+    options(old_options)
+    if (is.na(old_platforms))
+      Sys.unsetenv("PKG_PLATFORMS")
+    else
+      Sys.setenv(PKG_PLATFORMS = old_platforms)
+  }, add = TRUE)
+
+  ir_renv_use(specs, library_path, repos)
+}
+
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
@@ -383,20 +400,8 @@ ir_resolve_main <- function() {
     # renv::use() installs into the renv cache and links the packages into
     # `library` as symlinks. Because `library` lives in our cache (not the R
     # temp dir), renv leaves it in place when the session ends.
+    ir_renv_use_source(source_install_specs, library_path, repos)
     ir_renv_use(setdiff(install_specs, source_install_specs), library_path, repos)
-    if (length(source_install_specs)) {
-      old_options <- options(pkgType = "source", pkg.platforms = "source")
-      old_platforms <- Sys.getenv("PKG_PLATFORMS", unset = NA_character_)
-      Sys.setenv(PKG_PLATFORMS = "source")
-      on.exit({
-        options(old_options)
-        if (is.na(old_platforms))
-          Sys.unsetenv("PKG_PLATFORMS")
-        else
-          Sys.setenv(PKG_PLATFORMS = old_platforms)
-      }, add = TRUE)
-      ir_renv_use(source_install_specs, library_path, repos)
-    }
   }
 
   ## 4b. Record the resolution so an identical request skips pak.

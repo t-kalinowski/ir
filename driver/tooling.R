@@ -27,8 +27,8 @@ ir_configure_package_type <- function(package_type = ir_package_type()) {
   if (identical(package_type, "source")) {
     options(pkgType = "source", pkg.platforms = "source")
     Sys.setenv(PKG_PLATFORMS = "source")
-  } else {
-    options(pkgType = "both", pkg.platforms = NULL)
+  } else if (identical(package_type, "binary")) {
+    options(pkgType = NULL, pkg.platforms = NULL)
     Sys.unsetenv("PKG_PLATFORMS")
   }
   invisible(package_type)

@@ -1623,6 +1623,8 @@ fn run_uses_ppm_latest_for_default_repos_and_rewrites_ppm_snapshots() {
     let snapshot_repos = temp_path("ir-linux-binary-repos-snapshot", "txt");
     let source_repos = temp_path("ir-linux-binary-repos-source", "txt");
     let source_options = temp_path("ir-linux-binary-repos-source-options", "txt");
+    let auto_source_repos = temp_path("ir-linux-binary-repos-auto-source", "txt");
+    let auto_source_options = temp_path("ir-linux-binary-repos-auto-source-options", "txt");
     let binary_repos = temp_path("ir-linux-binary-repos-binary", "txt");
     let binary_options = temp_path("ir-linux-binary-repos-binary-options", "txt");
 
@@ -1859,6 +1861,38 @@ if (nzchar(ir_test_download_method))
     assert!(source_options.contains("pkg.platforms=source"));
     assert!(source_options.contains("PKG_PLATFORMS=source"));
 
+    let auto_source_cache_dir = temp_dir("ir-linux-binary-repos-auto-source-cache");
+    let mut auto_source_cmd = ir();
+    configure_manylinux(&mut auto_source_cmd);
+    let auto_source = auto_source_cmd
+        .env("IR_CACHE_DIR", &auto_source_cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_REPOS_FILE", &auto_source_repos)
+        .env("IR_TEST_OPTIONS_FILE", &auto_source_options)
+        .env("IR_TEST_SOURCE_STARTUP", "1")
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=auto-source-startup\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&auto_source);
+    assert_stdout_contains(&auto_source, "ir.fixture=auto-source-startup");
+    assert_eq!(
+        read_repos(&auto_source_repos),
+        "CRAN=https://packagemanager.posit.co/cran/__linux__/manylinux_2_28/latest"
+    );
+    let auto_source_options = read_repos(&auto_source_options);
+    assert!(auto_source_options.contains("pkgType=source"));
+    assert!(auto_source_options.contains("pkg.platforms=source"));
+    assert!(auto_source_options.contains("PKG_PLATFORMS=source"));
+
     let binary_cache_dir = temp_dir("ir-linux-binary-repos-binary-cache");
     let mut binary_cmd = ir();
     configure_manylinux(&mut binary_cmd);
@@ -1888,9 +1922,8 @@ if (nzchar(ir_test_download_method))
         "CRAN=https://packagemanager.posit.co/cran/__linux__/manylinux_2_28/latest"
     );
     let binary_options = read_repos(&binary_options);
-    assert!(binary_options.contains("pkgType=both"));
-    assert!(binary_options.contains("pkg.platforms="));
-    assert!(binary_options.contains("PKG_PLATFORMS="));
+    assert!(!binary_options.contains("pkgType=both"));
+    assert!(!binary_options.contains("pkgType=source"));
     assert!(!binary_options.contains("pkg.platforms=source"));
     assert!(!binary_options.contains("PKG_PLATFORMS=source"));
 }
@@ -2027,11 +2060,41 @@ options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
     let source_library = source_stdout.trim();
     assert_ne!(plain_library, source_library);
 
-    let installs = fs::read_to_string(&installs).unwrap().replace("\r\n", "\n");
-    assert!(installs.contains("pkgType=source\n"));
-    assert!(installs.contains("pkg.platforms=source\n"));
-    assert!(installs.contains("PKG_PLATFORMS=source\n"));
-    assert!(installs.contains("specs=cli@0.0.1\n"));
+    let install_log = fs::read_to_string(&installs).unwrap().replace("\r\n", "\n");
+    assert!(install_log.contains("pkgType=source\n"));
+    assert!(install_log.contains("pkg.platforms=source\n"));
+    assert!(install_log.contains("PKG_PLATFORMS=source\n"));
+    assert!(install_log.contains("specs=cli@0.0.1\n"));
+
+    let _ = fs::remove_file(&installs);
+    let combo = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", rscript())
+        .env("R_PROFILE_USER", &profile)
+        .env("IR_TEST_INSTALLS_FILE", &installs)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "dplyr",
+            "--with",
+            "cli?source",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=source-first\\n')",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&combo);
+
+    let combo_installs = fs::read_to_string(&installs).unwrap().replace("\r\n", "\n");
+    let source_install = combo_installs
+        .find("pkgType=source\n")
+        .expect("source install should be recorded");
+    let normal_install = combo_installs
+        .find("specs=dplyr@0.0.1\n")
+        .expect("normal install should be recorded");
+    assert!(source_install < normal_install, "{combo_installs}");
 }
 
 fn resolver_probe_count(entered: &Path) -> usize {
