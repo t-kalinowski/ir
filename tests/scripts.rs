@@ -1,6 +1,6 @@
 mod support;
 
-use support::{rscript, temp_dir, temp_path};
+use support::{expected_ppm_latest_url, rscript, temp_dir, temp_path};
 
 use std::fs;
 use std::path::Path;
@@ -367,7 +367,7 @@ if (identical(Sys.getenv("IR_TEST_UNNAMED_REPO", unset = ""), "1")) {
     assert_success(&cran_fallback);
     assert_eq!(
         read_repos(&cran_fallback_repos),
-        "CRAN=https://packagemanager.posit.co/cran/latest"
+        format!("CRAN={}", expected_ppm_latest_url())
     );
 
     let unnamed_default = Command::new(rscript())
@@ -491,7 +491,7 @@ options(repos = c(CRAN = "https://internal.example.test/repo"))
     );
     assert_eq!(
         read_repos(&tooling_repos),
-        "CRAN=https://packagemanager.posit.co/cran/latest"
+        format!("CRAN={}", expected_ppm_latest_url())
     );
 }
 
