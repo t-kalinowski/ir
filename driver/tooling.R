@@ -36,7 +36,18 @@ ir_tooling_version_ok <- function(package, lib = ir_tooling_lib(),
                                   min_version = NULL) {
   version <- ir_tooling_version(package, lib)
   if (is.null(version)) return(FALSE)
-  is.null(min_version) || version >= min_version
+  if (!is.null(min_version) && version < min_version) return(FALSE)
+
+  path <- find.package(package, lib.loc = lib, quiet = TRUE)
+  if (!length(path)) return(FALSE)
+  if (!identical(package, "pak")) return(TRUE)
+
+  ok <- tryCatch(requireNamespace(package, quietly = TRUE),
+                 error = function(e) FALSE)
+  if (!ok && isNamespaceLoaded(package))
+    try(unloadNamespace(package), silent = TRUE)
+
+  ok
 }
 
 ir_tooling_min_version <- function(package, min_versions = character()) {
@@ -121,7 +132,12 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
 
   for (pkg in packages) {
     min_version <- ir_tooling_min_version(pkg, min_versions)
-    if (ir_tooling_version_ok(pkg, lib, min_version)) next
+    private_path <- find.package(pkg, lib.loc = lib, quiet = TRUE)
+    if (length(private_path)) {
+      if (ir_tooling_version_ok(pkg, lib, min_version)) next
+      missing <- c(missing, pkg)
+      next
+    }
 
     path <- find.package(pkg, quiet = TRUE)
     if (!length(path)) {
@@ -187,8 +203,10 @@ ir_install_tooling_with_pak <- function(missing, refs, lib) {
 }
 
 ir_bootstrap_pak <- function(missing, lib, repos) {
-  if ("pak" %in% missing)
+  if ("pak" %in% missing) {
+    unlink(file.path(lib, "pak"), recursive = TRUE, force = TRUE)
     utils::install.packages("pak", lib = lib, repos = repos)
+  }
   invisible()
 }
 

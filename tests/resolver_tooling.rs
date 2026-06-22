@@ -220,6 +220,73 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
 }
 
 #[test]
+fn resolver_tooling_reinstalls_unloadable_private_pak() {
+    let cache_dir = temp_dir("ir-unloadable-pak-tooling-cache");
+    let empty_library = temp_dir("ir-unloadable-pak-tooling-empty-library");
+    let install_marker = temp_path("ir-unloadable-pak-tooling-install", "txt");
+    let pak_marker = temp_path("ir-unloadable-pak-tooling-pak", "txt");
+    let profile = temp_path("ir-unloadable-pak-tooling-profile", "R");
+
+    fs::write(
+        &profile,
+        format!(
+            r#"
+{}
+.libPaths(Sys.getenv("IR_TEST_EMPTY_LIB"))
+ir_test_private_lib <- file.path(
+  Sys.getenv("IR_CACHE_DIR"),
+  "tooling",
+  paste0(getRversion(), "-", R.version$platform)
+)
+ir_test_write_pak(
+  ir_test_private_lib,
+  namespace = "export(pkg_deps)\nexport(pkg_install)",
+  code = ".onLoad <- function(...) stop('bad private pak', call. = FALSE)\npkg_deps <- function(...) stop('bad private pak', call. = FALSE)\npkg_install <- function(...) stop('bad private pak', call. = FALSE)"
+)
+
+utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
+  writeLines(as.character(pkgs), {})
+  if (!identical(as.character(pkgs), "pak"))
+    stop("resolver should reinstall only pak with install.packages",
+         call. = FALSE)
+  ir_test_write_pak(
+    lib,
+    namespace = "export(pkg_deps)\nexport(pkg_install)",
+    code = ir_test_fake_pak_code(install_marker = {})
+  )
+}}, ns = "utils")
+"#,
+            resolver_tooling_fixture_source(),
+            r_string(&install_marker),
+            r_string(&pak_marker)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_EMPTY_LIB", &empty_library)
+        .env("R_LIBS_SITE", &empty_library)
+        .env("R_LIBS_USER", &empty_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=unloadable-pak-tooling\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=unloadable-pak-tooling");
+    assert_pak_installed_resolver_tooling(&install_marker, &pak_marker);
+}
+
+#[test]
 fn resolver_tooling_ignores_wrong_r_minor_user_library_package() {
     let cache_dir = temp_dir("ir-ambient-tooling-cache");
     let ambient_library = temp_dir("ir-ambient-tooling-user-library");
