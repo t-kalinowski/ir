@@ -135,7 +135,7 @@ fn resolver_probe_count(entered: &Path) -> usize {
 
 #[cfg(unix)]
 #[test]
-fn concurrent_uv_render_serializes_python_resolver_tooling() {
+fn concurrent_python_render_serializes_python_resolver_tooling() {
     let cache_dir = temp_dir("ir-python-resolution-lock-cache");
     let user_cache_dir = temp_dir("ir-python-resolution-lock-user-cache");
     let profile = temp_path("ir-python-resolution-lock-profile", "R");
@@ -153,11 +153,11 @@ fn concurrent_uv_render_serializes_python_resolver_tooling() {
     fs::write(
         &doc,
         r#"---
-title: uv lock
+title: python lock
 format: html
 jupyter: python3
-uv:
-  packages:
+ir:
+  python-packages:
     - pandas
 ---
 "#,

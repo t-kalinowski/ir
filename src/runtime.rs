@@ -80,7 +80,7 @@ pub(crate) fn cmd_render(
 
     let library = resolve_library(&rscript, &spec)?;
     let cache_dir = ir_cache_dir()?;
-    let python = python::resolve_env(&rscript, &cache_dir, spec.uv.as_ref())?;
+    let python = python::resolve_env(&rscript, &cache_dir, spec.python.as_ref())?;
     let code = quarto::run(
         &rscript,
         library.as_deref(),

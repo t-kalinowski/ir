@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::driver;
 use crate::lock::{resolver_lock_path, FileLock};
-use crate::spec::UvSpec;
+use crate::spec::PythonSpec;
 
 /// The Python resolution driver is embedded for the same reason as the R
 /// package resolver: ir ships as one self-contained binary.
@@ -21,9 +21,9 @@ const PYTHON_RESOLVE_DRIVER: &str = concat!(
 pub(crate) fn resolve_env(
     rscript: &OsStr,
     cache_dir: &Path,
-    uv: Option<&UvSpec>,
+    python: Option<&PythonSpec>,
 ) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    let Some(uv) = uv else {
+    let Some(python) = python else {
         return Ok(None);
     };
 
@@ -44,13 +44,13 @@ pub(crate) fn resolve_env(
         .env("IR_PYTHON_RESULT_FILE", &result_file)
         .env("IR_CACHE_DIR", cache_dir)
         .env_remove("IR_EXCLUDE_NEWER")
-        .env_remove("IR_UV_PYTHON_VERSION")
-        .env_remove("IR_UV_EXCLUDE_NEWER");
-    if let Some(python_version) = &uv.python_version {
-        cmd.env("IR_UV_PYTHON_VERSION", python_version);
+        .env_remove("IR_PYTHON_VERSION")
+        .env_remove("IR_PYTHON_EXCLUDE_NEWER");
+    if let Some(python_version) = &python.python_version {
+        cmd.env("IR_PYTHON_VERSION", python_version);
     }
-    if let Some(exclude_newer) = &uv.exclude_newer {
-        cmd.env("IR_UV_EXCLUDE_NEWER", exclude_newer);
+    if let Some(exclude_newer) = &python.exclude_newer {
+        cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
     }
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
@@ -59,7 +59,7 @@ pub(crate) fn resolve_env(
             .stdin
             .take()
             .ok_or("failed to open Python resolver stdin")?;
-        for package in uv_packages(uv) {
+        for package in python_packages(python) {
             writeln!(stdin, "{package}")?;
         }
     }
@@ -82,18 +82,18 @@ pub(crate) fn resolve_env(
     Ok(Some(PathBuf::from(path)))
 }
 
-fn uv_packages(uv: &UvSpec) -> Vec<String> {
-    let mut packages = uv.packages.clone();
+fn python_packages(python: &PythonSpec) -> Vec<String> {
+    let mut packages = python.packages.clone();
     if !packages
         .iter()
-        .any(|package| uv_package_name(package) == "jupyter")
+        .any(|package| python_package_name(package) == "jupyter")
     {
         packages.push("jupyter".to_string());
     }
     packages
 }
 
-fn uv_package_name(package: &str) -> &str {
+fn python_package_name(package: &str) -> &str {
     let package = package.trim();
     let end = package
         .find(|ch: char| {

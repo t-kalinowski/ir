@@ -3,8 +3,8 @@ ir_python_env_main <- function() {
   stopifnot(!is.na(result_file), nzchar(result_file))
 
   packages <- readLines("stdin", warn = FALSE)
-  python_version <- Sys.getenv("IR_UV_PYTHON_VERSION", unset = NA_character_)
-  exclude_newer <- Sys.getenv("IR_UV_EXCLUDE_NEWER", unset = NA_character_)
+  python_version <- Sys.getenv("IR_PYTHON_VERSION", unset = NA_character_)
+  exclude_newer <- Sys.getenv("IR_PYTHON_EXCLUDE_NEWER", unset = NA_character_)
   if (is.na(python_version) || !nzchar(python_version)) python_version <- NULL
   if (is.na(exclude_newer) || !nzchar(exclude_newer)) exclude_newer <- NULL
 
