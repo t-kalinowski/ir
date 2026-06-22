@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::driver;
@@ -17,6 +17,7 @@ const PYTHON_RESOLVE_DRIVER: &str = concat!(
     "\n",
     include_str!("../driver/resolve_python.R")
 );
+const TOOLING_RESTART_STATUS: i32 = 86;
 
 pub(crate) fn resolve_env(
     rscript: &OsStr,
@@ -35,40 +36,61 @@ pub(crate) fn resolve_env(
     )?;
     let tmp = std::env::temp_dir();
     let result_file = unique_path(&tmp, "ir-python", "txt");
+    let restart_file = unique_path(&tmp, "ir-tooling-restart", "txt");
 
-    let mut cmd = Command::new(rscript);
-    cmd.arg(&driver)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env("IR_PYTHON_RESULT_FILE", &result_file)
-        .env("IR_CACHE_DIR", cache_dir)
-        .env_remove("IR_EXCLUDE_NEWER")
-        .env_remove("IR_PYTHON_VERSION")
-        .env_remove("IR_PYTHON_EXCLUDE_NEWER");
-    if let Some(python_version) = &python.python_version {
-        cmd.env("IR_PYTHON_VERSION", python_version);
-    }
-    if let Some(exclude_newer) = &python.exclude_newer {
-        cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
-    }
+    let packages = python_packages(python);
+    let mut status = None;
+    for attempt in 0..=1 {
+        let _ = fs::remove_file(&result_file);
+        let _ = fs::remove_file(&restart_file);
 
-    let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or("failed to open Python resolver stdin")?;
-        for package in python_packages(python) {
-            writeln!(stdin, "{package}")?;
+        let mut cmd = Command::new(rscript);
+        cmd.arg(&driver)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .env("IR_PYTHON_RESULT_FILE", &result_file)
+            .env("IR_TOOLING_RESTART_FILE", &restart_file)
+            .env("IR_CACHE_DIR", cache_dir)
+            .env_remove("IR_EXCLUDE_NEWER")
+            .env_remove("IR_PYTHON_VERSION")
+            .env_remove("IR_PYTHON_EXCLUDE_NEWER");
+        if let Some(python_version) = &python.python_version {
+            cmd.env("IR_PYTHON_VERSION", python_version);
         }
+        if let Some(exclude_newer) = &python.exclude_newer {
+            cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
+        {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or("failed to open Python resolver stdin")?;
+            for package in &packages {
+                writeln!(stdin, "{package}")?;
+            }
+        }
+        let current_status = child
+            .wait()
+            .map_err(|e| format!("failed to wait for Python resolver: {e}"))?;
+
+        if tooling_restart_requested(&current_status, &restart_file) {
+            if attempt == 0 {
+                continue;
+            }
+            return Err(repeated_tooling_restart_error("Python resolver", &restart_file).into());
+        }
+
+        status = Some(current_status);
+        break;
     }
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait for Python resolver: {e}"))?;
+    let status = status.ok_or("Python resolver did not run")?;
 
     let result = fs::read_to_string(&result_file).unwrap_or_default();
     let _ = fs::remove_file(&result_file);
+    let _ = fs::remove_file(&restart_file);
 
     if !status.success() {
         return Err("Python environment resolution failed".into());
@@ -80,6 +102,20 @@ pub(crate) fn resolve_env(
     }
 
     Ok(Some(PathBuf::from(path)))
+}
+
+fn tooling_restart_requested(status: &ExitStatus, restart_file: &Path) -> bool {
+    status.code() == Some(TOOLING_RESTART_STATUS) && restart_file.exists()
+}
+
+fn repeated_tooling_restart_error(context: &str, restart_file: &Path) -> String {
+    let packages = fs::read_to_string(restart_file).unwrap_or_default();
+    let packages = packages.trim();
+    if packages.is_empty() {
+        format!("{context} repeatedly requested a tooling restart")
+    } else {
+        format!("{context} repeatedly requested a tooling restart for {packages}")
+    }
 }
 
 fn python_packages(python: &PythonSpec) -> Vec<String> {
