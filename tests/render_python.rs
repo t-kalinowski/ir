@@ -205,7 +205,7 @@ reticulate::py_config()
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ \"${{IR_EXCLUDE_NEWER:-}}\" != \"2026-06-01\" ]; then\n\
+  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
     echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
     exit 1\n\
   fi\n\
@@ -260,7 +260,7 @@ exit 1\n",
 
 #[cfg(unix)]
 #[test]
-fn render_quarto_ir_python_frontmatter_clears_ambient_internal_python_env() {
+fn render_quarto_ir_python_frontmatter_passes_exclude_newer_override_raw() {
     let cache_dir = temp_dir("ir-render-python-env-cache");
     let bin_dir = temp_dir("ir-render-python-env-bin");
     let doc = temp_path("ir-render-python-env", "qmd");
@@ -329,7 +329,7 @@ exit 1\n",
     assert_success(&out);
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=\n"), "{env}");
-    assert!(env.contains("exclude_newer=\n"), "{env}");
+    assert!(env.contains("exclude_newer= \t \n"), "{env}");
 }
 
 #[cfg(unix)]
