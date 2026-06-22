@@ -35,6 +35,9 @@ use std::error::Error;
 
 mod cache;
 mod cli;
+mod driver;
+mod lock;
+mod python;
 mod quarto;
 mod resolve_cache;
 mod rig;
