@@ -328,8 +328,6 @@ title: python render
 format: html
 jupyter: python3
 ir:
-  packages:
-    - reticulate
   python-packages:
     - pandas
   python-version: "3.11"
@@ -424,8 +422,8 @@ exit 1\n",
 
     let deps = fs::read_to_string(&r_deps).unwrap();
     assert!(
-        deps.lines().any(|line| line == "reticulate"),
-        "R dependencies should still be resolved with Python frontmatter\n{deps}"
+        !deps.lines().any(|line| line == "reticulate"),
+        "Python-only frontmatter should not inject user-library reticulate\n{deps}"
     );
     let r_driver_path = Path::new(fs::read_to_string(&r_driver).unwrap().trim()).to_path_buf();
     let py_driver_path = Path::new(fs::read_to_string(&py_driver).unwrap().trim()).to_path_buf();
@@ -469,6 +467,97 @@ exit 1\n",
 
 #[cfg(unix)]
 #[test]
+fn render_quarto_mixed_r_python_frontmatter_sets_python_env_vars() {
+    let cache_dir = temp_dir("ir-render-mixed-python-cache");
+    let bin_dir = temp_dir("ir-render-mixed-python-bin");
+    let doc = temp_path("ir-render-mixed-python", "qmd");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let quarto = bin_dir.join("quarto");
+    let r_deps = temp_path("ir-render-mixed-python-r-deps", "txt");
+    let python_env = temp_path("ir-render-mixed-python-env", "txt");
+
+    fs::write(
+        &doc,
+        r#"---
+title: mixed python render
+format: html
+ir:
+  packages:
+    - reticulate
+  python-packages:
+    - pandas
+  python-version: "3.11"
+  exclude-newer: "2026-06-01"
+---
+
+```{r}
+reticulate::py_config()
+```
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ \"${{IR_EXCLUDE_NEWER:-}}\" != \"2026-06-01\" ]; then\n\
+    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  cat > {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+echo unexpected Rscript invocation >&2\n\
+exit 1\n",
+            r_deps.display(),
+            python_env.display(),
+            python_env.display(),
+            fake_python.display()
+        ),
+    );
+    write_executable(
+        &quarto,
+        "#!/bin/sh\nprintf 'quarto_python=%s\\n' \"${QUARTO_PYTHON:-}\"\nprintf 'reticulate_python=%s\\n' \"${RETICULATE_PYTHON:-}\"\n",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .args(["render", "--rscript"])
+        .arg(&rscript)
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, &format!("quarto_python={}", fake_python.display()));
+    assert_stdout_contains(
+        &out,
+        &format!("reticulate_python={}", fake_python.display()),
+    );
+
+    let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.lines().any(|line| line == "reticulate"), "{deps}");
+
+    let env = fs::read_to_string(&python_env).unwrap();
+    assert!(env.contains("python_version=3.11"), "{env}");
+    assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
+}
+
+#[cfg(unix)]
+#[test]
 fn render_quarto_ir_python_frontmatter_clears_ambient_internal_python_env() {
     let cache_dir = temp_dir("ir-render-python-env-cache");
     let bin_dir = temp_dir("ir-render-python-env-bin");
@@ -487,6 +576,7 @@ jupyter: python3
 ir:
   python-packages:
     - pandas
+  exclude-newer: "2026-06-01"
 ---
 "#,
     )
@@ -497,6 +587,10 @@ ir:
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
+    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
   cat > /dev/null\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
@@ -523,6 +617,7 @@ exit 1\n",
         .env("IR_QUARTO", &quarto)
         .env("IR_PYTHON_VERSION", "9.99")
         .env("IR_PYTHON_EXCLUDE_NEWER", "1999-01-01")
+        .env("IR_EXCLUDE_NEWER", " \t ")
         .args(["render", "--rscript"])
         .arg(&rscript)
         .arg(&doc)
