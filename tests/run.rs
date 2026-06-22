@@ -725,11 +725,10 @@ if (nzchar(Sys.getenv("IR_RESOLVE_RESULT_FILE"))) {
         assert_stdout_contains(&out, "ir.fixture=normalized-exclude-newer-cache");
     }
 
-    let expected_entries = if cfg!(target_os = "linux") { 2 } else { 1 };
     assert_eq!(
         resolver_probe_count(&entered),
-        expected_entries,
-        "second run should reuse the Rust warm resolution cache when Rust markers are enabled"
+        1,
+        "second run should reuse the Rust warm resolution cache"
     );
 
     let resolution_dir = cache_dir.join("resolutions");
