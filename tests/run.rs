@@ -947,11 +947,10 @@ cat("ir.fixture=empty-env-exclude-newer\n")
 
 #[cfg(target_os = "linux")]
 #[test]
-fn run_defaults_unset_cran_to_pak_resolved_ppm_repo() {
-    let cache_dir = temp_dir("ir-pak-resolved-ppm-cache");
-    let profile = temp_path("ir-pak-resolved-ppm-profile", "R");
-    let repo_spec = temp_path("ir-pak-resolved-ppm-spec", "txt");
-    let repos_file = temp_path("ir-pak-resolved-ppm-repos", "txt");
+fn run_defaults_unset_cran_to_public_ppm_repo() {
+    let cache_dir = temp_dir("ir-public-ppm-cache");
+    let profile = temp_path("ir-public-ppm-profile", "R");
+    let repos_file = temp_path("ir-public-ppm-repos", "txt");
     let fixture_source =
         serde_json::to_string(&renviron_path(&fixture("resolver-tooling.R"))).unwrap();
     let profile_text = r#"
@@ -982,15 +981,8 @@ ir_test_write_renv(
 )
 ir_test_write_pak(
   ir_test_private_lib,
-  namespace = "export(pkg_deps)\nexport(repo_resolve)",
-  code = paste(
-    ir_test_pak_deps_code(),
-    "repo_resolve <- function(spec) {",
-    "  writeLines(spec, Sys.getenv('IR_TEST_REPO_SPEC_FILE'))",
-    "  c(CRAN = 'https://packagemanager.posit.co/cran/__linux__/noble/latest')",
-    "}",
-    sep = "\n"
-  )
+  namespace = "export(pkg_deps)",
+  code = ir_test_pak_deps_code()
 )
 
 options(repos = c(CRAN = "@CRAN@"))
@@ -1001,7 +993,6 @@ options(repos = c(CRAN = "@CRAN@"))
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_PROFILE_USER", &profile)
-        .env("IR_TEST_REPO_SPEC_FILE", &repo_spec)
         .env("IR_TEST_REPOS_FILE", &repos_file)
         .args([
             "run",
@@ -1010,17 +1001,16 @@ options(repos = c(CRAN = "@CRAN@"))
             "cli",
             "--vanilla",
             "-e",
-            "cat('ir.fixture=pak-resolved-ppm\\n')",
+            "cat('ir.fixture=public-ppm\\n')",
         ])
         .output()
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=pak-resolved-ppm");
-    assert_eq!(fs::read_to_string(&repo_spec).unwrap(), "PPM@latest\n");
+    assert_stdout_contains(&out, "ir.fixture=public-ppm");
     assert_eq!(
         fs::read_to_string(&repos_file).unwrap(),
-        "CRAN=https://packagemanager.posit.co/cran/__linux__/noble/latest\n"
+        "CRAN=https://packagemanager.posit.co/cran/latest\n"
     );
 }
 
