@@ -27,6 +27,7 @@ const RESOLVE_DRIVER: &str = concat!(
     include_str!("../driver/resolve.R")
 );
 const TOOLING_RESTART_STATUS: i32 = 86;
+const TOOLING_SAFE_MODE_ENV: &str = "IR_TOOLING_SAFE_MODE";
 
 /// Resolve dependencies for `source`, then run it against the resulting
 /// library. Exits the process with the program's own exit code.
@@ -370,8 +371,10 @@ fn resolve_library_inner(
     };
     let restart_file = unique_path(&tmp, "ir-tooling-restart", "txt");
 
-    let mut status = None;
-    for attempt in 0..=1 {
+    let mut retried_tooling_restart = false;
+    let mut retried_safe_mode = false;
+    let mut safe_mode = false;
+    let status = loop {
         if let Some(result_file) = &result_file {
             let _ = fs::remove_file(result_file);
         }
@@ -405,7 +408,11 @@ fn resolve_library_inner(
             .env_remove("IR_PYTHON_VERSION")
             .env_remove("IR_PYTHON_EXCLUDE_NEWER")
             .env_remove("IR_TOOLING_RESTART_FILE")
+            .env_remove(TOOLING_SAFE_MODE_ENV)
             .env("IR_TOOLING_RESTART_FILE", &restart_file);
+        if safe_mode {
+            cmd.env(TOOLING_SAFE_MODE_ENV, "1");
+        }
         if resolve_r {
             if let Some(result_file) = &result_file {
                 cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
@@ -458,7 +465,8 @@ fn resolve_library_inner(
             .map_err(|e| format!("failed to wait for dependency resolver: {e}"))?;
 
         if tooling_restart_requested(&current_status, &restart_file) {
-            if attempt == 0 {
+            if !retried_tooling_restart {
+                retried_tooling_restart = true;
                 continue;
             }
             return Err(
@@ -466,11 +474,17 @@ fn resolve_library_inner(
             );
         }
 
-        stdin_result?;
-        status = Some(current_status);
-        break;
-    }
-    let status = status.ok_or("dependency resolver did not run")?;
+        if resolver_process_crashed(&current_status) && !safe_mode && !retried_safe_mode {
+            retried_safe_mode = true;
+            safe_mode = true;
+            continue;
+        }
+
+        if current_status.success() {
+            stdin_result?;
+        }
+        break current_status;
+    };
 
     let result = result_file
         .as_ref()
@@ -548,6 +562,32 @@ fn resolve_library_inner(
 
 fn tooling_restart_requested(status: &ExitStatus, restart_file: &Path) -> bool {
     status.code() == Some(TOOLING_RESTART_STATUS) && restart_file.exists()
+}
+
+fn resolver_process_crashed(status: &ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if status.signal().is_some() {
+            return true;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(code) = status.code() {
+            let code = code as u32;
+            if matches!(
+                code,
+                0xC0000005 | 0xC00000FD | 0xC000001D | 0xC0000374 | 0xC0000409
+            ) {
+                return true;
+            }
+        }
+    }
+
+    status.code().is_none()
 }
 
 fn repeated_tooling_restart_error(context: &str, restart_file: &Path) -> String {

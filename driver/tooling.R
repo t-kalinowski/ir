@@ -112,6 +112,32 @@ ir_reset_tooling_namespace <- function(package) {
   invisible()
 }
 
+ir_tooling_namespace_path <- function(package) {
+  if (!isNamespaceLoaded(package)) return(NULL)
+
+  path <- getNamespaceInfo(package, "path")
+  if (is.null(path) || !nzchar(path)) return(NULL)
+  normalizePath(path, winslash = "/", mustWork = FALSE)
+}
+
+ir_reset_tooling_namespace_if_outside_lib <- function(package, lib) {
+  actual <- ir_tooling_namespace_path(package)
+  if (is.null(actual)) return(invisible())
+
+  expected <- normalizePath(file.path(lib, package),
+                            winslash = "/", mustWork = FALSE)
+  if (identical(actual, expected)) return(invisible())
+
+  if (identical(package, "pak")) ir_close_pak_remote()
+  ir_reset_tooling_namespace(package)
+}
+
+ir_reset_tooling_namespaces_outside_lib <- function(packages, lib) {
+  for (pkg in packages)
+    ir_reset_tooling_namespace_if_outside_lib(pkg, lib)
+  invisible()
+}
+
 ir_pak_private_cli_ok <- function() {
   if (!isNamespaceLoaded("pak")) return(FALSE)
 
@@ -133,69 +159,24 @@ ir_tooling_loaded_too_old <- function(package, min_version) {
   is.null(version) || version < package_version(min_version)
 }
 
-ir_user_libs <- function() {
-  r_libs_user <- Sys.getenv("R_LIBS_USER")
-  if (!nzchar(r_libs_user)) return(character())
+ir_tooling_safe_mode <- function()
+  identical(Sys.getenv("IR_TOOLING_SAFE_MODE"), "1")
 
-  user_libs <- strsplit(r_libs_user, .Platform$path.sep, fixed = TRUE)[[1L]]
-  user_libs <- user_libs[nzchar(user_libs)]
-  normalizePath(user_libs, winslash = "/", mustWork = FALSE)
+ir_tooling_lib_paths <- function(lib) {
+  if (ir_tooling_safe_mode()) c(lib, .Library) else c(lib, .libPaths())
 }
 
-ir_tooling_package_runtime_ok <- function(path) {
-  metadata <- file.path(path, "Meta", "package.rds")
-  info <- if (file.exists(metadata)) {
-    tryCatch(readRDS(metadata), error = function(e) NULL)
-  } else {
-    NULL
-  }
+ir_configure_safe_tooling_env <- function(lib) {
+  if (!ir_tooling_safe_mode()) return(invisible())
 
-  built_r <- if (is.null(info)) character() else as.character(info$Built$R)
-  if (!length(built_r)) return(FALSE)
-
-  built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
-  current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
-  if (!identical(built_r, current_r)) return(FALSE)
-
-  built_platform <- as.character(info$Built$Platform)
-  if (!length(built_platform) || is.na(built_platform[[1L]]) ||
-      !nzchar(built_platform[[1L]])) {
-    return(TRUE)
-  }
-
-  identical(built_platform[[1L]], R.version$platform)
-}
-
-ir_prune_wrong_r_minor_user_tooling <- function(packages) {
-  user_libs <- ir_user_libs()
-  if (!length(user_libs)) return(invisible())
-
-  bad_user_libs <- character()
-
-  for (pkg in packages) {
-    path <- find.package(pkg, lib.loc = user_libs, quiet = TRUE)
-    if (!length(path)) next
-
-    pkg_lib <- normalizePath(dirname(path[[1L]]), winslash = "/",
-                             mustWork = FALSE)
-    if (!ir_tooling_package_runtime_ok(path[[1L]]))
-      bad_user_libs <- c(bad_user_libs, pkg_lib)
-  }
-
-  if (!length(bad_user_libs)) return(invisible())
-
-  bad_user_libs <- unique(bad_user_libs)
-  current_libs <- .libPaths()
-  current_libs_normalized <- normalizePath(current_libs, winslash = "/",
-                                           mustWork = FALSE)
-  .libPaths(current_libs[!current_libs_normalized %in% bad_user_libs])
-
-  user_libs <- user_libs[!user_libs %in% bad_user_libs]
-  if (length(user_libs))
-    Sys.setenv(R_LIBS_USER = paste(user_libs, collapse = .Platform$path.sep))
-  else
-    Sys.setenv(R_LIBS_USER = "NULL")
-
+  no_user_file <- file.path(tempdir(), "ir-safe-mode-no-user-startup")
+  Sys.setenv(
+    R_LIBS = lib,
+    R_LIBS_USER = "NULL",
+    R_LIBS_SITE = "NULL",
+    R_PROFILE_USER = no_user_file,
+    R_ENVIRON_USER = no_user_file
+  )
   invisible()
 }
 
@@ -279,8 +260,10 @@ ir_ensure_tooling <- function(packages = ir_tooling_packages(),
   lib <- ir_tooling_lib(cache_dir, packages = packages, refs = refs,
                         min_versions = min_versions)
   dir.create(lib, recursive = TRUE, showWarnings = FALSE)
-  .libPaths(c(lib, .libPaths()))
-  ir_prune_wrong_r_minor_user_tooling(packages)
+  .libPaths(ir_tooling_lib_paths(lib))
+  ir_configure_safe_tooling_env(lib)
+  if (ir_tooling_safe_mode())
+    ir_reset_tooling_namespaces_outside_lib(packages, lib)
   old_repos <- options(repos = repos)
   on.exit(options(old_repos), add = TRUE)
 
