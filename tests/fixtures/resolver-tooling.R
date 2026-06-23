@@ -116,6 +116,11 @@ ir_test_pak_deps_code <- function(require_pillar = FALSE) {
     "    stringsAsFactors = FALSE",
     "  )",
     "}",
+    "repo_resolve <- function(spec) {",
+    "  suffix <- sub('^PPM@', '', as.character(spec))",
+    "  structure(paste0('https://packagemanager.posit.co/cran/', suffix),",
+    "            names = 'CRAN')",
+    "}",
     sep = "\n"
   )
 }
@@ -191,7 +196,8 @@ ir_test_fake_pak_code <- function(install_marker = NULL,
   )
 }
 
-ir_test_write_pak <- function(lib, namespace = "export(pkg_deps)",
+ir_test_write_pak <- function(lib,
+                              namespace = "export(pkg_deps)\nexport(repo_resolve)",
                               code = ir_test_pak_deps_code(),
                               built = as.character(getRversion())) {
   ir_test_write_pkg(lib, "pak", namespace, code, built = built)

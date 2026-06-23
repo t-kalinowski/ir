@@ -98,7 +98,7 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
          call. = FALSE)
   ir_test_write_pak(
     lib,
-    namespace = "export(pkg_deps)\nexport(pkg_install)",
+    namespace = "export(pkg_deps)\nexport(pkg_install)\nexport(repo_resolve)",
     code = ir_test_fake_pak_code(install_marker = {})
   )
 }}, ns = "utils")
@@ -171,7 +171,7 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
          call. = FALSE)
   ir_test_write_pak(
     lib,
-    namespace = "export(pkg_deps)\nexport(pkg_install)",
+    namespace = "export(pkg_deps)\nexport(pkg_install)\nexport(repo_resolve)",
     code = ir_test_fake_pak_code(
       install_marker = {},
       require_pillar = TRUE
