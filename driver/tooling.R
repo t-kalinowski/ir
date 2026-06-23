@@ -46,13 +46,9 @@ ir_tooling_packages <- function() c("pak", "renv", "secretbase")
 
 # Repository for tooling installs: always the latest PPM snapshot, independent
 # of the user's `exclude-newer`. ir's own tooling is not pinned to a user's
-# reproducibility date. Prefer setup-r's RSPM URL when present so CI can use
-# platform binaries while bootstrapping pak itself.
-ir_tooling_repos <- function() {
-  rspm <- Sys.getenv("RSPM", unset = "")
-  if (nzchar(rspm)) c(CRAN = rspm)
-  else c(CRAN = "https://packagemanager.posit.co/cran/latest")
-}
+# reproducibility date.
+ir_tooling_repos <- function()
+  c(CRAN = "https://packagemanager.posit.co/cran/latest")
 
 # Path to the tooling library, keyed by R version and platform so compiled
 # packages match the running R, mirroring renv's cache layout.

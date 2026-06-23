@@ -950,7 +950,7 @@ cat("ir.fixture=empty-env-exclude-newer\n")
 fn run_defaults_unset_cran_resolves_with_real_pak_ppm_repo() {
     let cache_dir = temp_dir("ir-real-pak-ppm-cache");
     let profile = temp_path("ir-real-pak-ppm-profile", "R");
-    fs::write(&profile, r#"options(repos = c(CRAN = "@CRAN@"))"#).unwrap();
+    fs::write(&profile, r#"options(repos = "@CRAN@")"#).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -960,7 +960,6 @@ fn run_defaults_unset_cran_resolves_with_real_pak_ppm_repo() {
             "--isolated",
             "--with",
             "cli",
-            "--vanilla",
             "-e",
             "cat('ir.fixture=real-pak-ppm\\n')",
         ])

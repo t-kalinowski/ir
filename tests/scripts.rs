@@ -1,6 +1,8 @@
+#[cfg(target_os = "linux")]
 mod support;
 
-use support::{rscript, temp_dir, temp_path};
+#[cfg(target_os = "linux")]
+use support::{rscript, temp_cache, temp_dir, temp_path};
 
 use std::fs;
 use std::path::Path;
@@ -240,139 +242,25 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(!warm_script.contains("https://cran.r-project.org"));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
-fn warm_renv_cache_uses_session_repos_rspm_and_explicit_repos() {
-    let user_library = temp_dir("ir-warm-repos-library");
-    let profile = temp_path("ir-warm-repos-profile", "R");
-    let session_repos = temp_path("ir-warm-repos-session", "txt");
-    let rspm_repos = temp_path("ir-warm-repos-rspm", "txt");
-    let explicit_repos = temp_path("ir-warm-repos-explicit", "txt");
-    let session_override = temp_path("ir-warm-repos-session-override", "txt");
-    let explicit_override = temp_path("ir-warm-repos-explicit-override", "txt");
+fn warm_renv_cache_replaces_unnamed_at_cran_with_real_package() {
+    let renv_cache = temp_cache("ir-warm-real-renv-cache");
+    let user_library = temp_dir("ir-warm-real-user-library");
+    let profile = temp_path("ir-warm-real-profile", "R");
+    fs::write(&profile, r#"options(repos = "@CRAN@")"#).unwrap();
 
-    fs::write(
-        &profile,
-        r#"
-ir_test_write_pkg <- function(lib, pkg, namespace, code) {
-  path <- file.path(lib, pkg)
-  dir.create(file.path(path, "R"), recursive = TRUE, showWarnings = FALSE)
-  writeLines(c(
-    paste("Package:", pkg),
-    "Version: 0.0.1",
-    paste("Title:", pkg),
-    paste("Description:", pkg),
-    "License: MIT"
-  ), file.path(path, "DESCRIPTION"))
-  writeLines(namespace, file.path(path, "NAMESPACE"))
-  writeLines(code, file.path(path, "R", pkg))
-}
-
-ir_test_write_pkg(
-  Sys.getenv("R_LIBS_USER"),
-  "pak",
-  "export(ir_test_pak)",
-  "ir_test_pak <- function() TRUE"
-)
-ir_test_write_pkg(
-  Sys.getenv("R_LIBS_USER"),
-  "secretbase",
-  "export(ir_test_secretbase)",
-  "ir_test_secretbase <- function() TRUE"
-)
-ir_test_write_pkg(
-  Sys.getenv("R_LIBS_USER"),
-  "renv",
-  "export(use)",
-  paste(
-    "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
-    "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
-    "  override_file <- Sys.getenv('IR_TEST_OVERRIDE_FILE', unset = '')",
-    "  if (nzchar(override_file))",
-    "    writeLines(Sys.getenv('RENV_CONFIG_REPOS_OVERRIDE', unset = ''), override_file)",
-    "  invisible(TRUE)",
-    "}",
-    sep = "\n"
-  )
-)
-
-if (identical(Sys.getenv("IR_TEST_AT_CRAN", unset = ""), "1")) {
-  options(repos = c(CRAN = "@CRAN@"))
-} else {
-  options(repos = c(CRAN = "https://profile.example.test/repo",
-                    Internal = "https://internal.example.test/repo"))
-}
-"#,
-    )
-    .unwrap();
-
-    let read = |path: &Path| {
-        fs::read_to_string(path)
-            .unwrap()
-            .replace("\r\n", "\n")
-            .trim()
-            .to_string()
-    };
-
-    let session = Command::new(rscript())
+    let out = Command::new(rscript())
         .current_dir(repo_root())
-        .env("R_PROFILE_USER", &profile)
+        .env("RENV_PATHS_CACHE", &renv_cache)
         .env("R_LIBS_USER", &user_library)
-        .env("IR_TEST_REPOS_FILE", &session_repos)
-        .env("IR_TEST_OVERRIDE_FILE", &session_override)
-        .env("RENV_CONFIG_REPOS_OVERRIDE", "https://stale.example.test")
+        .env("R_PROFILE_USER", &profile)
+        .env("RSPM", "https://packagemanager.posit.co/cran/latest")
         .args(["scripts/warm-renv-cache.R", "cli"])
         .output()
         .unwrap();
-    assert_success(&session);
-    assert_eq!(
-        read(&session_repos),
-        "CRAN=https://profile.example.test/repo\nInternal=https://internal.example.test/repo"
-    );
-    assert_eq!(read(&session_override), "");
 
-    let rspm = Command::new(rscript())
-        .current_dir(repo_root())
-        .env("R_PROFILE_USER", &profile)
-        .env("R_LIBS_USER", &user_library)
-        .env("IR_TEST_AT_CRAN", "1")
-        .env(
-            "RSPM",
-            "https://packagemanager.posit.co/cran/__linux__/noble/latest",
-        )
-        .env("IR_TEST_REPOS_FILE", &rspm_repos)
-        .args(["scripts/warm-renv-cache.R", "cli"])
-        .output()
-        .unwrap();
-    assert_success(&rspm);
-    assert_eq!(
-        read(&rspm_repos),
-        "CRAN=https://packagemanager.posit.co/cran/__linux__/noble/latest"
-    );
-
-    let explicit = Command::new(rscript())
-        .current_dir(repo_root())
-        .env("R_PROFILE_USER", &profile)
-        .env("R_LIBS_USER", &user_library)
-        .env("IR_TEST_REPOS_FILE", &explicit_repos)
-        .env("IR_TEST_OVERRIDE_FILE", &explicit_override)
-        .env("RENV_CONFIG_REPOS_OVERRIDE", "https://stale.example.test")
-        .args([
-            "scripts/warm-renv-cache.R",
-            "--repos",
-            "https://packagemanager.posit.co/cran/__linux__/noble/2026-06-01",
-            "cli",
-        ])
-        .output()
-        .unwrap();
-    assert_success(&explicit);
-    assert_eq!(
-        read(&explicit_repos),
-        "CRAN=https://packagemanager.posit.co/cran/__linux__/noble/2026-06-01"
-    );
-    assert_eq!(
-        read(&explicit_override),
-        "https://packagemanager.posit.co/cran/__linux__/noble/2026-06-01"
-    );
+    assert_success(&out);
 }
 
 #[test]

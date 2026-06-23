@@ -16,6 +16,10 @@ public_repos <- function() {
   else c(CRAN = "https://packagemanager.posit.co/cran/latest")
 }
 
+resolver_tooling_repos <- function() {
+  c(CRAN = "https://packagemanager.posit.co/cran/latest")
+}
+
 named_value <- function(values, name) {
   if (is.null(values) || is.null(names(values)) || !(name %in% names(values)))
     return(NULL)
@@ -29,7 +33,7 @@ default_repos <- function() {
 
   if (is.null(names(repos))) {
     if (length(repos) == 1L) names(repos) <- "CRAN"
-    return(repos)
+    else return(repos)
   }
 
   cran <- named_value(repos, "CRAN")
@@ -47,7 +51,7 @@ if (is.null(repos)) {
   repos <- c(CRAN = repos)
 }
 
-tooling_repos <- public_repos()
+tooling_repos <- resolver_tooling_repos()
 options(repos = repos, renv.consent = TRUE)
 
 r_libs_user <- Sys.getenv("R_LIBS_USER", unset = "")
