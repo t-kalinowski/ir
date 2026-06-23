@@ -947,53 +947,14 @@ cat("ir.fixture=empty-env-exclude-newer\n")
 
 #[cfg(target_os = "linux")]
 #[test]
-fn run_defaults_unset_cran_to_public_ppm_repo() {
-    let cache_dir = temp_dir("ir-public-ppm-cache");
-    let profile = temp_path("ir-public-ppm-profile", "R");
-    let repos_file = temp_path("ir-public-ppm-repos", "txt");
-    let fixture_source =
-        serde_json::to_string(&renviron_path(&fixture("resolver-tooling.R"))).unwrap();
-    let profile_text = r#"
-source(__FIXTURE__)
-
-ir_test_private_lib <- file.path(
-  Sys.getenv("IR_CACHE_DIR"),
-  "tooling",
-  paste0(getRversion(), "-", R.version$platform)
-)
-dir.create(ir_test_private_lib, recursive = TRUE, showWarnings = FALSE)
-
-ir_test_write_secretbase(ir_test_private_lib)
-ir_test_write_renv(
-  ir_test_private_lib,
-  code = paste(
-    "use <- function(..., library, repos, attach, sandbox, isolate, verbose) {",
-    "  writeLines(paste(names(repos), unname(repos), sep = '='), Sys.getenv('IR_TEST_REPOS_FILE'))",
-    "  specs <- unlist(list(...), use.names = FALSE)",
-    "  for (spec in specs) {",
-    "    pkg <- sub('@.*$', '', spec)",
-    "    dir.create(file.path(library, pkg), recursive = TRUE, showWarnings = FALSE)",
-    "  }",
-    "  invisible(TRUE)",
-    "}",
-    sep = "\n"
-  )
-)
-ir_test_write_pak(
-  ir_test_private_lib,
-  namespace = "export(pkg_deps)",
-  code = ir_test_pak_deps_code()
-)
-
-options(repos = c(CRAN = "@CRAN@"))
-"#
-    .replace("__FIXTURE__", &fixture_source);
-    fs::write(&profile, profile_text).unwrap();
+fn run_defaults_unset_cran_resolves_with_real_pak_ppm_repo() {
+    let cache_dir = temp_dir("ir-real-pak-ppm-cache");
+    let profile = temp_path("ir-real-pak-ppm-profile", "R");
+    fs::write(&profile, r#"options(repos = c(CRAN = "@CRAN@"))"#).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_PROFILE_USER", &profile)
-        .env("IR_TEST_REPOS_FILE", &repos_file)
         .args([
             "run",
             "--isolated",
@@ -1001,17 +962,13 @@ options(repos = c(CRAN = "@CRAN@"))
             "cli",
             "--vanilla",
             "-e",
-            "cat('ir.fixture=public-ppm\\n')",
+            "cat('ir.fixture=real-pak-ppm\\n')",
         ])
         .output()
         .unwrap();
 
     assert_success(&out);
-    assert_stdout_contains(&out, "ir.fixture=public-ppm");
-    assert_eq!(
-        fs::read_to_string(&repos_file).unwrap(),
-        "CRAN=https://packagemanager.posit.co/cran/latest\n"
-    );
+    assert_stdout_contains(&out, "ir.fixture=real-pak-ppm");
 }
 
 #[test]

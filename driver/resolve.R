@@ -62,8 +62,18 @@ ir_named_value <- function(values, name) {
   unname(values[[name]])
 }
 
+ir_repo_resolve <- function(spec) {
+  pak::repo_resolve(spec)
+}
+
+ir_linux_host <- function()
+  identical(unname(Sys.info()[["sysname"]]), "Linux")
+
 ir_ppm_snapshot_url <- function(exclude_newer) {
-  sprintf("https://packagemanager.posit.co/cran/%s", exclude_newer)
+  if (!ir_linux_host())
+    return(sprintf("https://packagemanager.posit.co/cran/%s", exclude_newer))
+
+  unname(ir_repo_resolve(sprintf("RSPM@%s", exclude_newer))[[1L]])
 }
 
 ir_ppm_latest_repos <- function() {

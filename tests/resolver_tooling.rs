@@ -11,7 +11,10 @@ use std::path::Path;
 use std::process::Output;
 
 fn resolver_tooling_fixture_source() -> String {
-    format!("source({})", r_string(&fixture("resolver-tooling.R")))
+    format!(
+        "source({}); options(repos = c(CRAN = 'https://cran.r-project.org'))",
+        r_string(&fixture("resolver-tooling.R"))
+    )
 }
 
 fn run_tooling_probe(
