@@ -309,6 +309,83 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
 }
 
 #[test]
+fn resolver_tooling_reinstalls_unloadable_private_pak() {
+    let cache_dir = temp_dir("ir-unloadable-pak-tooling-cache");
+    let empty_library = temp_dir("ir-unloadable-pak-tooling-empty-library");
+    let install_marker = temp_path("ir-unloadable-pak-tooling-install", "txt");
+    let pak_marker = temp_path("ir-unloadable-pak-tooling-pak", "txt");
+    let private_lib_marker = temp_path("ir-unloadable-pak-tooling-private-lib", "txt");
+    let profile = temp_path("ir-unloadable-pak-tooling-profile", "R");
+
+    fs::write(
+        &profile,
+        format!(
+            r#"
+{}
+.libPaths(Sys.getenv("IR_TEST_EMPTY_LIB"))
+ir_test_private_lib <- file.path(
+  Sys.getenv("IR_CACHE_DIR"),
+  "tooling",
+  paste0(getRversion(), "-", R.version$platform)
+)
+writeLines(ir_test_private_lib, {})
+ir_test_write_pak(
+  ir_test_private_lib,
+  namespace = "export(pkg_deps)\nexport(pkg_install)",
+  code = ".onLoad <- function(...) stop('bad private pak', call. = FALSE)\npkg_deps <- function(...) stop('bad private pak', call. = FALSE)\npkg_install <- function(...) stop('bad private pak', call. = FALSE)"
+)
+writeLines("stale", file.path(ir_test_private_lib, "pak", "stale.txt"))
+
+utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
+  writeLines(as.character(pkgs), {})
+  if (!identical(as.character(pkgs), "pak"))
+    stop("resolver should reinstall only pak with install.packages",
+         call. = FALSE)
+  ir_test_write_pak(
+    lib,
+    namespace = "export(pkg_deps)\nexport(pkg_install)",
+    code = ir_test_fake_pak_code(install_marker = {})
+  )
+}}, ns = "utils")
+"#,
+            resolver_tooling_fixture_source(),
+            r_string(&private_lib_marker),
+            r_string(&install_marker),
+            r_string(&pak_marker)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_EMPTY_LIB", &empty_library)
+        .env("R_LIBS_SITE", &empty_library)
+        .env("R_LIBS_USER", &empty_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=unloadable-pak-tooling\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=unloadable-pak-tooling");
+    assert_pak_installed_resolver_tooling(&install_marker, &pak_marker);
+
+    let private_lib = Path::new(fs::read_to_string(private_lib_marker).unwrap().trim()).to_owned();
+    assert!(
+        !private_lib.join("pak").join("stale.txt").exists(),
+        "resolver should remove an unloadable private pak before reinstalling it"
+    );
+}
+
+#[test]
 fn resolver_tooling_ignores_wrong_r_minor_user_library_package() {
     let cache_dir = temp_dir("ir-ambient-tooling-cache");
     let ambient_library = temp_dir("ir-ambient-tooling-user-library");
@@ -342,9 +419,13 @@ ir_test_write_pillar(
 ir_test_write_pak(
   ir_test_private_lib,
   namespace = "export(pkg_deps)\nexport(pkg_install)",
-  code = ir_test_fake_pak_code(
-    allowed_installs = "secretbase",
-    require_pillar = TRUE
+  code = paste(
+    ".onLoad <- function(...) invisible(requireNamespace('pillar', quietly = TRUE))",
+    ir_test_fake_pak_code(
+      allowed_installs = "secretbase",
+      require_pillar = TRUE
+    ),
+    sep = "\n"
   )
 )
 ir_test_write_renv(ir_test_private_lib)
@@ -401,5 +482,90 @@ utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
     assert!(
         !fake_pillar_load_marker.exists(),
         "resolver should prune wrong-R-minor R_LIBS_USER even when private tooling is warm"
+    );
+}
+
+#[test]
+fn resolver_tooling_ignores_wrong_platform_user_library_package() {
+    let cache_dir = temp_dir("ir-platform-tooling-cache");
+    let ambient_library = temp_dir("ir-platform-tooling-user-library");
+    let fake_secretbase_load_marker = temp_path("ir-platform-secretbase-loaded", "txt");
+    let fake_pillar_load_marker = temp_path("ir-platform-pillar-loaded", "txt");
+    let profile = temp_path("ir-platform-tooling-profile", "R");
+
+    fs::write(
+        &profile,
+        format!(
+            r#"
+{}
+ir_test_private_lib <- file.path(
+  Sys.getenv("IR_CACHE_DIR"),
+  "tooling",
+  paste0(getRversion(), "-", R.version$platform)
+)
+
+ir_test_write_secretbase(
+  Sys.getenv("R_LIBS_USER"),
+  marker = {},
+  hash = "ambienthash"
+)
+ir_test_write_pillar(
+  Sys.getenv("R_LIBS_USER"),
+  marker = {}
+)
+for (pkg in c("secretbase", "pillar")) {{
+  metadata <- file.path(Sys.getenv("R_LIBS_USER"), pkg, "Meta", "package.rds")
+  info <- readRDS(metadata)
+  info$Built$Platform <- "wrong-platform"
+  saveRDS(info, metadata)
+}}
+
+ir_test_write_pak(
+  ir_test_private_lib,
+  namespace = "export(pkg_deps)\nexport(pkg_install)",
+  code = ir_test_fake_pak_code(
+    allowed_installs = "secretbase",
+    require_pillar = TRUE
+  )
+)
+ir_test_write_renv(ir_test_private_lib)
+
+utils::assignInNamespace("install.packages", function(pkgs, lib, repos, ...) {{
+  stop("install.packages should not install resolver tooling when pak exists",
+       call. = FALSE)
+}}, ns = "utils")
+"#,
+            resolver_tooling_fixture_source(),
+            r_string(&fake_secretbase_load_marker),
+            r_string(&fake_pillar_load_marker)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &ambient_library)
+        .env("R_PROFILE_USER", &profile)
+        .args([
+            "run",
+            "--isolated",
+            "--with",
+            "cli",
+            "--vanilla",
+            "-e",
+            "cat('ir.fixture=platform-tooling\\n')",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=platform-tooling");
+    assert!(
+        !fake_secretbase_load_marker.exists(),
+        "resolver should not load secretbase from a wrong-platform R_LIBS_USER"
+    );
+    assert!(
+        !fake_pillar_load_marker.exists(),
+        "resolver should remove wrong-platform R_LIBS_USER before pak loads auxiliary packages"
     );
 }
