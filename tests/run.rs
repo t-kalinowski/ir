@@ -757,6 +757,59 @@ printf 'ir.fixture=python-exclude-newer-{}\\n'\n",
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn run_r_only_resolution_clears_inherited_python_resolver_env() {
+    let cache_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-cache");
+    let bin_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-bin");
+    let script = temp_path("ir-run-r-only-clears-python-resolver-env", "R");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - cli
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(
+        &rscript,
+        "#!/bin/sh\n\
+if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n\
+  for name in IR_PYTHON_RESULT_FILE IR_PYTHON_PACKAGES_FILE IR_PYTHON_VERSION IR_PYTHON_EXCLUDE_NEWER; do\n\
+    eval value=\\${$name:-}\n\
+    if [ -n \"$value\" ]; then\n\
+      echo \"unexpected inherited $name=$value\" >&2\n\
+      exit 1\n\
+    fi\n\
+  done\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=cleared-python-resolver-env\\n'\n",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_PYTHON_RESULT_FILE", "/tmp/stale-python-result")
+        .env("IR_PYTHON_PACKAGES_FILE", "/tmp/stale-python-packages")
+        .env("IR_PYTHON_VERSION", "9.99")
+        .env("IR_PYTHON_EXCLUDE_NEWER", "1999-01-01")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=cleared-python-resolver-env");
+}
+
 #[test]
 fn cache_dir_reports_override_and_process_env_defaults() {
     let cache_dir = temp_dir("ir-cache-override");

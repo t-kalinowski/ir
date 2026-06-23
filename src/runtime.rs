@@ -34,13 +34,16 @@ pub(crate) fn cmd_run(
     rscript_args: &[String],
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
-    exclude_newer: Option<&str>,
-    python_exclude_newer: Option<&str>,
+    snapshots: SnapshotArgs<'_>,
     script_args: &[String],
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_overrides(&mut spec, exclude_newer, python_exclude_newer)?;
+    apply_exclude_newer_overrides(
+        &mut spec,
+        snapshots.exclude_newer,
+        snapshots.python_exclude_newer,
+    )?;
     spec.dependencies.extend(with_deps.iter().cloned());
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
@@ -66,14 +69,17 @@ pub(crate) fn cmd_render(
     source: &RenderSource,
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
-    exclude_newer: Option<&str>,
-    python_exclude_newer: Option<&str>,
+    snapshots: SnapshotArgs<'_>,
     render_args: &[String],
     isolated: bool,
     vanilla: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_overrides(&mut spec, exclude_newer, python_exclude_newer)?;
+    apply_exclude_newer_overrides(
+        &mut spec,
+        snapshots.exclude_newer,
+        snapshots.python_exclude_newer,
+    )?;
     spec.dependencies.extend(with_deps.iter().cloned());
     spec.quarto_render = true;
     let isolated = isolated || spec.isolated;
@@ -100,6 +106,11 @@ enum RSelection {
 pub(crate) struct RSelectionArgs<'a> {
     pub(crate) r_requirement: Option<&'a str>,
     pub(crate) rscript: Option<&'a str>,
+}
+
+pub(crate) struct SnapshotArgs<'a> {
+    pub(crate) exclude_newer: Option<&'a str>,
+    pub(crate) python_exclude_newer: Option<&'a str>,
 }
 
 pub(crate) fn rscript_for_spec(
@@ -369,7 +380,11 @@ fn resolve_library_inner(
         .env("R_PKG_SHOW_PROGRESS", "true")
         // The RuntimeSpec owns snapshot selection. Do not let unsupported
         // commands accidentally reach the resolver through ambient process env.
-        .env_remove("IR_EXCLUDE_NEWER");
+        .env_remove("IR_EXCLUDE_NEWER")
+        .env_remove("IR_PYTHON_RESULT_FILE")
+        .env_remove("IR_PYTHON_PACKAGES_FILE")
+        .env_remove("IR_PYTHON_VERSION")
+        .env_remove("IR_PYTHON_EXCLUDE_NEWER");
     if let Some(result_file) = &result_file {
         cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
     }
@@ -399,9 +414,7 @@ fn resolve_library_inner(
         (python_request, &python_result_file, &python_packages_file)
     {
         cmd.env("IR_PYTHON_RESULT_FILE", result_file)
-            .env("IR_PYTHON_PACKAGES_FILE", packages_file)
-            .env_remove("IR_PYTHON_VERSION")
-            .env_remove("IR_PYTHON_EXCLUDE_NEWER");
+            .env("IR_PYTHON_PACKAGES_FILE", packages_file);
         if let Some(python_version) = &request.python_version {
             cmd.env("IR_PYTHON_VERSION", python_version);
         }
