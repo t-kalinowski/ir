@@ -380,15 +380,20 @@ fn resolve_library_inner(
         .env("R_PKG_SHOW_PROGRESS", "true")
         // The RuntimeSpec owns snapshot selection. Do not let unsupported
         // commands accidentally reach the resolver through ambient process env.
+        .env_remove("IR_RESOLVE_RESULT_FILE")
+        .env_remove("IR_RESOLVE_PACKAGE_RESULT_FILE")
+        .env_remove("IR_RESOLUTION_MARKER")
+        .env_remove("IR_PRIMARY_PACKAGE_MARKER")
+        .env_remove("IR_QUARTO_RENDER")
         .env_remove("IR_EXCLUDE_NEWER")
         .env_remove("IR_PYTHON_RESULT_FILE")
         .env_remove("IR_PYTHON_PACKAGES_FILE")
         .env_remove("IR_PYTHON_VERSION")
         .env_remove("IR_PYTHON_EXCLUDE_NEWER");
-    if let Some(result_file) = &result_file {
-        cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
-    }
     if resolve_r {
+        if let Some(result_file) = &result_file {
+            cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
+        }
         if let Some(paths) = &resolution_cache_paths {
             cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
         }

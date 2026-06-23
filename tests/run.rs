@@ -759,6 +759,177 @@ printf 'ir.fixture=python-exclude-newer-{}\\n'\n",
 
 #[cfg(unix)]
 #[test]
+fn run_python_local_package_bypasses_python_resolution_cache() {
+    let cache_dir = temp_dir("ir-run-python-local-cache");
+    let bin_dir = temp_dir("ir-run-python-local-bin");
+    let script = temp_path("ir-run-python-local", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let resolver_count = temp_path("ir-run-python-local-count", "txt");
+    let packages_seen = temp_path("ir-run-python-local-packages", "txt");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - ./local-python-package
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+    printf 'python\\n' >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+  printf 'python\\n' >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-local-cache\\n'\n",
+            packages_seen.display(),
+            resolver_count.display(),
+            fake_python.display(),
+            packages_seen.display(),
+            resolver_count.display(),
+            fake_python.display()
+        ),
+    );
+
+    for _ in 0..2 {
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-local-cache");
+    }
+
+    let count = fs::read_to_string(&resolver_count).unwrap();
+    assert_eq!(
+        count.lines().count(),
+        2,
+        "local Python package refs should resolve on every run\n{count}"
+    );
+    let packages = fs::read_to_string(&packages_seen).unwrap();
+    assert_eq!(packages.trim(), "./local-python-package");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_only_resolution_clears_inherited_r_resolver_env() {
+    let cache_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-cache");
+    let bin_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-bin");
+    let script = temp_path("ir-run-python-only-clears-r-resolver-env", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - cli
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+    if [ \"${{IR_RESOLVE_RESULT_FILE:-}}\" = \"/tmp/stale-r-result\" ]; then\n\
+      echo \"unexpected inherited IR_RESOLVE_RESULT_FILE=$IR_RESOLVE_RESULT_FILE\" >&2\n\
+      exit 1\n\
+    fi\n\
+    cat > /dev/null\n\
+    mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+    printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+    if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+      mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+      printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+    fi\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+    exit 0\n\
+  fi\n\
+  for name in IR_RESOLVE_RESULT_FILE IR_RESOLVE_PACKAGE_RESULT_FILE IR_RESOLUTION_MARKER IR_PRIMARY_PACKAGE_MARKER IR_QUARTO_RENDER; do\n\
+    eval value=\\${{$name:-}}\n\
+    if [ -n \"$value\" ]; then\n\
+      echo \"unexpected inherited $name=$value\" >&2\n\
+      exit 1\n\
+    fi\n\
+  done\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ] && [ \"${{IR_RESOLVE_RESULT_FILE:-}}\" != \"/tmp/stale-r-result\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=cleared-r-resolver-env\\n'\n",
+            fake_python.display(),
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    fs::remove_dir_all(cache_dir.join("python")).unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RESOLVE_RESULT_FILE", "/tmp/stale-r-result")
+        .env("IR_RESOLVE_PACKAGE_RESULT_FILE", "/tmp/stale-r-package")
+        .env("IR_RESOLUTION_MARKER", "/tmp/stale-r-marker")
+        .env("IR_PRIMARY_PACKAGE_MARKER", "/tmp/stale-r-primary-marker")
+        .env("IR_QUARTO_RENDER", "1")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=cleared-r-resolver-env");
+}
+
+#[cfg(unix)]
+#[test]
 fn run_r_only_resolution_clears_inherited_python_resolver_env() {
     let cache_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-cache");
     let bin_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-bin");

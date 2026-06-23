@@ -15,7 +15,7 @@ pub(crate) struct EnvRequest {
     pub(crate) packages: Vec<String>,
     pub(crate) python_version: Option<String>,
     pub(crate) exclude_newer: Option<String>,
-    marker: PathBuf,
+    marker: Option<PathBuf>,
     source: String,
     latest_max_age_seconds: Option<u64>,
 }
@@ -36,11 +36,16 @@ pub(crate) fn request(
         None
     };
     let source = cache_source(python.exclude_newer.as_deref())?;
-    let marker = cache_dir.join("python").join(cache_key(
-        &packages,
-        python.python_version.as_deref(),
-        python.exclude_newer.as_deref(),
-    ));
+    let marker = packages
+        .iter()
+        .all(|package| python_package_spec_cacheable(package))
+        .then(|| {
+            cache_dir.join("python").join(cache_key(
+                &packages,
+                python.python_version.as_deref(),
+                python.exclude_newer.as_deref(),
+            ))
+        });
 
     Ok(Some(EnvRequest {
         packages,
@@ -57,12 +62,16 @@ pub(crate) fn read_cache(request: Option<&EnvRequest>) -> Result<Option<PathBuf>
         return Ok(None);
     };
 
-    if !request.marker.exists() {
+    let Some(marker_path) = &request.marker else {
+        return Ok(None);
+    };
+
+    if !marker_path.exists() {
         return Ok(None);
     }
 
-    let marker = fs::read_to_string(&request.marker)
-        .map_err(|e| format!("failed to read `{}`: {e}", request.marker.display()))?;
+    let marker = fs::read_to_string(marker_path)
+        .map_err(|e| format!("failed to read `{}`: {e}", marker_path.display()))?;
     let mut lines = marker.lines();
     let source = lines.next().unwrap_or_default();
     if !source_is_current(source, request)? {
@@ -78,16 +87,19 @@ pub(crate) fn read_cache(request: Option<&EnvRequest>) -> Result<Option<PathBuf>
 }
 
 pub(crate) fn write_cache(request: &EnvRequest, python: &Path) -> Result<(), Box<dyn Error>> {
-    let parent = request
-        .marker
+    let Some(marker_path) = &request.marker else {
+        return Ok(());
+    };
+
+    let parent = marker_path
         .parent()
         .ok_or("Python cache marker path has no parent")?;
     fs::create_dir_all(parent)?;
     fs::write(
-        &request.marker,
+        marker_path,
         format!("{}\n{}\n", request.source, python.display()),
     )
-    .map_err(|e| format!("failed to write `{}`: {e}", request.marker.display()))?;
+    .map_err(|e| format!("failed to write `{}`: {e}", marker_path.display()))?;
     Ok(())
 }
 
@@ -114,6 +126,44 @@ fn python_package_name(package: &str) -> &str {
         })
         .unwrap_or(package.len());
     &package[..end]
+}
+
+fn python_package_spec_cacheable(package: &str) -> bool {
+    let package = package.trim();
+    if package.is_empty() {
+        return false;
+    }
+
+    let lower = package.to_ascii_lowercase();
+    if package.starts_with(['.', '/', '~', '\\'])
+        || package.contains(['/', '\\'])
+        || package.contains("://")
+        || lower.starts_with("-e ")
+        || lower == "-e"
+        || lower.starts_with("--editable")
+        || lower.starts_with("file:")
+        || lower.starts_with("git+")
+        || lower.starts_with("hg+")
+        || lower.starts_with("svn+")
+        || lower.starts_with("bzr+")
+    {
+        return false;
+    }
+
+    python_distribution_name(python_package_name(package))
+}
+
+fn python_distribution_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        && name
+            .chars()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
 }
 
 fn cache_key(
