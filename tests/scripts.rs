@@ -172,6 +172,32 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(workflow.contains("any::bookdown"));
     assert!(workflow.contains("any::xfun"));
     assert!(workflow.contains("taiki-e/install-action@nextest"));
+    assert!(!workflow
+        .lines()
+        .any(|line| line == "  R_USER_CACHE_DIR: ${{ github.workspace }}/.cache"));
+    assert!(!workflow
+        .lines()
+        .any(|line| line == "      R_USER_CACHE_DIR: ${{ runner.temp }}/ir-r-user-cache"));
+    assert!(workflow.contains("id: r-cache-date"));
+    assert!(workflow.contains("shell: Rscript {0}"));
+    assert!(workflow.contains("Sys.getenv(\"RUNNER_TEMP\")"));
+    assert!(workflow.contains("R_USER_CACHE_DIR="));
+    assert!(workflow.contains("file = Sys.getenv(\"GITHUB_ENV\")"));
+    assert!(workflow.contains("tz = \"UTC\""));
+    assert!(workflow.contains("actions/cache@v4"));
+    assert!(workflow.contains("path: ${{ runner.temp }}/ir-r-user-cache"));
+    assert!(workflow
+        .contains("key: r-user-cache-${{ runner.os }}-${{ steps.r-cache-date.outputs.date }}-"));
+    assert!(workflow.contains("cache-version: ${{ steps.r-cache-date.outputs.date }}"));
+    let r_user_cache = workflow
+        .split("      - name: Cache R user cache")
+        .nth(1)
+        .and_then(|block| block.split("      # No DESCRIPTION").next())
+        .expect("workflow should cache the R user cache before installing R dependencies");
+    assert!(
+        !r_user_cache.contains("restore-keys:"),
+        "daily CI cache should not restore older cache buckets"
+    );
     assert!(workflow.contains("Warm default R package cache"));
     assert!(workflow.contains("Warm snapshot R package cache"));
     assert!(workflow.contains("Warm non-default R package cache"));
