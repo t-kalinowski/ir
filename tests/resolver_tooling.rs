@@ -419,9 +419,13 @@ ir_test_write_pillar(
 ir_test_write_pak(
   ir_test_private_lib,
   namespace = "export(pkg_deps)\nexport(pkg_install)",
-  code = ir_test_fake_pak_code(
-    allowed_installs = "secretbase",
-    require_pillar = TRUE
+  code = paste(
+    ".onLoad <- function(...) invisible(requireNamespace('pillar', quietly = TRUE))",
+    ir_test_fake_pak_code(
+      allowed_installs = "secretbase",
+      require_pillar = TRUE
+    ),
+    sep = "\n"
   )
 )
 ir_test_write_renv(ir_test_private_lib)

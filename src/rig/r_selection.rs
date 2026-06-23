@@ -1,6 +1,4 @@
 use std::error::Error;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-use std::path::Path;
 
 use super::rig_client::InstalledR;
 
@@ -159,27 +157,29 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 fn compare_installed_r(a: &InstalledR, b: &InstalledR) -> std::cmp::Ordering {
     compare_versions(&a.version, &b.version)
         .then_with(|| a.is_default.cmp(&b.is_default))
-        .then_with(|| looks_like_arm64_macos_r(a).cmp(&looks_like_arm64_macos_r(b)))
+        .then_with(|| native_macos_r_preference(a).cmp(&native_macos_r_preference(b)))
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn looks_like_arm64_macos_r(installed: &InstalledR) -> bool {
-    installed.name.contains("-arm64")
+fn native_macos_r_preference(installed: &InstalledR) -> u8 {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return 0;
+    }
+    if rig_metadata_contains(installed, "-arm64") {
+        return 2;
+    }
+    if rig_metadata_contains(installed, "-x86_64") {
+        return 0;
+    }
+    1
+}
+
+fn rig_metadata_contains(installed: &InstalledR, needle: &str) -> bool {
+    installed.name.contains(needle)
         || installed
             .path
             .as_deref()
-            .map(path_contains_arm64)
+            .map(|path| path.to_string_lossy().contains(needle))
             .unwrap_or(false)
-}
-
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-fn looks_like_arm64_macos_r(_installed: &InstalledR) -> bool {
-    false
-}
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn path_contains_arm64(path: &Path) -> bool {
-    path.to_string_lossy().contains("-arm64")
 }
 
 fn compare_version_parts(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
