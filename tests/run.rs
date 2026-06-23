@@ -35,6 +35,117 @@ fn ci_dependencies_are_available() {
     assert!(!version.is_empty());
 }
 
+#[cfg(target_os = "linux")]
+fn r_tooling_lib(cache_dir: &Path) -> std::path::PathBuf {
+    let out = Command::new(rscript())
+        .env("IR_CACHE_DIR", cache_dir)
+        .args([
+            "--vanilla",
+            "-e",
+            "cat(file.path(Sys.getenv('IR_CACHE_DIR'), 'tooling', paste0(getRversion(), '-', R.version$platform)))",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    Path::new(stdout(&out).trim()).to_path_buf()
+}
+
+#[cfg(target_os = "linux")]
+fn install_fake_r_package(lib: &Path, name: &str, namespace: &str, r_code: &str) {
+    let source_root = temp_dir(&format!("ir-fake-{name}-source"));
+    let package = source_root.join(name);
+    fs::create_dir_all(package.join("R")).unwrap();
+    fs::write(
+        package.join("DESCRIPTION"),
+        format!(
+            "Package: {name}\nVersion: 99.0.0\nTitle: Fake {name}\nDescription: Fake {name}.\nLicense: MIT\nEncoding: UTF-8\n"
+        ),
+    )
+    .unwrap();
+    fs::write(package.join("NAMESPACE"), namespace).unwrap();
+    fs::write(package.join("R").join(format!("{name}.R")), r_code).unwrap();
+
+    let out = Command::new(rscript())
+        .args([
+            "--vanilla",
+            "-e",
+            "args <- commandArgs(TRUE); dir.create(args[[1]], recursive = TRUE, showWarnings = FALSE); install.packages(args[[2]], lib = args[[1]], repos = NULL, type = 'source', INSTALL_opts = c('--no-byte-compile', '--no-help', '--no-docs'))",
+        ])
+        .arg(lib)
+        .arg(&package)
+        .output()
+        .unwrap();
+    assert_success(&out);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn run_uses_private_tooling_before_resolving_ppm_repos() {
+    let cache_dir = temp_dir("ir-private-tooling-before-repos-cache");
+    let user_library = temp_dir("ir-private-tooling-before-repos-user-library");
+    let tooling_lib = r_tooling_lib(&cache_dir);
+    let script = temp_path("ir-private-tooling-before-repos", "R");
+
+    install_fake_r_package(
+        &tooling_lib,
+        "pak",
+        "export(pkg_deps)\nexport(repo_resolve)\n",
+        r#"
+load_private_cli <- function() TRUE
+repo_resolve <- function(spec) list(CRAN = "https://packagemanager.posit.co/cran/latest")
+pkg_deps <- function(refs, ...) {
+  data.frame(
+    ref = character(),
+    status = character(),
+    package = character(),
+    version = character(),
+    type = character(),
+    priority = character(),
+    direct = logical()
+  )
+}
+"#,
+    );
+    install_fake_r_package(
+        &tooling_lib,
+        "renv",
+        "",
+        "use <- function(...) stop('renv should not be used for an empty manifest')\n",
+    );
+    install_fake_r_package(
+        &tooling_lib,
+        "secretbase",
+        "export(sha256)\n",
+        "sha256 <- function(x) 'fake-resolution-key'\n",
+    );
+    install_fake_r_package(
+        &user_library,
+        "pak",
+        "export(pkg_deps)\nexport(repo_resolve)\n",
+        r#"
+load_private_cli <- function() stop("bad ambient pak private cli")
+repo_resolve <- function(spec) stop("bad ambient pak used before tooling bootstrap")
+pkg_deps <- function(refs, ...) stop("bad ambient pak used before tooling bootstrap")
+"#,
+    );
+    fs::write(
+        &script,
+        "cat('ir.fixture=private-tooling-before-repos\\n')\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &user_library)
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=private-tooling-before-repos");
+}
+
 #[test]
 fn version_flag_reports_version() {
     let out = ir().arg("--version").output().unwrap();
@@ -372,6 +483,942 @@ cat("frontmatter.user_library=", Sys.getenv("R_LIBS_USER", unset = "<unset>"), "
     assert_stdout_contains(&out, "ir.fixture=packages-frontmatter");
     assert_stdout_contains(&out, "frontmatter.glue_in_cache=true");
     assert_stdout_contains(&out, "frontmatter.user_library=NULL");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_script_frontmatter_sets_reticulate_python_and_activates_env() {
+    let cache_dir = temp_dir("ir-run-python-cache");
+    let bin_dir = temp_dir("ir-run-python-bin");
+    let script = temp_path("ir-run-python", "R");
+    let venv = bin_dir.join("venv");
+    let venv_bin = venv.join("bin");
+    let fake_python = venv_bin.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let r_deps = temp_path("ir-run-python-r-deps", "txt");
+    let python_packages = temp_path("ir-run-python-packages", "txt");
+    let python_env = temp_path("ir-run-python-env", "txt");
+    let resolved_again = temp_path("ir-run-python-resolved-again", "txt");
+    let _ = fs::remove_dir_all(cache_dir.join("python"));
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+#| r-version: "4.4"
+#| python-version: "3.11"
+#| exclude-newer: "2026-06-01"
+
+cat("reticulate_python=", Sys.getenv("RETICULATE_PYTHON"), "\n", sep = "")
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(&venv_bin).unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'exclude-newer: %s\\n%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+      echo expected Python packages file in the R resolver invocation >&2\n\
+      exit 1\n\
+    fi\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+    if [ ! -e {} ]; then\n\
+      printf 'resolved_again\\n' > {}\n\
+      mkdir -p {}\n\
+      : > {}\n\
+      chmod +x {}\n\
+    fi\n\
+    printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
+    printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
+fi\n\
+printf 'reticulate_python=%s\\n' \"${{RETICULATE_PYTHON:-}}\"\n\
+printf 'virtual_env=%s\\n' \"${{VIRTUAL_ENV:-}}\"\n\
+printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
+            r_deps.display(),
+            r_deps.display(),
+            python_packages.display(),
+            fake_python.display(),
+            resolved_again.display(),
+            venv_bin.display(),
+            fake_python.display(),
+            fake_python.display(),
+            python_env.display(),
+            python_env.display(),
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(
+        &out,
+        &format!("reticulate_python={}", fake_python.display()),
+    );
+    assert_stdout_contains(&out, &format!("virtual_env={}", venv.display()));
+    assert_stdout_contains(&out, &format!("path_first={}", venv_bin.display()));
+
+    let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
+    assert!(
+        !deps.lines().any(|line| line == "reticulate"),
+        "Python-only frontmatter should not inject user-library reticulate\n{deps}"
+    );
+
+    let packages = fs::read_to_string(&python_packages).unwrap();
+    assert!(packages.contains("pandas"), "{packages}");
+    assert!(!packages.contains("jupyter"), "{packages}");
+
+    let env = fs::read_to_string(&python_env).unwrap();
+    assert!(env.contains("python_version=3.11"), "{env}");
+    assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(
+        &out,
+        &format!("reticulate_python={}", fake_python.display()),
+    );
+
+    fs::remove_file(&fake_python).unwrap();
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(
+        resolved_again.exists(),
+        "missing cached Python path should invoke the shared resolver again"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_version_only_writes_empty_package_file_and_clears_pythonhome() {
+    let cache_dir = temp_dir("ir-run-python-version-only-cache");
+    let bin_dir = temp_dir("ir-run-python-version-only-bin");
+    let script = temp_path("ir-run-python-version-only", "R");
+    let venv = bin_dir.join("venv");
+    let venv_bin = venv.join("bin");
+    let fake_python = venv_bin.join("python");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-version: "3.11"
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(&venv_bin).unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ -n \"${{PYTHONHOME:-}}\" ]; then\n\
+    echo \"resolver inherited PYTHONHOME=$PYTHONHOME\" >&2\n\
+    exit 1\n\
+  fi\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -s \"$IR_PYTHON_PACKAGES_FILE\" ]; then\n\
+    echo expected empty Python packages file >&2\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" >&2\n\
+    exit 1\n\
+  fi\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'pythonhome=%s\\n' \"${{PYTHONHOME:-<unset>}}\"\n\
+printf 'virtual_env=%s\\n' \"${{VIRTUAL_ENV:-}}\"\n\
+printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PYTHONHOME", "/old/python")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "pythonhome=<unset>");
+    assert_stdout_contains(&out, &format!("virtual_env={}", venv.display()));
+    assert_stdout_contains(&out, &format!("path_first={}", venv_bin.display()));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_packages_file_is_private_and_removed() {
+    let cache_dir = temp_dir("ir-run-python-private-packages-file-cache");
+    let bin_dir = temp_dir("ir-run-python-private-packages-file-bin");
+    let script = temp_path("ir-run-python-private-packages-file", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let mode_file = temp_path("ir-run-python-private-packages-file-mode", "txt");
+    let path_file = temp_path("ir-run-python-private-packages-file-path", "txt");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file >&2\n\
+    exit 1\n\
+  fi\n\
+  case \"$(uname -s)\" in\n\
+    Darwin) mode=$(stat -f '%Lp' \"$IR_PYTHON_PACKAGES_FILE\") ;;\n\
+    *) mode=$(stat -c '%a' \"$IR_PYTHON_PACKAGES_FILE\") ;;\n\
+  esac\n\
+  printf '%s\\n' \"$mode\" > {}\n\
+  printf '%s\\n' \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-private-packages-file\\n'\n",
+            mode_file.display(),
+            path_file.display(),
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=python-private-packages-file");
+
+    let mode = fs::read_to_string(&mode_file).unwrap();
+    assert_eq!(mode.trim(), "600", "{mode}");
+    let packages_file = fs::read_to_string(&path_file).unwrap();
+    let packages_file = Path::new(packages_file.trim());
+    assert!(
+        !packages_file.exists(),
+        "Python packages temp file should be removed after resolver exits: {}",
+        packages_file.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_packages_file_is_removed_when_rscript_spawn_fails() {
+    let cache_dir = temp_dir("ir-run-python-packages-file-spawn-fail-cache");
+    let tmp_dir = temp_dir("ir-run-python-packages-file-spawn-fail-tmp");
+    let script = temp_path("ir-run-python-packages-file-spawn-fail", "R");
+    let missing_rscript = temp_path("ir-run-python-packages-file-missing-rscript", "sh");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("TMPDIR", &tmp_dir)
+        .args(["run", "--rscript"])
+        .arg(&missing_rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert!(
+        !out.status.success(),
+        "missing Rscript should fail\n{}",
+        output_text(&out)
+    );
+
+    let leftovers = fs::read_dir(&tmp_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("ir-python-packages-"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "Python packages temp files should be removed after spawn failure: {leftovers:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_exclude_newer_override_uses_normalized_latest() {
+    for exclude_newer in [" \t ", "2999-01-01"] {
+        let cache_dir = temp_dir("ir-run-python-exclude-newer-latest-cache");
+        let bin_dir = temp_dir("ir-run-python-exclude-newer-latest-bin");
+        let script = temp_path("ir-run-python-exclude-newer-latest", "R");
+        let fake_python = bin_dir.join("python");
+        let rscript = bin_dir.join("Rscript");
+
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+#| exclude-newer: "2024-01-01"
+
+cat("ignored\n")
+"#,
+        )
+        .unwrap();
+        write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+        write_executable(
+            &rscript,
+            &format!(
+                "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" ]; then\n\
+    echo \"unexpected Python exclude-newer: $IR_PYTHON_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-exclude-newer-latest\\n'\n",
+                fake_python.display()
+            ),
+        );
+
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--exclude-newer", exclude_newer, "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-exclude-newer-latest");
+
+        let python_dir = cache_dir.join("python");
+        let markers = fs::read_dir(&python_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", python_dir.display()))
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(markers.len(), 1);
+        let marker_text = fs::read_to_string(&markers[0])
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", markers[0].display()));
+        assert!(
+            marker_text
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with("latest: ")),
+            "{marker_text}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_exclude_newer_can_override_r_exclude_newer() {
+    struct Case<'a> {
+        name: &'a str,
+        python_exclude_newer: &'a str,
+        cli_args: &'a [&'a str],
+        expected_python_exclude_newer: &'a str,
+    }
+
+    let cases = [
+        Case {
+            name: "frontmatter",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &[],
+            expected_python_exclude_newer: "2024-02-02",
+        },
+        Case {
+            name: "frontmatter-null",
+            python_exclude_newer: "#| python-exclude-newer: null\n",
+            cli_args: &[],
+            expected_python_exclude_newer: "",
+        },
+        Case {
+            name: "cli",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &["--python-exclude-newer", "2024-03-03"],
+            expected_python_exclude_newer: "2024-03-03",
+        },
+        Case {
+            name: "cli-empty",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &["--python-exclude-newer", " \t "],
+            expected_python_exclude_newer: "",
+        },
+    ];
+
+    for case in cases {
+        let cache_dir = temp_dir(&format!("ir-run-python-exclude-newer-{}-cache", case.name));
+        let bin_dir = temp_dir(&format!("ir-run-python-exclude-newer-{}-bin", case.name));
+        let script = temp_path(&format!("ir-run-python-exclude-newer-{}", case.name), "R");
+        let fake_python = bin_dir.join("python");
+        let rscript = bin_dir.join("Rscript");
+
+        fs::write(
+            &script,
+            format!(
+                r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+#| exclude-newer: "2024-01-01"
+{}
+
+cat("ignored\n")
+"#,
+                case.python_exclude_newer
+            ),
+        )
+        .unwrap();
+        write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+        write_executable(
+            &rscript,
+            &format!(
+                "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ \"${{IR_EXCLUDE_NEWER:-}}\" != \"2024-01-01\" ]; then\n\
+    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" != \"{}\" ]; then\n\
+    echo \"unexpected Python exclude-newer: $IR_PYTHON_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-exclude-newer-{}\\n'\n",
+                case.expected_python_exclude_newer,
+                fake_python.display(),
+                case.name
+            ),
+        );
+
+        let mut command = ir();
+        command.env("IR_CACHE_DIR", &cache_dir).arg("run");
+        command.args(case.cli_args);
+        let out = command
+            .arg("--rscript")
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(
+            &out,
+            &format!("ir.fixture=python-exclude-newer-{}", case.name),
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_local_package_bypasses_python_resolution_cache() {
+    let cache_dir = temp_dir("ir-run-python-local-cache");
+    let bin_dir = temp_dir("ir-run-python-local-bin");
+    let script = temp_path("ir-run-python-local", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let resolver_count = temp_path("ir-run-python-local-count", "txt");
+    let packages_seen = temp_path("ir-run-python-local-packages", "txt");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - ./local-python-package
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+    printf 'python\\n' >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+  printf 'python\\n' >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-local-cache\\n'\n",
+            packages_seen.display(),
+            resolver_count.display(),
+            fake_python.display(),
+            packages_seen.display(),
+            resolver_count.display(),
+            fake_python.display()
+        ),
+    );
+
+    for _ in 0..2 {
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .args(["run", "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-local-cache");
+    }
+
+    let count = fs::read_to_string(&resolver_count).unwrap();
+    assert_eq!(
+        count.lines().count(),
+        2,
+        "local Python package refs should resolve on every run\n{count}"
+    );
+    let packages = fs::read_to_string(&packages_seen).unwrap();
+    assert_eq!(packages.trim(), "./local-python-package");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_uv_resolver_env_bypasses_python_resolution_cache() {
+    let cache_dir = temp_dir("ir-run-python-uv-env-cache");
+    let bin_dir = temp_dir("ir-run-python-uv-env-bin");
+    let script = temp_path("ir-run-python-uv-env", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let resolver_count = temp_path("ir-run-python-uv-env-count", "txt");
+    let indexes_seen = temp_path("ir-run-python-uv-env-indexes", "txt");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    printf 'python\\n' >> {}\n\
+    printf '%s\\n' \"${{UV_DEFAULT_INDEX:-}}\" >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  printf 'python\\n' >> {}\n\
+  printf '%s\\n' \"${{UV_DEFAULT_INDEX:-}}\" >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-uv-env-cache\\n'\n",
+            resolver_count.display(),
+            indexes_seen.display(),
+            fake_python.display(),
+            resolver_count.display(),
+            indexes_seen.display(),
+            fake_python.display()
+        ),
+    );
+
+    for index in [
+        "https://first.example/simple",
+        "https://second.example/simple",
+    ] {
+        let out = ir()
+            .env("IR_CACHE_DIR", &cache_dir)
+            .env("UV_DEFAULT_INDEX", index)
+            .args(["run", "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-uv-env-cache");
+    }
+
+    let count = fs::read_to_string(&resolver_count).unwrap();
+    assert_eq!(
+        count.lines().count(),
+        2,
+        "uv resolver env should bypass the Python marker\n{count}"
+    );
+    let indexes = fs::read_to_string(&indexes_seen).unwrap();
+    assert!(
+        indexes.contains("https://first.example/simple"),
+        "{indexes}"
+    );
+    assert!(
+        indexes.contains("https://second.example/simple"),
+        "{indexes}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_uv_config_changes_python_resolution_cache() {
+    let cache_dir = temp_dir("ir-run-python-uv-config-cache");
+    let config_home = temp_dir("ir-run-python-uv-config-home");
+    let bin_dir = temp_dir("ir-run-python-uv-config-bin");
+    let script = temp_path("ir-run-python-uv-config", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let resolver_count = temp_path("ir-run-python-uv-config-count", "txt");
+    let configs_seen = temp_path("ir-run-python-uv-config-seen", "txt");
+    let uv_dir = config_home.join("uv");
+    let uv_config = uv_dir.join("uv.toml");
+
+    fs::create_dir_all(&uv_dir).unwrap();
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    printf 'python\\n' >> {}\n\
+    cat \"$XDG_CONFIG_HOME/uv/uv.toml\" >> {}\n\
+    printf '\\n---\\n' >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  printf 'python\\n' >> {}\n\
+  cat \"$XDG_CONFIG_HOME/uv/uv.toml\" >> {}\n\
+  printf '\\n---\\n' >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-uv-config-cache\\n'\n",
+            resolver_count.display(),
+            configs_seen.display(),
+            configs_seen.display(),
+            fake_python.display(),
+            resolver_count.display(),
+            configs_seen.display(),
+            configs_seen.display(),
+            fake_python.display()
+        ),
+    );
+
+    for config in [
+        "[[index]]\nurl = \"https://first.example/simple\"\ndefault = true\n",
+        "[[index]]\nurl = \"https://second.example/simple\"\ndefault = true\n",
+        "[[index]]\nurl = \"https://second.example/simple\"\ndefault = true\n",
+    ] {
+        fs::write(&uv_config, config).unwrap();
+
+        let mut command = ir();
+        remove_uv_resolver_env(&mut command);
+        let out = command
+            .env("IR_CACHE_DIR", &cache_dir)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(["run", "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-uv-config-cache");
+    }
+
+    let count = fs::read_to_string(&resolver_count).unwrap();
+    assert_eq!(
+        count.lines().count(),
+        2,
+        "uv.toml changes should invalidate the Python marker, unchanged uv.toml should reuse it\n{count}"
+    );
+    let configs = fs::read_to_string(&configs_seen).unwrap();
+    assert!(
+        configs.contains("https://first.example/simple"),
+        "{configs}"
+    );
+    assert!(
+        configs.contains("https://second.example/simple"),
+        "{configs}"
+    );
+}
+
+#[cfg(unix)]
+fn remove_uv_resolver_env(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("UV_") || name == "RETICULATE_UV")
+        {
+            command.env_remove(name);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_only_resolution_clears_inherited_r_resolver_env() {
+    let cache_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-cache");
+    let bin_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-bin");
+    let script = temp_path("ir-run-python-only-clears-r-resolver-env", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - cli
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+    if [ \"${{IR_RESOLVE_RESULT_FILE:-}}\" = \"/tmp/stale-r-result\" ]; then\n\
+      echo \"unexpected inherited IR_RESOLVE_RESULT_FILE=$IR_RESOLVE_RESULT_FILE\" >&2\n\
+      exit 1\n\
+    fi\n\
+    cat > /dev/null\n\
+    mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+    printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+    if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+      mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+      printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+    fi\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+    exit 0\n\
+  fi\n\
+  for name in IR_RESOLVE_RESULT_FILE IR_RESOLVE_PACKAGE_RESULT_FILE IR_RESOLUTION_MARKER IR_PRIMARY_PACKAGE_MARKER IR_QUARTO_RENDER; do\n\
+    eval value=\\${{$name:-}}\n\
+    if [ -n \"$value\" ]; then\n\
+      echo \"unexpected inherited $name=$value\" >&2\n\
+      exit 1\n\
+    fi\n\
+  done\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ] && [ \"${{IR_RESOLVE_RESULT_FILE:-}}\" != \"/tmp/stale-r-result\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=cleared-r-resolver-env\\n'\n",
+            fake_python.display(),
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    fs::remove_dir_all(cache_dir.join("python")).unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RESOLVE_RESULT_FILE", "/tmp/stale-r-result")
+        .env("IR_RESOLVE_PACKAGE_RESULT_FILE", "/tmp/stale-r-package")
+        .env("IR_RESOLUTION_MARKER", "/tmp/stale-r-marker")
+        .env("IR_PRIMARY_PACKAGE_MARKER", "/tmp/stale-r-primary-marker")
+        .env("IR_QUARTO_RENDER", "1")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=cleared-r-resolver-env");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_r_only_resolution_clears_inherited_python_resolver_env() {
+    let cache_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-cache");
+    let bin_dir = temp_dir("ir-run-r-only-clears-python-resolver-env-bin");
+    let script = temp_path("ir-run-r-only-clears-python-resolver-env", "R");
+    let rscript = bin_dir.join("Rscript");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| packages:
+#|   - cli
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(
+        &rscript,
+        "#!/bin/sh\n\
+if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n\
+  for name in IR_PYTHON_RESULT_FILE IR_PYTHON_PACKAGES_FILE IR_PYTHON_VERSION IR_PYTHON_EXCLUDE_NEWER; do\n\
+    eval value=\\${$name:-}\n\
+    if [ -n \"$value\" ]; then\n\
+      echo \"unexpected inherited $name=$value\" >&2\n\
+      exit 1\n\
+    fi\n\
+  done\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=cleared-python-resolver-env\\n'\n",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_PYTHON_RESULT_FILE", "/tmp/stale-python-result")
+        .env("IR_PYTHON_PACKAGES_FILE", "/tmp/stale-python-packages")
+        .env("IR_PYTHON_VERSION", "9.99")
+        .env("IR_PYTHON_EXCLUDE_NEWER", "1999-01-01")
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=cleared-python-resolver-env");
 }
 
 #[test]

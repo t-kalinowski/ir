@@ -19,7 +19,6 @@ fn render_quarto_ir_python_frontmatter_sets_quarto_python() {
     let quarto = bin_dir.join("quarto");
     let r_deps = temp_path("ir-render-python-r-deps", "txt");
     let r_driver = temp_path("ir-render-python-r-driver", "txt");
-    let py_driver = temp_path("ir-render-python-py-driver", "txt");
     let python_packages = temp_path("ir-render-python-packages", "txt");
     let python_env = temp_path("ir-render-python-env", "txt");
 
@@ -33,7 +32,8 @@ ir:
   python-packages:
     - pandas
   python-version: "3.11"
-  exclude-newer: "2026-06-01T12:34:56Z"
+  exclude-newer: "2026-06-01"
+  python-exclude-newer: "2026-05-01"
 ---
 
 ```{python}
@@ -48,17 +48,6 @@ print("ok")
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
-    echo shared Python exclude-newer should not reach R dependency resolution >&2\n\
-    exit 1\n\
-  fi\n\
-  printf '%s\\n' \"$1\" > {}\n\
-  cat > {}\n\
-  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
-  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
   printf '%s\\n' \"$1\" > {}\n\
   if grep -q 'ir_ensure_python_pak' \"$1\"; then\n\
     echo python resolver should use shared tooling bootstrap >&2\n\
@@ -69,20 +58,40 @@ if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
     exit 1\n\
   fi\n\
   if ! grep -q 'ir_ensure_tooling' \"$1\"; then\n\
-    echo python resolver should include shared tooling bootstrap >&2\n\
+    echo resolver should include shared tooling bootstrap >&2\n\
     exit 1\n\
   fi\n\
-  cat > {}\n\
+  if ! grep -q 'ir_resolve_python_env' \"$1\"; then\n\
+    echo resolver should include the Python environment helper >&2\n\
+    exit 1\n\
+  fi\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
 fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
+fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
             r_driver.display(),
             r_deps.display(),
-            py_driver.display(),
+            r_deps.display(),
             python_packages.display(),
             python_env.display(),
             python_env.display(),
@@ -95,16 +104,11 @@ exit 1\n",
     );
     let expected_driver_dir = cache_dir.join("drivers");
     let stale_r_driver = expected_driver_dir.join("resolve.R");
-    let stale_py_driver = expected_driver_dir.join("resolve-python.R");
     fs::create_dir_all(&expected_driver_dir).unwrap();
     fs::write(&stale_r_driver, "stale\n").unwrap();
-    fs::write(&stale_py_driver, "stale\n").unwrap();
     let mut permissions = fs::metadata(&stale_r_driver).unwrap().permissions();
     permissions.set_readonly(true);
     fs::set_permissions(&stale_r_driver, permissions).unwrap();
-    let mut permissions = fs::metadata(&stale_py_driver).unwrap().permissions();
-    permissions.set_readonly(true);
-    fs::set_permissions(&stale_py_driver, permissions).unwrap();
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
@@ -123,37 +127,23 @@ exit 1\n",
     );
 
     let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
     assert!(
         !deps.lines().any(|line| line == "reticulate"),
         "Python-only frontmatter should not inject user-library reticulate\n{deps}"
     );
     let r_driver_path = Path::new(fs::read_to_string(&r_driver).unwrap().trim()).to_path_buf();
-    let py_driver_path = Path::new(fs::read_to_string(&py_driver).unwrap().trim()).to_path_buf();
     assert!(r_driver_path.starts_with(&expected_driver_dir));
-    assert!(py_driver_path.starts_with(&expected_driver_dir));
     assert_ne!(r_driver_path, stale_r_driver);
-    assert_ne!(py_driver_path, stale_py_driver);
     let r_driver_file = r_driver_path.file_name().unwrap().to_string_lossy();
-    let py_driver_file = py_driver_path.file_name().unwrap().to_string_lossy();
     assert!(
         r_driver_file.starts_with("resolve-") && r_driver_file.ends_with(".R"),
         "{r_driver_file}"
     );
-    assert!(
-        py_driver_file.starts_with("resolve-python-") && py_driver_file.ends_with(".R"),
-        "{py_driver_file}"
-    );
-    assert!(fs::read_to_string(&r_driver_path)
-        .unwrap()
-        .contains("ir_ensure_tooling"));
-    assert!(fs::read_to_string(&py_driver_path)
-        .unwrap()
-        .contains("ir_ensure_tooling"));
+    let driver = fs::read_to_string(&r_driver_path).unwrap();
+    assert!(driver.contains("ir_ensure_tooling"));
+    assert!(driver.contains("ir_resolve_python_env"));
     assert!(fs::metadata(&r_driver_path)
-        .unwrap()
-        .permissions()
-        .readonly());
-    assert!(fs::metadata(&py_driver_path)
         .unwrap()
         .permissions()
         .readonly());
@@ -164,7 +154,7 @@ exit 1\n",
 
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
-    assert!(env.contains("exclude_newer=2026-06-01T12:34:56Z"), "{env}");
+    assert!(env.contains("exclude_newer=2026-05-01"), "{env}");
 }
 
 #[cfg(unix)]
@@ -205,24 +195,31 @@ reticulate::py_config()
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  if [ -n \"${{IR_EXCLUDE_NEWER:-}}\" ]; then\n\
-    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
-    exit 1\n\
-  fi\n\
-  cat > {}\n\
+  printf 'exclude_newer=%s\\n' \"${{IR_EXCLUDE_NEWER:-}}\" > {}\n\
+  cat >> {}\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  cat \"$IR_PYTHON_PACKAGES_FILE\" > /dev/null\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
 fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
+fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
+            r_deps.display(),
             r_deps.display(),
             python_env.display(),
             python_env.display(),
@@ -251,6 +248,7 @@ exit 1\n",
     );
 
     let deps = fs::read_to_string(&r_deps).unwrap();
+    assert!(deps.contains("exclude_newer=2026-06-01"), "{deps}");
     assert!(deps.lines().any(|line| line == "reticulate"), "{deps}");
 
     let env = fs::read_to_string(&python_env).unwrap();
@@ -260,7 +258,7 @@ exit 1\n",
 
 #[cfg(unix)]
 #[test]
-fn render_quarto_ir_python_frontmatter_passes_exclude_newer_override_raw() {
+fn render_quarto_ir_python_frontmatter_uses_normalized_exclude_newer_override() {
     let cache_dir = temp_dir("ir-render-python-env-cache");
     let bin_dir = temp_dir("ir-render-python-env-bin");
     let doc = temp_path("ir-render-python-env", "qmd");
@@ -296,14 +294,18 @@ if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   cat > /dev/null\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
-fi\n\
-if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
   printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
   printf 'exclude_newer=%s\\n' \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" >> {}\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
   exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
 exit 1\n",
@@ -329,7 +331,7 @@ exit 1\n",
     assert_success(&out);
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=\n"), "{env}");
-    assert!(env.contains("exclude_newer= \t \n"), "{env}");
+    assert!(env.contains("exclude_newer=\n"), "{env}");
 }
 
 #[cfg(unix)]
@@ -362,14 +364,12 @@ ir:
         &rscript,
         &format!(
             "#!/bin/sh\n\
+cat > /dev/null\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
-  exit 0\n\
 fi\n\
 if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
-  cat > /dev/null\n\
   printf 'attempt\\n' >> {}\n\
   if [ ! -f {} ]; then\n\
     printf 'seen\\n' > {}\n\
@@ -381,6 +381,9 @@ if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
     exit 86\n\
   fi\n\
   printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
   exit 0\n\
 fi\n\
 echo unexpected Rscript invocation >&2\n\
@@ -467,28 +470,69 @@ exit 1\n",
     assert_stdout_contains(&out, "quarto_python=\n");
 }
 
+#[cfg(unix)]
 #[test]
-fn render_quarto_rejects_r_and_python_version_frontmatter() {
-    let doc = temp_path("ir-render-r-python-version-conflict", "qmd");
+fn render_quarto_accepts_r_and_python_version_frontmatter() {
+    let cache_dir = temp_dir("ir-render-r-python-version-cache");
+    let bin_dir = temp_dir("ir-render-r-python-version-bin");
+    let doc = temp_path("ir-render-r-python-version", "qmd");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let quarto = bin_dir.join("quarto");
+    let python_env = temp_path("ir-render-r-python-version-env", "txt");
+
     fs::write(
         &doc,
         r#"---
-title: version conflict
+title: version pins
 ir:
   r-version: "4.4"
+  python-packages:
+    - pandas
   python-version: "3.11"
 ---
 "#,
     )
     .unwrap();
-
-    let out = ir().args(["render"]).arg(&doc).output().unwrap();
-
-    assert_eq!(out.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("frontmatter cannot set both `ir.r-version` and `ir.python-version`"),
-        "{}",
-        output_text(&out)
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -z \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    echo expected Python resolution in the main resolver invocation >&2\n\
+    exit 1\n\
+  fi\n\
+  printf 'python_version=%s\\n' \"${{IR_PYTHON_VERSION:-}}\" > {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  echo Python resolution should not use a second resolver invocation >&2\n\
+  exit 1\n\
+fi\n\
+echo unexpected Rscript invocation >&2\n\
+exit 1\n",
+            python_env.display(),
+            fake_python.display()
+        ),
     );
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .args(["render", "--rscript"])
+        .arg(&rscript)
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    let env = fs::read_to_string(&python_env).unwrap();
+    assert!(env.contains("python_version=3.11"), "{env}");
 }

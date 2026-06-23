@@ -112,6 +112,17 @@ ir_reset_tooling_namespace <- function(package) {
   invisible()
 }
 
+ir_pak_private_cli_ok <- function() {
+  if (!isNamespaceLoaded("pak")) return(FALSE)
+
+  tryCatch({
+    load_private_cli <- get("load_private_cli", asNamespace("pak"),
+                            inherits = FALSE)
+    load_private_cli()
+    TRUE
+  }, error = function(e) FALSE)
+}
+
 # Tooling packages not already usable by the resolver. The check intentionally
 # tries to load the package: a package that is present but cannot load is not
 # useful to the resolver.
@@ -196,7 +207,13 @@ ir_tooling_available <- function(package, min_version = NULL) {
     args$versionCheck <- list(op = ">=",
                               version = package_version(min_version))
   }
-  isTRUE(do.call(requireNamespace, args))
+  ok <- isTRUE(do.call(requireNamespace, args))
+  if (ok && identical(package, "pak"))
+    ok <- ir_pak_private_cli_ok()
+  if (!ok && identical(package, "pak") && isNamespaceLoaded(package))
+    try(unloadNamespace(package), silent = TRUE)
+
+  ok
 }
 
 ir_unavailable_tooling <- function(packages = ir_tooling_packages(),
@@ -245,8 +262,10 @@ ir_install_tooling_with_pak <- function(missing, refs, lib) {
 }
 
 ir_bootstrap_pak <- function(missing, lib, repos) {
-  if ("pak" %in% missing)
+  if ("pak" %in% missing) {
+    unlink(file.path(lib, "pak"), recursive = TRUE, force = TRUE)
     utils::install.packages("pak", lib = lib, repos = repos)
+  }
   invisible()
 }
 
@@ -289,4 +308,28 @@ ir_ensure_tooling <- function(packages = ir_tooling_packages(),
     stop("could not install resolver tooling into ", lib, ": ",
          paste(still_unavailable, collapse = ", "), call. = FALSE)
   invisible()
+}
+
+ir_resolve_python_env <- function(packages,
+                                  python_version = NULL,
+                                  exclude_newer = NULL) {
+  ir_reset_tooling_namespace("reticulate")
+  ir_ensure_tooling(
+    packages = c("pak", "reticulate"),
+    refs = c(reticulate = "reticulate@>=1.41.0"),
+    min_versions = c(reticulate = "1.41.0")
+  )
+  if (!exists("uv_get_or_create_env", asNamespace("reticulate"),
+              inherits = FALSE)) {
+    stop("package `reticulate` must provide `uv_get_or_create_env()",
+         call. = FALSE)
+  }
+
+  python <- reticulate:::uv_get_or_create_env(
+    packages = packages,
+    python_version = python_version,
+    exclude_newer = exclude_newer
+  )
+  stopifnot(length(python) == 1L, nzchar(python))
+  python
 }

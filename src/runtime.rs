@@ -35,25 +35,28 @@ pub(crate) fn cmd_run(
     rscript_args: &[String],
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
-    exclude_newer: Option<&str>,
+    snapshots: SnapshotArgs<'_>,
     script_args: &[String],
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_override(&mut spec, exclude_newer)?;
+    apply_exclude_newer_overrides(
+        &mut spec,
+        snapshots.exclude_newer,
+        snapshots.python_exclude_newer,
+    )?;
     spec.dependencies.extend(with_deps.iter().cloned());
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
-    // Reuse a warm resolution marker, or launch the private resolver R session
-    // to resolve deps and materialise the library.
-    let library = resolve_library(&rscript, &spec)?;
+    let resolved = resolve_runtime(&rscript, &spec, false)?;
 
     // Render the document, or run the user's program, in an isolated R session.
     let code = run_user_code(
         source,
         &rscript,
-        library.as_deref(),
+        resolved.library.as_deref(),
+        resolved.python.as_deref(),
         rscript_args,
         script_args,
         isolated,
@@ -67,25 +70,27 @@ pub(crate) fn cmd_render(
     source: &RenderSource,
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
-    exclude_newer: Option<&str>,
+    snapshots: SnapshotArgs<'_>,
     render_args: &[String],
     isolated: bool,
     vanilla: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_override(&mut spec, exclude_newer)?;
+    apply_exclude_newer_overrides(
+        &mut spec,
+        snapshots.exclude_newer,
+        snapshots.python_exclude_newer,
+    )?;
     spec.dependencies.extend(with_deps.iter().cloned());
     spec.quarto_render = true;
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
 
-    let library = resolve_library(&rscript, &spec)?;
-    let cache_dir = ir_cache_dir()?;
-    let python = python::resolve_env(&rscript, &cache_dir, spec.python.as_ref())?;
+    let resolved = resolve_runtime(&rscript, &spec, true)?;
     let code = quarto::run(
         &rscript,
-        library.as_deref(),
-        python.as_deref(),
+        resolved.library.as_deref(),
+        resolved.python.as_deref(),
         source.path(),
         render_args,
         isolated,
@@ -102,6 +107,11 @@ enum RSelection {
 pub(crate) struct RSelectionArgs<'a> {
     pub(crate) r_requirement: Option<&'a str>,
     pub(crate) rscript: Option<&'a str>,
+}
+
+pub(crate) struct SnapshotArgs<'a> {
+    pub(crate) exclude_newer: Option<&'a str>,
+    pub(crate) python_exclude_newer: Option<&'a str>,
 }
 
 pub(crate) fn rscript_for_spec(
@@ -187,53 +197,59 @@ fn env_optional_trimmed_string(name: &str) -> Result<Option<String>, Box<dyn Err
     Ok((!value.is_empty()).then(|| value.to_string()))
 }
 
-fn apply_exclude_newer_override(
+fn apply_exclude_newer_overrides(
     spec: &mut RuntimeSpec,
     cli_exclude_newer: Option<&str>,
+    cli_python_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
-    if spec.python.is_some() {
-        apply_python_exclude_newer_override(spec, cli_exclude_newer)?;
-        spec.exclude_newer = None;
-        return Ok(());
-    }
-
-    if let Some(exclude_newer) = cli_exclude_newer {
-        spec.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
-        return Ok(());
-    }
-
-    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
-        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
-        spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
-        return Ok(());
-    }
-
-    if let Some(exclude_newer) = spec.exclude_newer.take() {
-        spec.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
-    }
+    let r_exclude_newer = selected_exclude_newer(spec.exclude_newer.take(), cli_exclude_newer)?;
+    spec.exclude_newer = r_exclude_newer.clone();
+    set_python_exclude_newer(spec, cli_python_exclude_newer, r_exclude_newer.as_deref())?;
 
     Ok(())
 }
 
-fn apply_python_exclude_newer_override(
-    spec: &mut RuntimeSpec,
+fn selected_exclude_newer(
+    frontmatter_exclude_newer: Option<String>,
     cli_exclude_newer: Option<&str>,
+) -> Result<Option<String>, Box<dyn Error>> {
+    if let Some(exclude_newer) = cli_exclude_newer {
+        return normalize_exclude_newer_override(exclude_newer);
+    }
+
+    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
+        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
+        return normalize_exclude_newer_override(&exclude_newer);
+    }
+
+    frontmatter_exclude_newer
+        .as_deref()
+        .map(normalize_exclude_newer_override)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn set_python_exclude_newer(
+    spec: &mut RuntimeSpec,
+    cli_python_exclude_newer: Option<&str>,
+    default_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let Some(python) = spec.python.as_mut() else {
         return Ok(());
     };
 
-    if let Some(exclude_newer) = cli_exclude_newer {
-        python.exclude_newer = Some(exclude_newer.to_string());
+    if let Some(exclude_newer) = cli_python_exclude_newer {
+        python.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
         return Ok(());
     }
 
-    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
-        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
-        python.exclude_newer = Some(exclude_newer);
+    if python.exclude_newer_explicit {
+        let exclude_newer = python.exclude_newer.take().unwrap_or_default();
+        python.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
         return Ok(());
     }
 
+    python.exclude_newer = default_exclude_newer.map(str::to_string);
     Ok(())
 }
 
@@ -253,22 +269,12 @@ fn is_future_iso_date(value: &str) -> bool {
     date > OffsetDateTime::now_utc().date()
 }
 
-/// Return a cached materialised library path, or run the embedded driver in a
-/// private R session to resolve and materialise it. Shorthand version specs in
-/// `spec` are normalized before cache keying and resolver input; other package
-/// refs are passed through.
-pub(crate) fn resolve_library(
-    rscript: &OsStr,
-    spec: &RuntimeSpec,
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    Ok(resolve_library_inner(rscript, spec, false)?.library)
-}
-
 pub(crate) fn resolve_library_and_primary_package(
     rscript: &OsStr,
     spec: &RuntimeSpec,
 ) -> Result<(PathBuf, String), Box<dyn Error>> {
-    let resolved = resolve_library_inner(rscript, spec, true)?;
+    let cache_dir = ir_cache_dir()?;
+    let resolved = resolve_library_inner(rscript, spec, true, None, &cache_dir)?;
     let library = resolved
         .library
         .ok_or("dependency resolver did not return a library path")?;
@@ -278,87 +284,165 @@ pub(crate) fn resolve_library_and_primary_package(
     Ok((library, package))
 }
 
+fn resolve_runtime(
+    rscript: &OsStr,
+    spec: &RuntimeSpec,
+    include_jupyter: bool,
+) -> Result<ResolvedLibrary, Box<dyn Error>> {
+    let cache_dir = ir_cache_dir()?;
+    let python_request = python::request(&cache_dir, spec.python.as_ref(), include_jupyter)?;
+    resolve_library_inner(rscript, spec, false, python_request.as_ref(), &cache_dir)
+}
+
 struct ResolvedLibrary {
     library: Option<PathBuf>,
     primary_package: Option<String>,
+    python: Option<PathBuf>,
 }
 
 fn resolve_library_inner(
     rscript: &OsStr,
     spec: &RuntimeSpec,
     primary_package: bool,
+    python_request: Option<&python::EnvRequest>,
+    cache_dir: &Path,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
     let dependencies = normalized_dependencies(&spec.dependencies);
-    let cache_dir = ir_cache_dir()?;
     let resolution_cache_paths = resolve_cache::paths(
-        &cache_dir,
+        cache_dir,
         rscript,
         &dependencies,
         spec.exclude_newer.as_deref(),
         spec.quarto_render,
     )?;
-    if let Some(resolved) = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)? {
+    let cached_library = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)?;
+    let cached_python = python::read_cache(python_request)?;
+    if let Some(resolved) = &cached_library {
+        if python_request.is_none() || cached_python.is_some() {
+            return Ok(ResolvedLibrary {
+                library: Some(resolved.library.clone()),
+                primary_package: resolved.primary_package.clone(),
+                python: cached_python,
+            });
+        }
+    }
+
+    let _resolver_lock = FileLock::acquire(&resolver_lock_path(cache_dir))?;
+    let cached_library = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)?;
+    let cached_python = python::read_cache(python_request)?;
+    if let Some(resolved) = &cached_library {
+        if python_request.is_none() || cached_python.is_some() {
+            return Ok(ResolvedLibrary {
+                library: Some(resolved.library.clone()),
+                primary_package: resolved.primary_package.clone(),
+                python: cached_python,
+            });
+        }
+    }
+
+    let resolve_r = cached_library.is_none();
+    let resolve_python = python_request.is_some() && cached_python.is_none();
+    if !resolve_r && !resolve_python {
+        let resolved = cached_library.expect("cached library was checked above");
         return Ok(ResolvedLibrary {
             library: Some(resolved.library),
             primary_package: resolved.primary_package,
+            python: cached_python,
         });
     }
 
-    let _resolver_lock = FileLock::acquire(&resolver_lock_path(&cache_dir))?;
-    if let Some(resolved) = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)? {
-        return Ok(ResolvedLibrary {
-            library: Some(resolved.library),
-            primary_package: resolved.primary_package,
-        });
-    }
-
-    let driver = driver::cached_path(&cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
+    let driver = driver::cached_path(cache_dir, driver::RESOLVE_FILE, RESOLVE_DRIVER)?;
     let tmp = env::temp_dir();
-    let result_file = unique_path(&tmp, "ir-libpath", "txt");
-    let package_result_file = primary_package.then(|| unique_path(&tmp, "ir-package", "txt"));
+    let result_file = resolve_r.then(|| unique_path(&tmp, "ir-libpath", "txt"));
+    let package_result_file =
+        (resolve_r && primary_package).then(|| unique_path(&tmp, "ir-package", "txt"));
+    let python_result_file = resolve_python.then(|| unique_path(&tmp, "ir-python", "txt"));
+    let python_packages_file = if let (true, Some(request)) = (resolve_python, python_request) {
+        let path = unique_path(&tmp, "ir-python-packages", "txt");
+        let contents = if request.packages.is_empty() {
+            String::new()
+        } else {
+            request.packages.join("\n") + "\n"
+        };
+        Some(PrivateTempFile::write(path, &contents)?)
+    } else {
+        None
+    };
     let restart_file = unique_path(&tmp, "ir-tooling-restart", "txt");
 
     let mut status = None;
     for attempt in 0..=1 {
-        let _ = fs::remove_file(&result_file);
-        let _ = fs::remove_file(&restart_file);
+        if let Some(result_file) = &result_file {
+            let _ = fs::remove_file(result_file);
+        }
         if let Some(package_result_file) = &package_result_file {
             let _ = fs::remove_file(package_result_file);
         }
+        if let Some(python_result_file) = &python_result_file {
+            let _ = fs::remove_file(python_result_file);
+        }
+        let _ = fs::remove_file(&restart_file);
 
         let mut cmd = Command::new(rscript);
         cmd.arg(&driver)
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .env("IR_RESOLVE_RESULT_FILE", &result_file)
-            .env("IR_TOOLING_RESTART_FILE", &restart_file)
-            .env("IR_CACHE_DIR", &cache_dir)
+            .env("IR_CACHE_DIR", cache_dir)
             // pak suppresses progress in noninteractive Rscript unless this is set.
             // Resolution cache hits return before pak, so this adds no cache-hit pak output.
             .env("R_PKG_SHOW_PROGRESS", "true")
             // The RuntimeSpec owns snapshot selection. Do not let unsupported
             // commands accidentally reach the resolver through ambient process env.
-            .env_remove("IR_EXCLUDE_NEWER");
-        if let Some(paths) = &resolution_cache_paths {
-            cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
-        }
-        if let Some(package_result_file) = &package_result_file {
-            cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
-            if let Some(package_marker) = resolution_cache_paths
-                .as_ref()
-                .and_then(|paths| paths.package_marker.as_ref())
-            {
-                cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+            .env_remove("IR_RESOLVE_RESULT_FILE")
+            .env_remove("IR_RESOLVE_PACKAGE_RESULT_FILE")
+            .env_remove("IR_RESOLUTION_MARKER")
+            .env_remove("IR_PRIMARY_PACKAGE_MARKER")
+            .env_remove("IR_QUARTO_RENDER")
+            .env_remove("IR_EXCLUDE_NEWER")
+            .env_remove("IR_PYTHON_RESULT_FILE")
+            .env_remove("IR_PYTHON_PACKAGES_FILE")
+            .env_remove("IR_PYTHON_VERSION")
+            .env_remove("IR_PYTHON_EXCLUDE_NEWER")
+            .env_remove("IR_TOOLING_RESTART_FILE")
+            .env("IR_TOOLING_RESTART_FILE", &restart_file);
+        if resolve_r {
+            if let Some(result_file) = &result_file {
+                cmd.env("IR_RESOLVE_RESULT_FILE", result_file);
+            }
+            if let Some(paths) = &resolution_cache_paths {
+                cmd.env("IR_RESOLUTION_MARKER", &paths.marker);
+            }
+            if let Some(package_result_file) = &package_result_file {
+                cmd.env("IR_RESOLVE_PACKAGE_RESULT_FILE", package_result_file);
+                if let Some(package_marker) = resolution_cache_paths
+                    .as_ref()
+                    .and_then(|paths| paths.package_marker.as_ref())
+                {
+                    cmd.env("IR_PRIMARY_PACKAGE_MARKER", package_marker);
+                }
+            }
+            if let Some(exclude_newer) = &spec.exclude_newer {
+                cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
+            }
+            if spec.quarto_render {
+                // Distinct from IR_QUARTO (the quarto executable, read in quarto.rs):
+                // this flag tells the resolver a Quarto render needs rmarkdown.
+                cmd.env("IR_QUARTO_RENDER", "1");
             }
         }
-        if let Some(exclude_newer) = &spec.exclude_newer {
-            cmd.env("IR_EXCLUDE_NEWER", exclude_newer);
-        }
-        if spec.quarto_render {
-            // Distinct from IR_QUARTO (the quarto executable, read in quarto.rs):
-            // this flag tells the resolver a Quarto render needs rmarkdown.
-            cmd.env("IR_QUARTO_RENDER", "1");
+        if let (Some(request), Some(result_file), Some(packages_file)) =
+            (python_request, &python_result_file, &python_packages_file)
+        {
+            cmd.env_remove("PYTHONHOME")
+                .env("IR_PYTHON_RESULT_FILE", result_file)
+                .env("IR_PYTHON_PACKAGES_FILE", packages_file.path());
+            if let Some(python_version) = &request.python_version {
+                cmd.env("IR_PYTHON_VERSION", python_version);
+            }
+            if let Some(exclude_newer) = &request.exclude_newer {
+                cmd.env("IR_PYTHON_EXCLUDE_NEWER", exclude_newer);
+            }
         }
 
         let mut child = cmd.spawn().map_err(|e| spawn_error(rscript, e))?;
@@ -388,8 +472,11 @@ fn resolve_library_inner(
     }
     let status = status.ok_or("dependency resolver did not run")?;
 
-    let result = fs::read_to_string(&result_file).unwrap_or_default();
-    let _ = fs::remove_file(&result_file);
+    let result = result_file
+        .as_ref()
+        .map(|path| fs::read_to_string(path).unwrap_or_default())
+        .unwrap_or_default();
+    let _ = result_file.as_ref().map(fs::remove_file);
     let _ = fs::remove_file(&restart_file);
     let package_result = package_result_file
         .as_ref()
@@ -399,27 +486,63 @@ fn resolve_library_inner(
             result
         })
         .unwrap_or_default();
+    let python_result = python_result_file
+        .as_ref()
+        .map(|path| {
+            let result = fs::read_to_string(path).unwrap_or_default();
+            let _ = fs::remove_file(path);
+            result
+        })
+        .unwrap_or_default();
+    drop(python_packages_file);
 
     if !status.success() {
         return Err("dependency resolution failed".into());
     }
 
     let path = result.trim();
-    let library = if path.is_empty() {
-        None
+    let (library, primary_package) = if resolve_r {
+        let library = if path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(path))
+        };
+        let package = package_result.trim();
+        let primary_package = if package.is_empty() {
+            None
+        } else {
+            Some(package.to_string())
+        };
+        (library, primary_package)
     } else {
-        Some(PathBuf::from(path))
+        let resolved = cached_library.expect("cached library exists when R resolution is skipped");
+        (Some(resolved.library), resolved.primary_package)
     };
-    let package = package_result.trim();
-    let primary_package = if package.is_empty() {
-        None
+    let python = if resolve_python {
+        let path = python_result.trim();
+        if path.is_empty() {
+            return Err("Python environment resolver did not return a Python path".into());
+        }
+        let path = PathBuf::from(path);
+        if !path.exists() {
+            return Err(format!(
+                "Python environment resolver returned a missing path `{}`",
+                path.display()
+            )
+            .into());
+        }
+        if let Some(request) = python_request {
+            python::write_cache(request, &path)?;
+        }
+        Some(path)
     } else {
-        Some(package.to_string())
+        cached_python
     };
 
     Ok(ResolvedLibrary {
         library,
         primary_package,
+        python,
     })
 }
 
@@ -528,6 +651,7 @@ fn run_user_code(
     source: &RunSource,
     rscript: &OsStr,
     library: Option<&Path>,
+    python: Option<&Path>,
     rscript_args: &[String],
     script_args: &[String],
     isolated: bool,
@@ -536,6 +660,7 @@ fn run_user_code(
         RunSource::Script(script) => run_script(
             rscript,
             library,
+            python,
             RscriptSource::Script(script),
             rscript_args,
             script_args,
@@ -544,6 +669,7 @@ fn run_user_code(
         RunSource::Expressions(expressions) => run_script(
             rscript,
             library,
+            python,
             RscriptSource::Expressions(expressions),
             rscript_args,
             script_args,
@@ -552,6 +678,7 @@ fn run_user_code(
         RunSource::Stdin => run_script(
             rscript,
             library,
+            python,
             RscriptSource::Stdin,
             rscript_args,
             script_args,
@@ -584,6 +711,7 @@ fn run_user_code(
 fn run_script(
     rscript: &OsStr,
     library: Option<&Path>,
+    python: Option<&Path>,
     source: RscriptSource<'_>,
     rscript_args: &[String],
     script_args: &[String],
@@ -609,6 +737,10 @@ fn run_script(
     if let Some(lib) = library {
         cmd.env("R_LIBS", lib);
     }
+    if let Some(python) = python {
+        cmd.env("RETICULATE_PYTHON", python);
+        activate_python_env(&mut cmd, python)?;
+    }
 
     if isolated {
         // Drop the user library so the run can't borrow undeclared packages from
@@ -630,6 +762,34 @@ fn run_script(
         let status = cmd.status().map_err(|e| spawn_error(rscript, e))?;
         Ok(status.code().unwrap_or(1))
     }
+}
+
+fn activate_python_env(cmd: &mut Command, python: &Path) -> Result<(), Box<dyn Error>> {
+    let Some(bin_dir) = python.parent() else {
+        return Ok(());
+    };
+
+    let mut path_entries = vec![bin_dir.to_path_buf()];
+    if let Some(path) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&path));
+    }
+    let path = env::join_paths(path_entries)
+        .map_err(|e| format!("failed to activate Python environment: {e}"))?;
+    cmd.env("PATH", path);
+
+    if let Some(env_dir) = python_virtual_env(bin_dir) {
+        cmd.env("VIRTUAL_ENV", env_dir);
+        cmd.env_remove("PYTHONHOME");
+    }
+
+    Ok(())
+}
+
+fn python_virtual_env(bin_dir: &Path) -> Option<&Path> {
+    let name = bin_dir.file_name()?.to_str()?;
+    (name == "bin" || name.eq_ignore_ascii_case("Scripts"))
+        .then(|| bin_dir.parent())
+        .flatten()
 }
 
 /// The default Rscript executable to use when R is not selected explicitly.
@@ -853,6 +1013,58 @@ fn unique_path(dir: &Path, prefix: &str, ext: &str) -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     dir.join(format!("{prefix}-{}-{nanos}.{ext}", std::process::id()))
+}
+
+struct PrivateTempFile {
+    path: PathBuf,
+}
+
+impl PrivateTempFile {
+    fn write(path: PathBuf, contents: &str) -> Result<Self, Box<dyn Error>> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        set_private_open_options(&mut options);
+        let mut file = options
+            .open(&path)
+            .map_err(|e| format!("failed to create `{}`: {e}", path.display()))?;
+        set_private_file_permissions(&path)?;
+        file.write_all(contents.as_bytes())
+            .map_err(|e| format!("failed to write `{}`: {e}", path.display()))?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateTempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
+fn set_private_open_options(options: &mut fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(windows)]
+fn set_private_open_options(_options: &mut fs::OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("failed to set permissions on `{}`: {e}", path.display()).into())
+}
+
+#[cfg(windows)]
+fn set_private_file_permissions(_path: &Path) -> Result<(), Box<dyn Error>> {
+    Ok(())
 }
 
 /// Turn a failure to launch Rscript into an actionable message.

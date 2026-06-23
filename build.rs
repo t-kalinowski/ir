@@ -10,7 +10,6 @@ const R_VERSION_METADATA_FETCHED_AT_PATH: &str = "src/rig/r-versions-fetched-at.
 const R_VERSION_METADATA_PATH: &str = "src/rig/r-versions.json";
 const TOOLING_DRIVER_PATH: &str = "driver/tooling.R";
 const RESOLVE_DRIVER_PATH: &str = "driver/resolve.R";
-const PYTHON_RESOLVE_DRIVER_PATH: &str = "driver/resolve_python.R";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -19,17 +18,9 @@ fn main() {
     println!("cargo:rerun-if-changed={R_VERSION_METADATA_PATH}");
     println!("cargo:rerun-if-changed={TOOLING_DRIVER_PATH}");
     println!("cargo:rerun-if-changed={RESOLVE_DRIVER_PATH}");
-    println!("cargo:rerun-if-changed={PYTHON_RESOLVE_DRIVER_PATH}");
     println!(
         "cargo:rustc-env=IR_RESOLVE_DRIVER_FILE={}",
         driver_file_name("resolve", &[TOOLING_DRIVER_PATH, RESOLVE_DRIVER_PATH])
-    );
-    println!(
-        "cargo:rustc-env=IR_PYTHON_RESOLVE_DRIVER_FILE={}",
-        driver_file_name(
-            "resolve-python",
-            &[TOOLING_DRIVER_PATH, PYTHON_RESOLVE_DRIVER_PATH]
-        )
     );
 
     let json = fs::read_to_string(R_VERSION_METADATA_PATH)
