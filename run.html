@@ -339,6 +339,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
    
   <ul>
   <li><a href="#frontmatter-metadata" id="toc-frontmatter-metadata" class="nav-link active" data-scroll-target="#frontmatter-metadata">Frontmatter Metadata</a></li>
+  <li><a href="#python-environments" id="toc-python-environments" class="nav-link" data-scroll-target="#python-environments">Python environments</a></li>
   <li><a href="#inline-runs" id="toc-inline-runs" class="nav-link" data-scroll-target="#inline-runs">Inline runs</a></li>
   <li><a href="#isolation" id="toc-isolation" class="nav-link" data-scroll-target="#isolation">Isolation</a></li>
   </ul>
@@ -393,11 +394,41 @@ $ ./script.R</code></pre>
 <li><code>packages</code>: package refs resolved with pak.</li>
 <li><code>r-version</code>: an optional R version requirement selected from installed versions reported by rig.</li>
 <li><code>rscript</code>: an optional Rscript executable path or command.</li>
+<li><code>python-packages</code>: optional Python package specs resolved with reticulate’s uv environment helper.</li>
+<li><code>python-version</code>: an optional Python version requirement.</li>
+<li><code>python-exclude-newer</code>: an optional Python package snapshot date.</li>
 <li><code>isolated</code>: <code>true</code> disables the user library for the run.</li>
 <li><code>exclude-newer</code>: an optional <code>YYYY-MM-DD</code> date that resolves CRAN from the Posit Package Manager snapshot for that date. When no R selector is set, it also selects the latest R major.minor version available on that date.</li>
 </ul>
 <p>Snapshot date precedence is <code>--exclude-newer</code>, then <code>IR_EXCLUDE_NEWER</code>, then frontmatter <code>exclude-newer</code>. R selection precedence is command line, then environment, then frontmatter. Use either <code>rscript</code> or <code>r-version</code> within one layer, not both. Command-line and environment values are trimmed before use. An empty <code>--exclude-newer</code> or <code>IR_EXCLUDE_NEWER</code> overrides frontmatter <code>exclude-newer</code> and resolves latest packages. Future snapshot dates also resolve latest packages.</p>
 <p>Supported version specs include <code>pkg</code>, <code>pkg&gt;=1.0</code>, and <code>pkg==1.2</code>. Source refs are resolved with pak and then passed through to renv, including GitHub, GitLab, Bitbucket, git, URL, and local package refs in forms both tools accept. GitHub packages should use package refs such as <code>github::owner/repo@ref</code> or <code>github::owner/repo/subdir@ref</code>, not browser URLs copied from GitHub. Local packages may be written as <code>local::path</code>, as a bare file-system path in pak-supported forms such as <code>./path</code>, or with a package prefix such as <code>mypkg=local::C:/path</code> for Windows absolute paths. <code>packages</code> must be a YAML sequence; each sequence entry is one package ref. Omit <code>packages</code>, use <code>packages: []</code>, or use <code>packages: null</code> when no package refs are needed. Unknown keys are ignored after YAML parsing, so future metadata such as <code>sys-reqs</code> can be present before <code>ir</code> supports it.</p>
+</section>
+<section id="python-environments" class="level2">
+<h2 class="anchored" data-anchor-id="python-environments">Python environments</h2>
+<p>Use <code>python-packages</code> or <code>python-version</code> to ask <code>ir run</code> for a Python environment before launching the script. <code>ir</code> resolves the environment with <code>reticulate:::uv_get_or_create_env()</code> before launching the script:</p>
+<ul>
+<li>It activates the environment for subprocesses, like <code>source &lt;env&gt;/bin/activate</code> on Unix.</li>
+<li>It sets <code>RETICULATE_PYTHON</code> to the resolved Python executable.</li>
+</ul>
+<p>Declare <code>reticulate</code> under <code>packages</code> when the R script loads reticulate.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env -S ir run</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">#| packages:</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">#|   - reticulate</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">#| python-packages:</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="co">#|   - pandas</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">#|   - matplotlib</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="co">#| python-version: "3.11"</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co">#| exclude-newer: "2026-06-01"</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(reticulate)</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>pd <span class="ot">&lt;-</span> <span class="fu">import</span>(<span class="st">"pandas"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The activated environment also puts Python package executables on <code>PATH</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env -S ir run</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">#| python-packages:</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co">#|   - ruff</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">system2</span>(<span class="st">"ruff"</span>, <span class="st">"--version"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>When Python metadata is present, <code>exclude-newer</code> is also used during Python environment resolution unless <code>python-exclude-newer</code> is set. Set <code>python-exclude-newer</code> to <code>null</code> or <code>""</code> to use latest Python packages while keeping <code>exclude-newer</code> for R.</p>
 </section>
 <section id="inline-runs" class="level2">
 <h2 class="anchored" data-anchor-id="inline-runs">Inline runs</h2>

@@ -379,13 +379,14 @@ ul.task-list li input[type="checkbox"] {
   <span style="color: #555555;">[ARGS]...</span>  Rscript options, script path, and script arguments
 
 <span style="color: #5555FF; font-weight: bold;">Options:</span>
-  <span style="color: #00BBBB; font-weight: bold;">-e</span>, <span style="color: #00BBBB; font-weight: bold;">--expr</span><span style="color: #555555;"> &lt;EXPR&gt;</span>           Evaluate an inline R expression instead of a script file
-      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>            Add a dependency for this run; may be repeated
-      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>      Select the R version for this run with rig
-      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>     Select the Rscript executable
-      <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve packages from the Posit Package Manager snapshot at this date
-      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>              Disable the user library for this run
-  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                  Print help
+  <span style="color: #00BBBB; font-weight: bold;">-e</span>, <span style="color: #00BBBB; font-weight: bold;">--expr</span><span style="color: #555555;"> &lt;EXPR&gt;</span>                  Evaluate an inline R expression instead of a script file
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>                   Add a dependency for this run; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>             Select the R version for this run with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>            Select the Rscript executable
+      <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>         Resolve packages from the Posit Package Manager snapshot at this date
+      <span style="color: #00BBBB; font-weight: bold;">--python-exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve Python packages using this snapshot date
+      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>                     Disable the user library for this run
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                         Print help
 
 <span style="color: #5555FF; font-weight: bold;">Examples:</span>
   ir run script.R
@@ -415,13 +416,14 @@ ul.task-list li input[type="checkbox"] {
   <span style="color: #555555;">[QUARTO_ARGS]...</span>  Arguments passed to `quarto render`
 
 <span style="color: #5555FF; font-weight: bold;">Options:</span>
-      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>            Add a dependency for this render; may be repeated
-      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>      Select the R version for this render with rig
-      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>     Select the Rscript executable
-      <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve packages from the Posit Package Manager snapshot at this date
-      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>              Disable the user library for this render
-      <span style="color: #00BBBB; font-weight: bold;">--vanilla</span>               Pass --vanilla to the Rscript used by Quarto
-  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                  Print help
+      <span style="color: #00BBBB; font-weight: bold;">--with</span><span style="color: #555555;"> &lt;PKG&gt;</span>                   Add a dependency for this render; may be repeated
+      <span style="color: #00BBBB; font-weight: bold;">--r-version</span><span style="color: #555555;"> &lt;SPEC&gt;</span>             Select the R version for this render with rig
+      <span style="color: #00BBBB; font-weight: bold;">--rscript</span><span style="color: #555555;"> &lt;RSCRIPT&gt;</span>            Select the Rscript executable
+      <span style="color: #00BBBB; font-weight: bold;">--exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>         Resolve packages from the Posit Package Manager snapshot at this date
+      <span style="color: #00BBBB; font-weight: bold;">--python-exclude-newer</span><span style="color: #555555;"> &lt;DATE&gt;</span>  Resolve Python packages using this snapshot date
+      <span style="color: #00BBBB; font-weight: bold;">--isolated</span>                     Disable the user library for this render
+      <span style="color: #00BBBB; font-weight: bold;">--vanilla</span>                      Pass --vanilla to the Rscript used by Quarto
+  <span style="color: #00BBBB; font-weight: bold;">-h</span>, <span style="color: #00BBBB; font-weight: bold;">--help</span>                         Print help
 
 <span style="color: #5555FF; font-weight: bold;">Examples:</span>
   ir render report.qmd
