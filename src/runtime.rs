@@ -418,7 +418,8 @@ fn resolve_library_inner(
     if let (Some(request), Some(result_file), Some(packages_file)) =
         (python_request, &python_result_file, &python_packages_file)
     {
-        cmd.env("IR_PYTHON_RESULT_FILE", result_file)
+        cmd.env_remove("PYTHONHOME")
+            .env("IR_PYTHON_RESULT_FILE", result_file)
             .env("IR_PYTHON_PACKAGES_FILE", packages_file);
         if let Some(python_version) = &request.python_version {
             cmd.env("IR_PYTHON_VERSION", python_version);

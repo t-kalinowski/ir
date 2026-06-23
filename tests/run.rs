@@ -545,6 +545,10 @@ cat("ignored\n")
         &format!(
             "#!/bin/sh\n\
 if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ -n \"${{PYTHONHOME:-}}\" ]; then\n\
+    echo \"resolver inherited PYTHONHOME=$PYTHONHOME\" >&2\n\
+    exit 1\n\
+  fi\n\
   mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
   printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
   if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
