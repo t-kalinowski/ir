@@ -1,4 +1,6 @@
 use std::error::Error;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::path::Path;
 
 use super::rig_client::InstalledR;
 
@@ -59,7 +61,7 @@ pub(crate) fn select_installed_r<'a>(
     installed
         .iter()
         .filter(|version| requirement.matches_installed(version))
-        .max_by(|a, b| compare_versions(&a.version, &b.version))
+        .max_by(|a, b| compare_installed_r(a, b))
 }
 
 pub(crate) fn rig_install_hint(requirement: &VersionRequirement) -> Option<&str> {
@@ -152,6 +154,32 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
         (Some(a), Some(b)) => compare_version_parts(&a, &b),
         _ => a.cmp(b),
     }
+}
+
+fn compare_installed_r(a: &InstalledR, b: &InstalledR) -> std::cmp::Ordering {
+    compare_versions(&a.version, &b.version)
+        .then_with(|| a.is_default.cmp(&b.is_default))
+        .then_with(|| looks_like_arm64_macos_r(a).cmp(&looks_like_arm64_macos_r(b)))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn looks_like_arm64_macos_r(installed: &InstalledR) -> bool {
+    installed.name.contains("-arm64")
+        || installed
+            .path
+            .as_deref()
+            .map(path_contains_arm64)
+            .unwrap_or(false)
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+fn looks_like_arm64_macos_r(_installed: &InstalledR) -> bool {
+    false
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn path_contains_arm64(path: &Path) -> bool {
+    path.to_string_lossy().contains("-arm64")
 }
 
 fn compare_version_parts(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
