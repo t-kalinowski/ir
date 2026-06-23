@@ -1,8 +1,9 @@
 use std::env;
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,17 +39,23 @@ pub(crate) fn request(
         None
     };
     let source = cache_source(python.exclude_newer.as_deref())?;
-    let marker = (packages
+    let uv_config_parts = uv_config_cache_key_parts();
+    let marker = if packages
         .iter()
         .all(|package| python_package_spec_cacheable(package))
-        && python_resolver_env_cacheable())
-    .then(|| {
-        cache_dir.join("python").join(cache_key(
-            &packages,
-            python.python_version.as_deref(),
-            python.exclude_newer.as_deref(),
-        ))
-    });
+        && python_resolver_env_cacheable()
+    {
+        uv_config_parts.map(|parts| {
+            cache_dir.join("python").join(cache_key(
+                &packages,
+                python.python_version.as_deref(),
+                python.exclude_newer.as_deref(),
+                &parts,
+            ))
+        })
+    } else {
+        None
+    };
 
     Ok(Some(EnvRequest {
         packages,
@@ -179,10 +186,89 @@ fn python_resolver_env_var(name: &OsStr) -> bool {
         .is_some_and(|name| name.starts_with("UV_") || name == "RETICULATE_UV")
 }
 
+fn uv_config_cache_key_parts() -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    for (scope, path) in uv_config_files() {
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        }
+
+        let contents = fs::read(&path).ok()?;
+        parts.push(format!("uv-config-{scope}-path: {}", path.display()));
+        parts.push(format!(
+            "uv-config-{scope}-sha256: {}",
+            sha256_bytes(&contents)
+        ));
+    }
+    Some(parts)
+}
+
+fn uv_config_files() -> Vec<(&'static str, PathBuf)> {
+    let mut files = Vec::new();
+    if let Some(path) = user_uv_config_file() {
+        files.push(("user", path));
+    }
+    if let Some(path) = system_uv_config_file() {
+        files.push(("system", path));
+    }
+    files
+}
+
+fn env_os_nonempty(name: &str) -> Option<OsString> {
+    env::var_os(name).filter(|value| !value.is_empty())
+}
+
+#[cfg(not(windows))]
+fn user_uv_config_file() -> Option<PathBuf> {
+    env_os_nonempty("XDG_CONFIG_HOME")
+        .map(|config_home| PathBuf::from(config_home).join("uv").join("uv.toml"))
+        .or_else(|| {
+            env_os_nonempty("HOME").map(|home| {
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("uv")
+                    .join("uv.toml")
+            })
+        })
+}
+
+#[cfg(windows)]
+fn user_uv_config_file() -> Option<PathBuf> {
+    env_os_nonempty("APPDATA").map(|appdata| PathBuf::from(appdata).join("uv").join("uv.toml"))
+}
+
+#[cfg(not(windows))]
+fn system_uv_config_file() -> Option<PathBuf> {
+    let dirs = env_os_nonempty("XDG_CONFIG_DIRS").unwrap_or_else(|| OsString::from("/etc/xdg"));
+    for dir in env::split_paths(&dirs) {
+        let path = dir.join("uv").join("uv.toml");
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let path = PathBuf::from("/etc/uv/uv.toml");
+    path.is_file().then_some(path)
+}
+
+#[cfg(windows)]
+fn system_uv_config_file() -> Option<PathBuf> {
+    env_os_nonempty("SYSTEMDRIVE").map(|drive| {
+        PathBuf::from(drive)
+            .join("ProgramData")
+            .join("uv")
+            .join("uv.toml")
+    })
+}
+
 fn cache_key(
     packages: &[String],
     python_version: Option<&str>,
     exclude_newer: Option<&str>,
+    uv_config_parts: &[String],
 ) -> String {
     let mut parts = packages.to_vec();
     parts.sort();
@@ -196,6 +282,7 @@ fn cache_key(
             .map(|date| format!("exclude-newer: {date}"))
             .unwrap_or_else(|| "latest".to_string()),
     );
+    parts.extend(uv_config_parts.iter().cloned());
     sha256_fields(&parts)
 }
 
@@ -252,7 +339,11 @@ fn sha256_fields(parts: &[String]) -> String {
     for part in parts {
         writeln!(&mut input, "{part}").expect("writing to a String cannot fail");
     }
-    let hash = Sha256::digest(input.as_bytes());
+    sha256_bytes(input.as_bytes())
+}
+
+fn sha256_bytes(input: &[u8]) -> String {
+    let hash = Sha256::digest(input);
     let mut output = String::with_capacity(hash.len() * 2);
     for byte in hash {
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");

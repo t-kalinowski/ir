@@ -1043,6 +1043,121 @@ printf 'ir.fixture=python-uv-env-cache\\n'\n",
 
 #[cfg(unix)]
 #[test]
+fn run_python_uv_config_changes_python_resolution_cache() {
+    let cache_dir = temp_dir("ir-run-python-uv-config-cache");
+    let config_home = temp_dir("ir-run-python-uv-config-home");
+    let bin_dir = temp_dir("ir-run-python-uv-config-bin");
+    let script = temp_path("ir-run-python-uv-config", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let resolver_count = temp_path("ir-run-python-uv-config-count", "txt");
+    let configs_seen = temp_path("ir-run-python-uv-config-seen", "txt");
+    let uv_dir = config_home.join("uv");
+    let uv_config = uv_dir.join("uv.toml");
+
+    fs::create_dir_all(&uv_dir).unwrap();
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  cat > /dev/null\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n\
+    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n\
+    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLUTION_MARKER\"\n\
+  fi\n\
+  if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+    printf 'python\\n' >> {}\n\
+    cat \"$XDG_CONFIG_HOME/uv/uv.toml\" >> {}\n\
+    printf '\\n---\\n' >> {}\n\
+    printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  fi\n\
+  exit 0\n\
+fi\n\
+if [ -n \"${{IR_PYTHON_RESULT_FILE:-}}\" ]; then\n\
+  printf 'python\\n' >> {}\n\
+  cat \"$XDG_CONFIG_HOME/uv/uv.toml\" >> {}\n\
+  printf '\\n---\\n' >> {}\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-uv-config-cache\\n'\n",
+            resolver_count.display(),
+            configs_seen.display(),
+            configs_seen.display(),
+            fake_python.display(),
+            resolver_count.display(),
+            configs_seen.display(),
+            configs_seen.display(),
+            fake_python.display()
+        ),
+    );
+
+    for config in [
+        "[[index]]\nurl = \"https://first.example/simple\"\ndefault = true\n",
+        "[[index]]\nurl = \"https://second.example/simple\"\ndefault = true\n",
+        "[[index]]\nurl = \"https://second.example/simple\"\ndefault = true\n",
+    ] {
+        fs::write(&uv_config, config).unwrap();
+
+        let mut command = ir();
+        remove_uv_resolver_env(&mut command);
+        let out = command
+            .env("IR_CACHE_DIR", &cache_dir)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(["run", "--rscript"])
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_success(&out);
+        assert_stdout_contains(&out, "ir.fixture=python-uv-config-cache");
+    }
+
+    let count = fs::read_to_string(&resolver_count).unwrap();
+    assert_eq!(
+        count.lines().count(),
+        2,
+        "uv.toml changes should invalidate the Python marker, unchanged uv.toml should reuse it\n{count}"
+    );
+    let configs = fs::read_to_string(&configs_seen).unwrap();
+    assert!(
+        configs.contains("https://first.example/simple"),
+        "{configs}"
+    );
+    assert!(
+        configs.contains("https://second.example/simple"),
+        "{configs}"
+    );
+}
+
+#[cfg(unix)]
+fn remove_uv_resolver_env(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("UV_") || name == "RETICULATE_UV")
+        {
+            command.env_remove(name);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn run_python_only_resolution_clears_inherited_r_resolver_env() {
     let cache_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-cache");
     let bin_dir = temp_dir("ir-run-python-only-clears-r-resolver-env-bin");
