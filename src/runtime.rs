@@ -363,8 +363,7 @@ fn resolve_library_inner(
         } else {
             request.packages.join("\n") + "\n"
         };
-        fs::write(&path, contents)?;
-        Some(path)
+        Some(PrivateTempFile::write(path, &contents)?)
     } else {
         None
     };
@@ -420,7 +419,7 @@ fn resolve_library_inner(
     {
         cmd.env_remove("PYTHONHOME")
             .env("IR_PYTHON_RESULT_FILE", result_file)
-            .env("IR_PYTHON_PACKAGES_FILE", packages_file);
+            .env("IR_PYTHON_PACKAGES_FILE", packages_file.path());
         if let Some(python_version) = &request.python_version {
             cmd.env("IR_PYTHON_VERSION", python_version);
         }
@@ -461,7 +460,7 @@ fn resolve_library_inner(
             result
         })
         .unwrap_or_default();
-    let _ = python_packages_file.as_ref().map(fs::remove_file);
+    drop(python_packages_file);
 
     if !status.success() {
         return Err("dependency resolution failed".into());
@@ -966,6 +965,58 @@ fn unique_path(dir: &Path, prefix: &str, ext: &str) -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     dir.join(format!("{prefix}-{}-{nanos}.{ext}", std::process::id()))
+}
+
+struct PrivateTempFile {
+    path: PathBuf,
+}
+
+impl PrivateTempFile {
+    fn write(path: PathBuf, contents: &str) -> Result<Self, Box<dyn Error>> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        set_private_open_options(&mut options);
+        let mut file = options
+            .open(&path)
+            .map_err(|e| format!("failed to create `{}`: {e}", path.display()))?;
+        set_private_file_permissions(&path)?;
+        file.write_all(contents.as_bytes())
+            .map_err(|e| format!("failed to write `{}`: {e}", path.display()))?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateTempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
+fn set_private_open_options(options: &mut fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(windows)]
+fn set_private_open_options(_options: &mut fs::OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("failed to set permissions on `{}`: {e}", path.display()).into())
+}
+
+#[cfg(windows)]
+fn set_private_file_permissions(_path: &Path) -> Result<(), Box<dyn Error>> {
+    Ok(())
 }
 
 /// Turn a failure to launch Rscript into an actionable message.

@@ -214,12 +214,15 @@ ir_resolve_main <- function() {
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
 
   if (!is.null(result_file)) {
-    ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
-    ## before any secretbase/pak/renv use below, including Linux PPM repo
-    ## normalization through pak.
-    ir_ensure_tooling(cache_dir = cache_dir)
+    ## 0. Bootstrap pak before repository normalization. On Linux PPM URLs are
+    ## resolved through pak::repo_resolve(), so pak must be available first.
+    ir_ensure_tooling(packages = "pak", cache_dir = cache_dir)
     repos <- ir_repos(exclude_newer)
     options(repos = repos)
+
+    ## Ensure the rest of the resolver's own tooling is available before any
+    ## secretbase/pak/renv use below.
+    ir_ensure_tooling(cache_dir = cache_dir)
   }
 
   if (!is.null(python_result_file)) {

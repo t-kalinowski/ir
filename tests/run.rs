@@ -698,6 +698,123 @@ printf 'path_first=%s\\n' \"${{PATH%%:*}}\"\n",
 
 #[cfg(unix)]
 #[test]
+fn run_python_packages_file_is_private_and_removed() {
+    let cache_dir = temp_dir("ir-run-python-private-packages-file-cache");
+    let bin_dir = temp_dir("ir-run-python-private-packages-file-bin");
+    let script = temp_path("ir-run-python-private-packages-file", "R");
+    let fake_python = bin_dir.join("python");
+    let rscript = bin_dir.join("Rscript");
+    let mode_file = temp_path("ir-run-python-private-packages-file-mode", "txt");
+    let path_file = temp_path("ir-run-python-private-packages-file-path", "txt");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+    write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &rscript,
+        &format!(
+            "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ -z \"${{IR_PYTHON_PACKAGES_FILE:-}}\" ]; then\n\
+    echo expected Python packages file >&2\n\
+    exit 1\n\
+  fi\n\
+  mode=$(stat -f '%Lp' \"$IR_PYTHON_PACKAGES_FILE\" 2>/dev/null || stat -c '%a' \"$IR_PYTHON_PACKAGES_FILE\")\n\
+  printf '%s\\n' \"$mode\" > {}\n\
+  printf '%s\\n' \"$IR_PYTHON_PACKAGES_FILE\" > {}\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-private-packages-file\\n'\n",
+            mode_file.display(),
+            path_file.display(),
+            fake_python.display()
+        ),
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["run", "--rscript"])
+        .arg(&rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=python-private-packages-file");
+
+    let mode = fs::read_to_string(&mode_file).unwrap();
+    assert_eq!(mode.trim(), "600", "{mode}");
+    let packages_file = fs::read_to_string(&path_file).unwrap();
+    let packages_file = Path::new(packages_file.trim());
+    assert!(
+        !packages_file.exists(),
+        "Python packages temp file should be removed after resolver exits: {}",
+        packages_file.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_python_packages_file_is_removed_when_rscript_spawn_fails() {
+    let cache_dir = temp_dir("ir-run-python-packages-file-spawn-fail-cache");
+    let tmp_dir = temp_dir("ir-run-python-packages-file-spawn-fail-tmp");
+    let script = temp_path("ir-run-python-packages-file-spawn-fail", "R");
+    let missing_rscript = temp_path("ir-run-python-packages-file-missing-rscript", "sh");
+
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+
+cat("ignored\n")
+"#,
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("TMPDIR", &tmp_dir)
+        .args(["run", "--rscript"])
+        .arg(&missing_rscript)
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert!(
+        !out.status.success(),
+        "missing Rscript should fail\n{}",
+        output_text(&out)
+    );
+
+    let leftovers = fs::read_dir(&tmp_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("ir-python-packages-"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "Python packages temp files should be removed after spawn failure: {leftovers:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_python_exclude_newer_override_uses_normalized_latest() {
     for exclude_newer in [" \t ", "2999-01-01"] {
         let cache_dir = temp_dir("ir-run-python-exclude-newer-latest-cache");

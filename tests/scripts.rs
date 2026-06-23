@@ -299,6 +299,21 @@ fn warm_renv_cache_rewrites_plain_ppm_latest_with_real_binary_package() {
 }
 
 #[test]
+fn resolver_tooling_source_installs_are_linux_only() {
+    let out = Command::new("Rscript")
+        .current_dir(repo_root())
+        .args([
+            "--vanilla",
+            "-e",
+            "source('driver/tooling.R'); stopifnot(ir_source_tooling_platform('Linux')); stopifnot(!ir_source_tooling_platform('Darwin')); stopifnot(!ir_source_tooling_platform('Windows'))",
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+}
+
+#[test]
 fn install_dev_deps_scripts_persist_dynamic_test_r_metadata() {
     let sh_path = repo_root().join("scripts/install-dev-deps.sh");
     let sh = fs::read_to_string(&sh_path)
