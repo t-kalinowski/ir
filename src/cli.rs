@@ -114,6 +114,13 @@ fn run_command() -> ClapCommand {
                 .help("Resolve packages from the Posit Package Manager snapshot at this date"),
         )
         .arg(
+            Arg::new("python-exclude-newer")
+                .long("python-exclude-newer")
+                .value_name("DATE")
+                .num_args(1)
+                .help("Resolve Python packages using this snapshot date"),
+        )
+        .arg(
             Arg::new("isolated")
                 .long("isolated")
                 .action(ArgAction::SetTrue)
@@ -164,6 +171,13 @@ fn render_command() -> ClapCommand {
                 .value_name("DATE")
                 .num_args(1)
                 .help("Resolve packages from the Posit Package Manager snapshot at this date"),
+        )
+        .arg(
+            Arg::new("python-exclude-newer")
+                .long("python-exclude-newer")
+                .value_name("DATE")
+                .num_args(1)
+                .help("Resolve Python packages using this snapshot date"),
         )
         .arg(
             Arg::new("isolated")
@@ -372,6 +386,7 @@ pub(crate) struct RunArgs {
     pub(crate) r_requirement: Option<String>,
     pub(crate) rscript: Option<String>,
     pub(crate) exclude_newer: Option<String>,
+    pub(crate) python_exclude_newer: Option<String>,
     pub(crate) source: RunSource,
     pub(crate) script_args: Vec<String>,
     pub(crate) isolated: bool,
@@ -382,6 +397,7 @@ pub(crate) struct RenderArgs {
     pub(crate) r_requirement: Option<String>,
     pub(crate) rscript: Option<String>,
     pub(crate) exclude_newer: Option<String>,
+    pub(crate) python_exclude_newer: Option<String>,
     pub(crate) source: RenderSource,
     pub(crate) render_args: Vec<String>,
     pub(crate) isolated: bool,
@@ -413,8 +429,9 @@ pub(crate) struct ToolInstallArgs {
 /// args.
 ///
 /// `-e <expr>`, `--with <spec>`, `--r-version <spec>`, `--rscript <path>`,
-/// `--exclude-newer <date>` and `--isolated` are `ir`-level flags handled here. Any other
-/// `-...` argument is an Rscript option, forwarded verbatim to the user-code
+/// `--exclude-newer <date>`, `--python-exclude-newer <date>` and `--isolated`
+/// are `ir`-level flags handled here. Any other `-...` argument is an Rscript
+/// option, forwarded verbatim to the user-code
 /// phase. Scanning stops at the script path unless `-e` was given, in which case
 /// scanning stops after the last `-e <expr>` pair. Everything after the source
 /// boundary is passed to user code as program args.
@@ -424,6 +441,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error
     let mut r_requirement = None;
     let mut rscript = None;
     let mut exclude_newer = None;
+    let mut python_exclude_newer = None;
     let mut expressions = Vec::new();
     let mut isolated = false;
     let mut iter = args.into_iter();
@@ -471,6 +489,13 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error
             exclude_newer = Some(value);
         } else if let Some(value) = arg.strip_prefix("--exclude-newer=") {
             exclude_newer = Some(value.to_string());
+        } else if arg == "--python-exclude-newer" {
+            let value = iter.next().ok_or(
+                "`--python-exclude-newer` requires a date (try `ir run --python-exclude-newer 2024-06-01 script.R`)",
+            )?;
+            python_exclude_newer = Some(value);
+        } else if let Some(value) = arg.strip_prefix("--python-exclude-newer=") {
+            python_exclude_newer = Some(value.to_string());
         } else if arg == "--isolated" {
             isolated = true;
         } else if arg == "-" {
@@ -505,6 +530,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<RunArgs, Box<dyn Error
         r_requirement,
         rscript,
         exclude_newer,
+        python_exclude_newer,
         source,
         script_args,
         isolated,
@@ -518,6 +544,7 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
     let mut r_requirement = None;
     let mut rscript = None;
     let mut exclude_newer = None;
+    let mut python_exclude_newer = None;
     let mut isolated = false;
     let mut vanilla = false;
     let mut iter = args.into_iter();
@@ -556,6 +583,13 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
             exclude_newer = Some(value);
         } else if let Some(value) = arg.strip_prefix("--exclude-newer=") {
             exclude_newer = Some(value.to_string());
+        } else if arg == "--python-exclude-newer" {
+            let value = iter.next().ok_or(
+                "`--python-exclude-newer` requires a date (try `ir render --python-exclude-newer 2024-06-01 report.qmd`)",
+            )?;
+            python_exclude_newer = Some(value);
+        } else if let Some(value) = arg.strip_prefix("--python-exclude-newer=") {
+            python_exclude_newer = Some(value.to_string());
         } else if arg == "--isolated" {
             isolated = true;
         } else if arg == "--vanilla" {
@@ -579,6 +613,7 @@ pub(crate) fn parse_render_args(args: Vec<String>) -> Result<RenderArgs, Box<dyn
         r_requirement,
         rscript,
         exclude_newer,
+        python_exclude_newer,
         source: RenderSource::from_source_arg(source)?,
         render_args,
         isolated,

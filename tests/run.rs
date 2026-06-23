@@ -651,6 +651,112 @@ printf 'ir.fixture=python-exclude-newer-latest\\n'\n",
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn run_python_exclude_newer_can_override_r_exclude_newer() {
+    struct Case<'a> {
+        name: &'a str,
+        python_exclude_newer: &'a str,
+        cli_args: &'a [&'a str],
+        expected_python_exclude_newer: &'a str,
+    }
+
+    let cases = [
+        Case {
+            name: "frontmatter",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &[],
+            expected_python_exclude_newer: "2024-02-02",
+        },
+        Case {
+            name: "frontmatter-null",
+            python_exclude_newer: "#| python-exclude-newer: null\n",
+            cli_args: &[],
+            expected_python_exclude_newer: "",
+        },
+        Case {
+            name: "cli",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &["--python-exclude-newer", "2024-03-03"],
+            expected_python_exclude_newer: "2024-03-03",
+        },
+        Case {
+            name: "cli-empty",
+            python_exclude_newer: r#"#| python-exclude-newer: "2024-02-02"
+"#,
+            cli_args: &["--python-exclude-newer", " \t "],
+            expected_python_exclude_newer: "",
+        },
+    ];
+
+    for case in cases {
+        let cache_dir = temp_dir(&format!("ir-run-python-exclude-newer-{}-cache", case.name));
+        let bin_dir = temp_dir(&format!("ir-run-python-exclude-newer-{}-bin", case.name));
+        let script = temp_path(&format!("ir-run-python-exclude-newer-{}", case.name), "R");
+        let fake_python = bin_dir.join("python");
+        let rscript = bin_dir.join("Rscript");
+
+        fs::write(
+            &script,
+            format!(
+                r#"#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - pandas
+#| exclude-newer: "2024-01-01"
+{}
+
+cat("ignored\n")
+"#,
+                case.python_exclude_newer
+            ),
+        )
+        .unwrap();
+        write_executable(&fake_python, "#!/bin/sh\nexit 0\n");
+        write_executable(
+            &rscript,
+            &format!(
+                "#!/bin/sh\n\
+if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n\
+  if [ \"${{IR_EXCLUDE_NEWER:-}}\" != \"2024-01-01\" ]; then\n\
+    echo \"unexpected R exclude-newer: $IR_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  if [ \"${{IR_PYTHON_EXCLUDE_NEWER:-}}\" != \"{}\" ]; then\n\
+    echo \"unexpected Python exclude-newer: $IR_PYTHON_EXCLUDE_NEWER\" >&2\n\
+    exit 1\n\
+  fi\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  printf '%s\\n' {} > \"$IR_PYTHON_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+printf 'ir.fixture=python-exclude-newer-{}\\n'\n",
+                case.expected_python_exclude_newer,
+                fake_python.display(),
+                case.name
+            ),
+        );
+
+        let mut command = ir();
+        command.env("IR_CACHE_DIR", &cache_dir).arg("run");
+        command.args(case.cli_args);
+        let out = command
+            .arg("--rscript")
+            .arg(&rscript)
+            .arg(&script)
+            .output()
+            .unwrap();
+
+        assert_success(&out);
+        assert_stdout_contains(
+            &out,
+            &format!("ir.fixture=python-exclude-newer-{}", case.name),
+        );
+    }
+}
+
 #[test]
 fn cache_dir_reports_override_and_process_env_defaults() {
     let cache_dir = temp_dir("ir-cache-override");

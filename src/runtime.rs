@@ -35,11 +35,12 @@ pub(crate) fn cmd_run(
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
     exclude_newer: Option<&str>,
+    python_exclude_newer: Option<&str>,
     script_args: &[String],
     isolated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_override(&mut spec, exclude_newer)?;
+    apply_exclude_newer_overrides(&mut spec, exclude_newer, python_exclude_newer)?;
     spec.dependencies.extend(with_deps.iter().cloned());
     let isolated = isolated || spec.isolated;
     let rscript = rscript_for_spec(&spec, r_selection)?;
@@ -66,12 +67,13 @@ pub(crate) fn cmd_render(
     with_deps: &[String],
     r_selection: RSelectionArgs<'_>,
     exclude_newer: Option<&str>,
+    python_exclude_newer: Option<&str>,
     render_args: &[String],
     isolated: bool,
     vanilla: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut spec = source.script_spec()?;
-    apply_exclude_newer_override(&mut spec, exclude_newer)?;
+    apply_exclude_newer_overrides(&mut spec, exclude_newer, python_exclude_newer)?;
     spec.dependencies.extend(with_deps.iter().cloned());
     spec.quarto_render = true;
     let isolated = isolated || spec.isolated;
@@ -183,40 +185,60 @@ fn env_optional_trimmed_string(name: &str) -> Result<Option<String>, Box<dyn Err
     Ok((!value.is_empty()).then(|| value.to_string()))
 }
 
-fn apply_exclude_newer_override(
+fn apply_exclude_newer_overrides(
     spec: &mut RuntimeSpec,
     cli_exclude_newer: Option<&str>,
+    cli_python_exclude_newer: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
-    if let Some(exclude_newer) = cli_exclude_newer {
-        let normalized = normalize_exclude_newer_override(exclude_newer)?;
-        spec.exclude_newer = normalized.clone();
-        set_python_exclude_newer(spec, normalized.as_deref());
-        return Ok(());
-    }
-
-    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
-        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
-        let normalized = normalize_exclude_newer_override(&exclude_newer)?;
-        spec.exclude_newer = normalized.clone();
-        set_python_exclude_newer(spec, normalized.as_deref());
-        return Ok(());
-    }
-
-    if let Some(exclude_newer) = spec.exclude_newer.take() {
-        let normalized = normalize_exclude_newer_override(&exclude_newer)?;
-        spec.exclude_newer = normalized.clone();
-        set_python_exclude_newer(spec, normalized.as_deref());
-    }
+    let r_exclude_newer = selected_exclude_newer(spec.exclude_newer.take(), cli_exclude_newer)?;
+    spec.exclude_newer = r_exclude_newer.clone();
+    set_python_exclude_newer(spec, cli_python_exclude_newer, r_exclude_newer.as_deref())?;
 
     Ok(())
 }
 
-fn set_python_exclude_newer(spec: &mut RuntimeSpec, exclude_newer: Option<&str>) {
+fn selected_exclude_newer(
+    frontmatter_exclude_newer: Option<String>,
+    cli_exclude_newer: Option<&str>,
+) -> Result<Option<String>, Box<dyn Error>> {
+    if let Some(exclude_newer) = cli_exclude_newer {
+        return normalize_exclude_newer_override(exclude_newer);
+    }
+
+    if let Some(exclude_newer) = env::var_os("IR_EXCLUDE_NEWER") {
+        let exclude_newer = env_string("IR_EXCLUDE_NEWER", exclude_newer)?;
+        return normalize_exclude_newer_override(&exclude_newer);
+    }
+
+    frontmatter_exclude_newer
+        .as_deref()
+        .map(normalize_exclude_newer_override)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn set_python_exclude_newer(
+    spec: &mut RuntimeSpec,
+    cli_python_exclude_newer: Option<&str>,
+    default_exclude_newer: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     let Some(python) = spec.python.as_mut() else {
-        return;
+        return Ok(());
     };
 
-    python.exclude_newer = exclude_newer.map(str::to_string);
+    if let Some(exclude_newer) = cli_python_exclude_newer {
+        python.exclude_newer = normalize_exclude_newer_override(exclude_newer)?;
+        return Ok(());
+    }
+
+    if python.exclude_newer_explicit {
+        let exclude_newer = python.exclude_newer.take().unwrap_or_default();
+        python.exclude_newer = normalize_exclude_newer_override(&exclude_newer)?;
+        return Ok(());
+    }
+
+    python.exclude_newer = default_exclude_newer.map(str::to_string);
+    Ok(())
 }
 
 fn normalize_exclude_newer_override(value: &str) -> Result<Option<String>, Box<dyn Error>> {

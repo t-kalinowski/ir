@@ -39,6 +39,7 @@ The script frontmatter supports:
 - `rscript`: an optional Rscript executable path or command.
 - `python-packages`: optional Python package specs resolved with reticulate's uv environment helper.
 - `python-version`: an optional Python version requirement.
+- `python-exclude-newer`: an optional Python package snapshot date.
 - `isolated`: `true` disables the user library for the run.
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date. When no R selector is set, it also selects the latest R major.minor version available on that date.
 
@@ -66,7 +67,6 @@ Use `python-packages` or `python-version` to ask `ir run` for a Python environme
 - It sets `RETICULATE_PYTHON` to the resolved Python executable.
 
 Declare `reticulate` under `packages` when the R script loads reticulate.
-`ir` records the resolved Python path in a separate cache entry from the R library; if the recorded path is missing, Python is resolved again.
 
 ```r
 #!/usr/bin/env -S ir run
@@ -82,7 +82,18 @@ library(reticulate)
 pd <- import("pandas")
 ```
 
-When Python metadata is present, `exclude-newer` is also used during Python environment resolution.
+The activated environment also puts Python package executables on `PATH`:
+
+```r
+#!/usr/bin/env -S ir run
+#| python-packages:
+#|   - ruff
+
+system2("ruff", "--version")
+```
+
+When Python metadata is present, `exclude-newer` is also used during Python environment resolution unless `python-exclude-newer` is set.
+Set `python-exclude-newer` to `null` or `""` to use latest Python packages while keeping `exclude-newer` for R.
 
 ## Inline runs
 

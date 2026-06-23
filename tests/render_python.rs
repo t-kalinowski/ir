@@ -33,6 +33,7 @@ ir:
     - pandas
   python-version: "3.11"
   exclude-newer: "2026-06-01"
+  python-exclude-newer: "2026-05-01"
 ---
 
 ```{python}
@@ -153,7 +154,7 @@ exit 1\n",
 
     let env = fs::read_to_string(&python_env).unwrap();
     assert!(env.contains("python_version=3.11"), "{env}");
-    assert!(env.contains("exclude_newer=2026-06-01"), "{env}");
+    assert!(env.contains("exclude_newer=2026-05-01"), "{env}");
 }
 
 #[cfg(unix)]
