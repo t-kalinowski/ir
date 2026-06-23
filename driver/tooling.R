@@ -8,6 +8,35 @@ ir_cache_dir <- function() {
   if (nzchar(env)) env else tools::R_user_dir("ir", "cache")
 }
 
+ir_configure_child_tempdir <- function(tmp = tempdir()) {
+  stopifnot(length(tmp) == 1L, nzchar(tmp), dir.exists(tmp))
+  tmp <- normalizePath(tmp, winslash = "/", mustWork = TRUE)
+  Sys.setenv(TMPDIR = tmp, TMP = tmp, TEMP = tmp)
+  invisible(tmp)
+}
+
+ir_close_pak_remote <- function(grace = 5000) {
+  if (!isNamespaceLoaded("pak")) return(invisible())
+  ns <- asNamespace("pak")
+  if (!exists("pkg_data", ns, inherits = FALSE)) return(invisible())
+
+  pkg_data <- get("pkg_data", ns, inherits = FALSE)
+  remote <- pkg_data[["remote"]]
+  if (is.null(remote)) return(invisible())
+  close <- remote[["close"]]
+  if (!is.function(close)) return(invisible())
+
+  tryCatch(
+    close(grace),
+    error = function(e) {
+      warning("could not close pak subprocess: ", conditionMessage(e),
+              call. = FALSE)
+    }
+  )
+  pkg_data[["remote"]] <- NULL
+  invisible()
+}
+
 ## --- resolver tooling bootstrap ---------------------------------------------
 
 # Packages the resolver itself needs. pak resolves dependencies, renv
@@ -102,7 +131,7 @@ ir_user_libs <- function() {
   normalizePath(user_libs, winslash = "/", mustWork = FALSE)
 }
 
-ir_tooling_package_r_minor <- function(path) {
+ir_tooling_package_runtime_ok <- function(path) {
   metadata <- file.path(path, "Meta", "package.rds")
   info <- if (file.exists(metadata)) {
     tryCatch(readRDS(metadata), error = function(e) NULL)
@@ -111,16 +140,25 @@ ir_tooling_package_r_minor <- function(path) {
   }
 
   built_r <- if (is.null(info)) character() else as.character(info$Built$R)
-  if (length(built_r))
-    built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
-  built_r
+  if (!length(built_r)) return(FALSE)
+
+  built_r <- strsplit(built_r[[1L]], ".", fixed = TRUE)[[1L]][1:2]
+  current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
+  if (!identical(built_r, current_r)) return(FALSE)
+
+  built_platform <- as.character(info$Built$Platform)
+  if (!length(built_platform) || is.na(built_platform[[1L]]) ||
+      !nzchar(built_platform[[1L]])) {
+    return(TRUE)
+  }
+
+  identical(built_platform[[1L]], R.version$platform)
 }
 
 ir_prune_wrong_r_minor_user_tooling <- function(packages) {
   user_libs <- ir_user_libs()
   if (!length(user_libs)) return(invisible())
 
-  current_r <- strsplit(as.character(getRversion()), ".", fixed = TRUE)[[1L]][1:2]
   bad_user_libs <- character()
 
   for (pkg in packages) {
@@ -129,7 +167,7 @@ ir_prune_wrong_r_minor_user_tooling <- function(packages) {
 
     pkg_lib <- normalizePath(dirname(path[[1L]]), winslash = "/",
                              mustWork = FALSE)
-    if (!identical(ir_tooling_package_r_minor(path[[1L]]), current_r))
+    if (!ir_tooling_package_runtime_ok(path[[1L]]))
       bad_user_libs <- c(bad_user_libs, pkg_lib)
   }
 

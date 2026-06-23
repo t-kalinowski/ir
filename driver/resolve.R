@@ -56,19 +56,51 @@ ir_resolve_refs <- function(refs) {
 
 ## --- repositories -----------------------------------------------------------
 
+ir_named_value <- function(values, name) {
+  if (is.null(values) || is.null(names(values)) || !(name %in% names(values)))
+    return(NULL)
+  unname(values[[name]])
+}
+
+ir_repo_resolve <- function(spec) {
+  pak::repo_resolve(spec)
+}
+
+ir_linux_host <- function()
+  identical(unname(Sys.info()[["sysname"]]), "Linux")
+
+ir_public_ppm_latest_url <- function(repo)
+  identical(sub("/+$", "", repo), "https://packagemanager.posit.co/cran/latest")
+
 ir_ppm_snapshot_url <- function(exclude_newer) {
-  sprintf("https://packagemanager.posit.co/cran/%s", exclude_newer)
+  if (!ir_linux_host())
+    return(sprintf("https://packagemanager.posit.co/cran/%s", exclude_newer))
+
+  unname(ir_repo_resolve(sprintf("PPM@%s", exclude_newer))[[1L]])
+}
+
+ir_ppm_latest_repos <- function() {
+  c(CRAN = ir_ppm_snapshot_url("latest"))
 }
 
 ir_repos <- function(exclude_newer = NULL, repos = getOption("repos")) {
   if (!is.null(exclude_newer))
     return(c(CRAN = ir_ppm_snapshot_url(exclude_newer)))
 
-  cran <- if (!is.null(repos)) repos[["CRAN"]] else NULL
-  if (is.null(cran) || is.na(cran) || !nzchar(cran) || identical(cran, "@CRAN@"))
-    c(CRAN = "https://cran.r-project.org")
-  else
-    repos
+  if (is.null(repos) || !length(repos))
+    return(ir_ppm_latest_repos())
+
+  if (is.null(names(repos))) {
+    if (length(repos) == 1L) names(repos) <- "CRAN"
+    else return(repos)
+  }
+
+  cran <- ir_named_value(repos, "CRAN")
+  if (is.null(cran) || is.na(cran) || !nzchar(cran) ||
+      identical(cran, "@CRAN@") || ir_public_ppm_latest_url(cran))
+    repos[["CRAN"]] <- ir_ppm_snapshot_url("latest")
+
+  repos
 }
 
 ## --- resolution cache -------------------------------------------------------
@@ -168,16 +200,18 @@ ir_install_specs <- function(res) {
 ## --- pipeline ---------------------------------------------------------------
 
 ir_resolve_main <- function() {
+  cache_dir <- ir_cache_dir()
+  ir_configure_child_tempdir()
+  on.exit(ir_close_pak_remote(), add = TRUE)
 
   ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
   ## before any secretbase/pak/renv use below.
-  ir_ensure_tooling()
+  ir_ensure_tooling(cache_dir = cache_dir)
 
   deps        <- readLines(file("stdin"), warn = FALSE)
   result_file <- ir_env_optional("IR_RESOLVE_RESULT_FILE")
   package_result_file <- ir_env_optional("IR_RESOLVE_PACKAGE_RESULT_FILE")
   stopifnot(!is.null(result_file))
-  cache_dir   <- ir_cache_dir()
 
   ## 1. Consume inputs parsed by Rust from script frontmatter
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
@@ -203,7 +237,10 @@ ir_resolve_main <- function() {
                                      quarto = quarto))
   }
   package_marker <- ir_env_optional("IR_PRIMARY_PACKAGE_MARKER")
-  if (is.null(package_marker) && !is.null(marker) && !is.null(primary_ref)) {
+  if (!is.null(package_result_file) &&
+      is.null(package_marker) &&
+      !is.null(marker) &&
+      !is.null(primary_ref)) {
     package_marker <- file.path(cache_dir, "resolutions",
                                 paste0(basename(marker), "-primary-",
                                        secretbase::sha256(primary_ref)))
