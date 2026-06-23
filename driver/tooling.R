@@ -86,27 +86,6 @@ ir_tooling_min_version <- function(package, min_versions = character()) {
   if (is.null(value)) NULL else value
 }
 
-ir_source_tooling_platform <- function(sysname = Sys.info()[["sysname"]])
-  identical(unname(sysname), "Linux")
-
-ir_with_source_tooling <- function(expr) {
-  if (!ir_source_tooling_platform()) return(force(expr))
-
-  old_platforms_env <- Sys.getenv("PKG_PLATFORMS", unset = NA_character_)
-  old_platforms_opt <- getOption("pkg.platforms")
-  on.exit({
-    if (is.na(old_platforms_env))
-      Sys.unsetenv("PKG_PLATFORMS")
-    else
-      Sys.setenv(PKG_PLATFORMS = old_platforms_env)
-    options(pkg.platforms = old_platforms_opt)
-  }, add = TRUE)
-
-  Sys.setenv(PKG_PLATFORMS = "source")
-  options(pkg.platforms = "source")
-  force(expr)
-}
-
 ir_reset_tooling_namespace <- function(package) {
   if (!isNamespaceLoaded(package)) return(invisible())
 
@@ -284,24 +263,15 @@ ir_install_tooling_with_pak <- function(missing, refs, lib) {
     if (pkg %in% names(refs)) refs[[pkg]] else pkg
   }, character(1), USE.NAMES = FALSE)
 
-  ir_with_source_tooling(
-    pak::pkg_install(install_refs, lib = lib, upgrade = TRUE,
-                     ask = FALSE, dependencies = NA)
-  )
+  pak::pkg_install(install_refs, lib = lib, upgrade = TRUE,
+                   ask = FALSE, dependencies = NA)
   invisible()
 }
 
 ir_bootstrap_pak <- function(missing, lib, repos) {
   if ("pak" %in% missing) {
     unlink(file.path(lib, "pak"), recursive = TRUE, force = TRUE)
-    if (ir_source_tooling_platform()) {
-      ir_with_source_tooling(
-        utils::install.packages("pak", lib = lib, repos = repos,
-                                type = "source")
-      )
-    } else {
-      utils::install.packages("pak", lib = lib, repos = repos)
-    }
+    utils::install.packages("pak", lib = lib, repos = repos)
   }
   invisible()
 }

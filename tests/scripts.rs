@@ -299,18 +299,14 @@ fn warm_renv_cache_rewrites_plain_ppm_latest_with_real_binary_package() {
 }
 
 #[test]
-fn resolver_tooling_source_installs_are_linux_only() {
-    let out = Command::new("Rscript")
-        .current_dir(repo_root())
-        .args([
-            "--vanilla",
-            "-e",
-            "source('driver/tooling.R'); stopifnot(ir_source_tooling_platform('Linux')); stopifnot(!ir_source_tooling_platform('Darwin')); stopifnot(!ir_source_tooling_platform('Windows'))",
-        ])
-        .output()
-        .unwrap();
+fn resolver_tooling_installs_do_not_force_source_packages() {
+    let path = repo_root().join("driver/tooling.R");
+    let tooling = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
-    assert_success(&out);
+    assert!(!tooling.contains("PKG_PLATFORMS = \"source\""));
+    assert!(!tooling.contains("pkg.platforms = \"source\""));
+    assert!(!tooling.contains("type = \"source\""));
 }
 
 #[test]
