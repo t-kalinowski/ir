@@ -248,15 +248,20 @@ fn warm_renv_cache_replaces_unnamed_at_cran_with_real_package() {
     let renv_cache = temp_cache("ir-warm-real-renv-cache");
     let user_library = temp_dir("ir-warm-real-user-library");
     let profile = temp_path("ir-warm-real-profile", "R");
-    fs::write(&profile, r#"options(repos = "@CRAN@")"#).unwrap();
+    fs::write(&profile, "options(repos = \"@CRAN@\")\n").unwrap();
 
     let out = Command::new(rscript())
         .current_dir(repo_root())
         .env("RENV_PATHS_CACHE", &renv_cache)
         .env("R_LIBS_USER", &user_library)
         .env("R_PROFILE_USER", &profile)
-        .env("RSPM", "https://packagemanager.posit.co/cran/latest")
-        .args(["scripts/warm-renv-cache.R", "cli"])
+        .env("CC", "false")
+        .env("CXX", "false")
+        .env("CXX11", "false")
+        .env("CXX14", "false")
+        .env("CXX17", "false")
+        .env("CXX20", "false")
+        .args(["scripts/warm-renv-cache.R", "zip"])
         .output()
         .unwrap();
 
