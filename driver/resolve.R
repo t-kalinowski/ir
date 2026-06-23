@@ -212,8 +212,15 @@ ir_resolve_main <- function() {
 
   ## 1. Consume inputs parsed by Rust from script frontmatter
   exclude_newer <- ir_exclude_newer(ir_env_optional("IR_EXCLUDE_NEWER"))
-  repos <- ir_repos(exclude_newer)
-  options(repos = repos)
+
+  if (!is.null(result_file)) {
+    ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
+    ## before any secretbase/pak/renv use below, including Linux PPM repo
+    ## normalization through pak.
+    ir_ensure_tooling(cache_dir = cache_dir)
+    repos <- ir_repos(exclude_newer)
+    options(repos = repos)
+  }
 
   if (!is.null(python_result_file)) {
     python_packages_file <- ir_env_optional("IR_PYTHON_PACKAGES_FILE")
@@ -230,11 +237,6 @@ ir_resolve_main <- function() {
   }
 
   if (is.null(result_file)) return(invisible())
-
-  ## 0. Ensure the resolver's own tooling (pak/renv/secretbase) is available
-  ## before any secretbase/pak/renv use below. A Python-only cache miss returns
-  ## above after bootstrapping only the Python resolver tooling.
-  ir_ensure_tooling(cache_dir = cache_dir)
 
   # A Quarto render needs rmarkdown for the knitr engine; Rust sets
   # IR_QUARTO_RENDER so the resolver can inject it when the resolved set does not

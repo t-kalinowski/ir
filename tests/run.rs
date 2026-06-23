@@ -35,6 +35,117 @@ fn ci_dependencies_are_available() {
     assert!(!version.is_empty());
 }
 
+#[cfg(target_os = "linux")]
+fn r_tooling_lib(cache_dir: &Path) -> std::path::PathBuf {
+    let out = Command::new(rscript())
+        .env("IR_CACHE_DIR", cache_dir)
+        .args([
+            "--vanilla",
+            "-e",
+            "cat(file.path(Sys.getenv('IR_CACHE_DIR'), 'tooling', paste0(getRversion(), '-', R.version$platform)))",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    Path::new(stdout(&out).trim()).to_path_buf()
+}
+
+#[cfg(target_os = "linux")]
+fn install_fake_r_package(lib: &Path, name: &str, namespace: &str, r_code: &str) {
+    let source_root = temp_dir(&format!("ir-fake-{name}-source"));
+    let package = source_root.join(name);
+    fs::create_dir_all(package.join("R")).unwrap();
+    fs::write(
+        package.join("DESCRIPTION"),
+        format!(
+            "Package: {name}\nVersion: 99.0.0\nTitle: Fake {name}\nDescription: Fake {name}.\nLicense: MIT\nEncoding: UTF-8\n"
+        ),
+    )
+    .unwrap();
+    fs::write(package.join("NAMESPACE"), namespace).unwrap();
+    fs::write(package.join("R").join(format!("{name}.R")), r_code).unwrap();
+
+    let out = Command::new(rscript())
+        .args([
+            "--vanilla",
+            "-e",
+            "args <- commandArgs(TRUE); dir.create(args[[1]], recursive = TRUE, showWarnings = FALSE); install.packages(args[[2]], lib = args[[1]], repos = NULL, type = 'source', INSTALL_opts = c('--no-byte-compile', '--no-help', '--no-docs'))",
+        ])
+        .arg(lib)
+        .arg(&package)
+        .output()
+        .unwrap();
+    assert_success(&out);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn run_uses_private_tooling_before_resolving_ppm_repos() {
+    let cache_dir = temp_dir("ir-private-tooling-before-repos-cache");
+    let user_library = temp_dir("ir-private-tooling-before-repos-user-library");
+    let tooling_lib = r_tooling_lib(&cache_dir);
+    let script = temp_path("ir-private-tooling-before-repos", "R");
+
+    install_fake_r_package(
+        &tooling_lib,
+        "pak",
+        "export(pkg_deps)\nexport(repo_resolve)\n",
+        r#"
+load_private_cli <- function() TRUE
+repo_resolve <- function(spec) list(CRAN = "https://packagemanager.posit.co/cran/latest")
+pkg_deps <- function(refs, ...) {
+  data.frame(
+    ref = character(),
+    status = character(),
+    package = character(),
+    version = character(),
+    type = character(),
+    priority = character(),
+    direct = logical()
+  )
+}
+"#,
+    );
+    install_fake_r_package(
+        &tooling_lib,
+        "renv",
+        "",
+        "use <- function(...) stop('renv should not be used for an empty manifest')\n",
+    );
+    install_fake_r_package(
+        &tooling_lib,
+        "secretbase",
+        "export(sha256)\n",
+        "sha256 <- function(x) 'fake-resolution-key'\n",
+    );
+    install_fake_r_package(
+        &user_library,
+        "pak",
+        "export(pkg_deps)\nexport(repo_resolve)\n",
+        r#"
+load_private_cli <- function() stop("bad ambient pak private cli")
+repo_resolve <- function(spec) stop("bad ambient pak used before tooling bootstrap")
+pkg_deps <- function(refs, ...) stop("bad ambient pak used before tooling bootstrap")
+"#,
+    );
+    fs::write(
+        &script,
+        "cat('ir.fixture=private-tooling-before-repos\\n')\n",
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_LIBS_USER", &user_library)
+        .args(["run", "--isolated", "--vanilla"])
+        .arg(&script)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "ir.fixture=private-tooling-before-repos");
+}
+
 #[test]
 fn version_flag_reports_version() {
     let out = ir().arg("--version").output().unwrap();

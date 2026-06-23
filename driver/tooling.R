@@ -73,6 +73,7 @@ ir_tooling_version_ok <- function(package, lib = ir_tooling_lib(),
 
   ok <- tryCatch(requireNamespace(package, lib.loc = lib, quietly = TRUE),
                  error = function(e) FALSE)
+  ok <- ok && ir_pak_private_cli_ok()
   if (!ok && isNamespaceLoaded(package))
     try(unloadNamespace(package), silent = TRUE)
 
@@ -122,6 +123,17 @@ ir_reset_tooling_namespace <- function(package) {
   }
 
   invisible()
+}
+
+ir_pak_private_cli_ok <- function() {
+  if (!isNamespaceLoaded("pak")) return(FALSE)
+
+  tryCatch({
+    load_private_cli <- get("load_private_cli", asNamespace("pak"),
+                            inherits = FALSE)
+    load_private_cli()
+    TRUE
+  }, error = function(e) FALSE)
 }
 
 # Tooling packages not already usable by the resolver. Prefer the private
@@ -231,6 +243,22 @@ ir_missing_tooling <- function(packages = ir_tooling_packages(),
         (is.null(version) || version < min_version)) {
       missing <- c(missing, pkg)
       next
+    }
+
+    if (identical(pkg, "pak")) {
+      ok <- tryCatch(requireNamespace(pkg, quietly = TRUE),
+                     error = function(e) FALSE)
+      ok <- ok && ir_pak_private_cli_ok()
+      if (!ok) {
+        if (isNamespaceLoaded(pkg))
+          try(unloadNamespace(pkg), silent = TRUE)
+        if (pkg_lib %in% user_libs) {
+          bad_user_libs <- c(bad_user_libs, pkg_lib)
+          prune_bad_user_libs()
+        }
+        missing <- c(missing, pkg)
+        next
+      }
     }
   }
 
