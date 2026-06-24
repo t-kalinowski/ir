@@ -1783,6 +1783,7 @@ fn cache_clean_all_removes_external_uv_caches() {
         &uv,
         r#"#!/bin/sh
 case "$1:$2" in
+  --version:) printf 'uv 0.6.3\n' ;;
   cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
   python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
   tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
@@ -1816,6 +1817,84 @@ esac
         .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
         .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
         .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!uv_cache_dir.exists());
+    assert!(!uv_python_dir.exists());
+    assert!(!uv_tool_dir.exists());
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv cache at: {}", uv_cache_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv Python cache at: {}", uv_python_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv tool cache at: {}", uv_tool_dir.display()),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_clean_all_finds_external_uv_under_home_local_bin() {
+    let home = temp_dir("ir-cache-clean-all-home-local-uv-home");
+    let cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-r-pkg");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-renv");
+    let path_bin = temp_dir("ir-cache-clean-all-home-local-uv-path");
+    let uv_cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-cache");
+    let uv_python_dir = temp_dir("ir-cache-clean-all-home-local-uv-python");
+    let uv_tool_dir = temp_dir("ir-cache-clean-all-home-local-uv-tool");
+    let uv = home.join(".local").join("bin").join("uv");
+
+    fs::create_dir_all(uv.parent().unwrap()).unwrap();
+    write_executable(
+        &uv,
+        r#"#!/bin/sh
+case "$1:$2" in
+  --version:) printf 'uv 0.6.3\n' ;;
+  cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
+  tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
+  *) echo "unexpected uv args: $*" >&2; exit 2 ;;
+esac
+"#,
+    );
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        r_user_cache_dir.join("R").join("reticulate").join("uv"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+        uv_cache_dir.join("archive"),
+        uv_python_dir.join("cpython"),
+        uv_tool_dir.join("tools"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("HOME", &home)
+        .env("PATH", &path_bin)
+        .env("IR_RSCRIPT", rscript())
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
+        .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
+        .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .env_remove("RETICULATE_UV")
         .args(["cache", "clean", "--all"])
         .output()
         .unwrap();

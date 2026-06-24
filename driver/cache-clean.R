@@ -124,6 +124,21 @@ ir_reticulate_legacy_cache_dir <- function() {
   file.path(Sys.getenv("XDG_CACHE_HOME", path.expand("~/.cache")), "r-reticulate")
 }
 
+ir_is_usable_uv <- function(uv) {
+  if (is.null(uv) || is.na(uv) || identical(uv, "") || !file.exists(uv)) {
+    return(FALSE)
+  }
+
+  out <- suppressWarnings(system2(uv, "--version", stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status", exact = TRUE)
+  if (!is.null(status) && !identical(status, 0L)) {
+    return(FALSE)
+  }
+
+  version <- numeric_version(sub("uv ([0-9.]+).*", "\\1", out), strict = FALSE)
+  !is.na(version) && version >= numeric_version("0.6.3")
+}
+
 ir_external_uv_binary <- function() {
   uv <- Sys.getenv("RETICULATE_UV", unset = NA_character_)
   if (!is.na(uv)) {
@@ -143,7 +158,12 @@ ir_external_uv_binary <- function() {
   }
 
   uv <- unname(Sys.which("uv"))
-  if (nzchar(uv)) uv else ""
+  if (ir_is_usable_uv(uv)) {
+    return(uv)
+  }
+
+  uv <- path.expand("~/.local/bin/uv")
+  if (ir_is_usable_uv(uv)) uv else ""
 }
 
 ir_uv_dir <- function(uv, args) {
