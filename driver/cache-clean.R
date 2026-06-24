@@ -102,26 +102,7 @@ ir_r_user_cache_dir <- function(package) {
   path.expand(file.path("~/.cache/R", package))
 }
 
-ir_pkg_configured_dir <- function(name) {
-  option_name <- paste0("pkg.", name)
-  value <- getOption(option_name, NULL)
-  if (!is.null(value) && length(value) > 0L) {
-    value <- as.character(value[[1L]])
-    if (nzchar(value)) {
-      return(value)
-    }
-  }
-
-  env_name <- paste0("PKG_", toupper(name))
-  Sys.getenv(env_name, "")
-}
-
 ir_pkgcache_cache_dir <- function() {
-  package_cache_dir <- ir_pkg_configured_dir("package_cache_dir")
-  if (nzchar(package_cache_dir)) {
-    return(package_cache_dir)
-  }
-
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
     return(file.path(r_pkg_cache_dir, "R", "pkgcache"))
@@ -131,11 +112,6 @@ ir_pkgcache_cache_dir <- function() {
 }
 
 ir_pak_cache_dir <- function() {
-  download_cache_dir <- ir_pkg_configured_dir("cache_dir")
-  if (nzchar(download_cache_dir)) {
-    return(download_cache_dir)
-  }
-
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
     return(file.path(r_pkg_cache_dir, "lib"))

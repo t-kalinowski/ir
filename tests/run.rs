@@ -1802,14 +1802,16 @@ Sys.setenv(
 }
 
 #[test]
-fn cache_clean_all_uses_pak_configured_cache_locations() {
-    let home = temp_dir("ir-cache-clean-all-pak-config-home");
-    let cache_dir = temp_dir("ir-cache-clean-all-pak-config-ir");
-    let r_user_cache_dir = temp_dir("ir-cache-clean-all-pak-config-r-user");
-    let pak_download_cache = temp_dir("ir-cache-clean-all-pak-config-download");
-    let pak_package_cache = temp_dir("ir-cache-clean-all-pak-config-package");
-    let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-config-renv");
-    let profile = temp_path("ir-cache-clean-all-pak-config-profile", "R");
+fn cache_clean_all_ignores_pak_pkg_options() {
+    let home = temp_dir("ir-cache-clean-all-pak-options-home");
+    let cache_dir = temp_dir("ir-cache-clean-all-pak-options-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-pak-options-r-user");
+    let pak_cache = r_user_cache_dir.join("R").join("pak");
+    let pkgcache_cache = r_user_cache_dir.join("R").join("pkgcache");
+    let unrelated_download_cache = temp_dir("ir-cache-clean-all-pak-options-download");
+    let unrelated_package_cache = temp_dir("ir-cache-clean-all-pak-options-package");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-options-renv");
+    let profile = temp_path("ir-cache-clean-all-pak-options-profile", "R");
 
     fs::write(
         &profile,
@@ -1820,16 +1822,18 @@ options(
   pkg.package_cache_dir = {}
 )
 "#,
-            serde_json::to_string(&renviron_path(&pak_download_cache)).unwrap(),
-            serde_json::to_string(&renviron_path(&pak_package_cache)).unwrap(),
+            serde_json::to_string(&renviron_path(&unrelated_download_cache)).unwrap(),
+            serde_json::to_string(&renviron_path(&unrelated_package_cache)).unwrap(),
         ),
     )
     .unwrap();
 
     let paths = [
         cache_dir.join("libraries").join("library").join("pkg"),
-        pak_download_cache.join("pkg"),
-        pak_package_cache.join("pkg"),
+        pak_cache.join("pkg"),
+        pkgcache_cache.join("pkg"),
+        unrelated_download_cache.join("pkg"),
+        unrelated_package_cache.join("pkg"),
         renv_cache_dir.join("v5").join("pkg"),
         r_user_cache_dir.join("R").join("reticulate").join("uv"),
         legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
@@ -1854,10 +1858,60 @@ options(
         .unwrap();
 
     assert_success(&out);
-    assert!(!pak_download_cache.exists());
-    assert!(!pak_package_cache.exists());
-    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_download_cache);
-    assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pak_package_cache);
+    assert!(!pak_cache.exists());
+    assert!(!pkgcache_cache.exists());
+    assert!(unrelated_download_cache.exists());
+    assert!(unrelated_package_cache.exists());
+    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
+    assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
+}
+
+#[test]
+fn cache_clean_all_ignores_pak_pkg_environment_variables() {
+    let home = temp_dir("ir-cache-clean-all-pak-env-home");
+    let cache_dir = temp_dir("ir-cache-clean-all-pak-env-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-pak-env-r-user");
+    let pak_cache = r_user_cache_dir.join("R").join("pak");
+    let pkgcache_cache = r_user_cache_dir.join("R").join("pkgcache");
+    let unrelated_download_cache = temp_dir("ir-cache-clean-all-pak-env-download");
+    let unrelated_package_cache = temp_dir("ir-cache-clean-all-pak-env-package");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-env-renv");
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        pak_cache.join("pkg"),
+        pkgcache_cache.join("pkg"),
+        unrelated_download_cache.join("pkg"),
+        unrelated_package_cache.join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        r_user_cache_dir.join("R").join("reticulate").join("uv"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("HOME", &home)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("PKG_CACHE_DIR", &unrelated_download_cache)
+        .env("PKG_PACKAGE_CACHE_DIR", &unrelated_package_cache)
+        .env("RETICULATE_UV", "managed")
+        .env_remove("R_PKG_CACHE_DIR")
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!pak_cache.exists());
+    assert!(!pkgcache_cache.exists());
+    assert!(unrelated_download_cache.exists());
+    assert!(unrelated_package_cache.exists());
+    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
+    assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
 }
 
 #[test]
