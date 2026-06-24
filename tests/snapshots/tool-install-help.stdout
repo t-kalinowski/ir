@@ -13,6 +13,10 @@ Options:
       --force              Overwrite an existing launcher path
   -h, --help               Print help
 
+Tool discovery:
+  Supported executables are discovered from installed package exec/, bin/,
+  and architecture-specific bin/<arch>/ directories.
+
 Examples:
   ir tool install btw
   ir tool install --bin-dir ~/.local/bin btw

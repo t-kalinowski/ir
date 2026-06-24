@@ -55,6 +55,28 @@ fn examples_help(body: &'static str) -> StyledStr {
     help
 }
 
+fn tool_discovery_examples_help(body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Tool discovery:{header:#}");
+    help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
+    help.push_str("  and architecture-specific bin/<arch>/ directories.\n\n");
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
+}
+
 fn section_help(title: &'static str, body: &'static str) -> StyledStr {
     let header = HELP_STYLES.get_header();
     let mut help = StyledStr::new();
@@ -238,7 +260,7 @@ fn tool_run_command() -> ClapCommand {
     tool_run_args(
         ClapCommand::new("run")
             .about("Run an executable provided by an R package")
-            .after_help(examples_help(concat!(
+            .after_help(tool_discovery_examples_help(concat!(
                 "  ir tool run btw\n",
                 "  ir tool run btw --help\n",
                 "      # btw is shorthand for --from btw btw.\n\n",
@@ -262,6 +284,8 @@ fn tool_rx_command() -> ClapCommand {
                 "  rx is the package-executable frontend for `ir tool run`.\n",
                 "  It resolves the provider package plus any --with dependencies into an\n",
                 "  isolated cached R library, then launches the selected executable.\n",
+                "  Package executables are discovered from installed package exec/, bin/,\n",
+                "  and architecture-specific bin/<arch>/ directories.\n",
                 "  The tool sees the resolved package library plus base, site, and system\n",
                 "  libraries; ambient user R libraries are not used.\n\n",
                 "Examples:\n",
@@ -327,7 +351,7 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
 fn tool_install_command() -> ClapCommand {
     ClapCommand::new("install")
         .about("Install package executable launchers")
-        .after_help(examples_help(concat!(
+        .after_help(tool_discovery_examples_help(concat!(
             "  ir tool install btw\n",
             "  ir tool install --bin-dir ~/.local/bin btw\n",
             "  ir tool install --with cli --bin-dir ~/.local/bin btw",

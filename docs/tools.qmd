@@ -70,7 +70,7 @@ who <- "world"
 cat(hello(who), "\n")
 ```
 
-If that file is `exec/greet.R`, it is installed and discovered as `friendly-greeting`.
+If that file is `exec/greet.R` or `bin/greet.R`, it is installed and discovered as `friendly-greeting`.
 Rapp apps use `base,<pkg>` as their default startup packages unless `#| launcher:` sets `default-packages`.
 
 ## Install launchers
