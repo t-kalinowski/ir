@@ -215,6 +215,7 @@ PY
 install_macos_rig() {
   require_command curl
   require_command python3
+  require_command installer
 
   rig_pkg="${TMPDIR:-/tmp}/ir-rig.pkg"
   if [ "$DRY_RUN" -eq 0 ]; then
