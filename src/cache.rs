@@ -1,12 +1,13 @@
 use std::error::Error;
+use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use clap::ArgMatches;
 
-use crate::runtime::{count_files, ir_cache_dir, rscript_for_env, spawn_error};
+use crate::runtime::{count_files, ir_cache_dir, rscript_for_env};
 
 const TOOL_CACHE_CLEANER: &str = include_str!("../driver/cache-clean.R");
 
@@ -70,7 +71,7 @@ fn clean_tool_caches_with_r() -> Result<(), Box<dyn Error>> {
         .arg("-")
         .stdin(Stdio::piped())
         .spawn()
-        .map_err(|e| spawn_error(&rscript, e))?;
+        .map_err(|e| cache_cleaner_spawn_error(&rscript, e))?;
 
     let mut stdin = child
         .stdin
@@ -90,6 +91,17 @@ fn clean_tool_caches_with_r() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn cache_cleaner_spawn_error(rscript: &OsStr, err: io::Error) -> String {
+    if err.kind() == io::ErrorKind::NotFound {
+        format!(
+            "could not find `{}` on PATH. Install R or set IR_RSCRIPT.",
+            rscript.to_string_lossy()
+        )
+    } else {
+        format!("failed to launch `{}`: {err}", rscript.to_string_lossy())
+    }
 }
 
 pub(crate) fn cmd_cache_dir() -> Result<(), Box<dyn Error>> {

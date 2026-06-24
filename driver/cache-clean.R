@@ -53,7 +53,34 @@ ir_split_paths <- function(paths) {
 }
 
 ir_r_user_cache_dir <- function(package) {
-  tools::R_user_dir(package, "cache")
+  tools <- asNamespace("tools")
+  r_user_dir <- tools$R_user_dir
+  if (is.function(r_user_dir)) {
+    return(r_user_dir(package, "cache"))
+  }
+
+  r_user_cache_dir <- Sys.getenv("R_USER_CACHE_DIR", "")
+  if (nzchar(r_user_cache_dir)) {
+    return(file.path(r_user_cache_dir, "R", package))
+  }
+
+  xdg_cache_home <- Sys.getenv("XDG_CACHE_HOME", "")
+  if (nzchar(xdg_cache_home)) {
+    return(file.path(xdg_cache_home, "R", package))
+  }
+
+  if (.Platform$OS.type == "windows") {
+    return(file.path(Sys.getenv("LOCALAPPDATA"), "R", "cache", "R", package))
+  }
+
+  if (identical(Sys.info()[["sysname"]], "Darwin")) {
+    return(path.expand(file.path(
+      "~/Library/Caches/org.R-project.R/R",
+      package
+    )))
+  }
+
+  path.expand(file.path("~/.cache/R", package))
 }
 
 ir_pkgcache_cache_dir <- function() {
@@ -89,7 +116,33 @@ ir_renv_cache_dirs <- function() {
     return(file.path(root, "cache"))
   }
 
-  file.path(ir_r_user_cache_dir("renv"), "cache")
+  file.path(ir_renv_default_root_dir(), "cache")
+}
+
+ir_renv_default_root_dir <- function() {
+  roots <- c(
+    ir_r_user_cache_dir("renv"),
+    ir_renv_legacy_root_dir()
+  )
+
+  for (root in roots) {
+    if (file.exists(root)) {
+      return(root)
+    }
+  }
+
+  roots[[1L]]
+}
+
+ir_renv_legacy_root_dir <- function() {
+  base <- switch(
+    Sys.info()[["sysname"]],
+    Darwin = Sys.getenv("XDG_DATA_HOME", "~/Library/Application Support"),
+    Windows = Sys.getenv("LOCALAPPDATA", Sys.getenv("APPDATA")),
+    Sys.getenv("XDG_DATA_HOME", "~/.local/share")
+  )
+
+  path.expand(file.path(base, "renv"))
 }
 
 ir_reticulate_legacy_cache_dir <- function() {

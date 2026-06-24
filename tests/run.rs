@@ -1710,6 +1710,34 @@ fn cache_clean_all_preserves_ir_cache_when_r_selection_is_invalid() {
 }
 
 #[test]
+fn cache_clean_all_missing_rscript_advice_uses_env_selection() {
+    let cache_dir = temp_dir("ir-cache-clean-all-missing-rscript-cache");
+    let path = temp_dir("ir-cache-clean-all-missing-rscript-path");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("PATH", &path)
+        .env_remove("IR_RSCRIPT")
+        .env_remove("IR_R_VERSION")
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains("Install R or set IR_RSCRIPT."),
+        "{}",
+        output_text(&out)
+    );
+    assert!(
+        !text.contains("pass --rscript"),
+        "cache clean must not suggest unsupported --rscript\n{}",
+        output_text(&out)
+    );
+}
+
+#[test]
 fn cache_clean_all_uses_r_profile_cache_locations() {
     let home = temp_dir("ir-cache-clean-all-r-profile-home");
     let cache_dir = temp_dir("ir-cache-clean-all-r-profile-ir");
@@ -1788,6 +1816,52 @@ Sys.setenv(
             "Clearing reticulate cache at: {}",
             r_user_cache_dir.join("R").join("reticulate").display()
         ),
+    );
+}
+
+#[test]
+fn cache_clean_all_removes_existing_legacy_renv_root_without_global_renv() {
+    let cache_dir = temp_dir("ir-cache-clean-all-legacy-renv-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-legacy-renv-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-legacy-renv-r-pkg");
+    let renv_data_home = temp_dir("ir-cache-clean-all-legacy-renv-data");
+    let renv_cache_dir = legacy_renv_root_dir(&renv_data_home).join("cache");
+    let profile = temp_path("ir-cache-clean-all-legacy-renv-profile", "R");
+
+    fs::write(&profile, "requireNamespace <- function(...) FALSE\n").unwrap();
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        r_user_cache_dir.join("R").join("reticulate").join("uv"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("R_PROFILE_USER", &profile)
+        .env("XDG_DATA_HOME", &renv_data_home)
+        .env("LOCALAPPDATA", &renv_data_home)
+        .env("RETICULATE_UV", "managed")
+        .env_remove("RENV_PATHS_CACHE")
+        .env_remove("RENV_PATHS_ROOT")
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!renv_cache_dir.exists());
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing renv cache at: {}", renv_cache_dir.display()),
     );
 }
 
@@ -2018,6 +2092,10 @@ fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
 #[cfg(not(windows))]
 fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
     r_user_cache_dir.join("r-reticulate")
+}
+
+fn legacy_renv_root_dir(data_home: &Path) -> std::path::PathBuf {
+    data_home.join("renv")
 }
 
 #[cfg(unix)]
