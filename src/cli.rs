@@ -257,8 +257,25 @@ fn tool_rx_command() -> ClapCommand {
             .about("Run a package executable")
             .version(env!("CARGO_PKG_VERSION"))
             .after_help(concat!(
-                "Use `ir tool run --help` for command details.\n",
-                "Use `rx quickstart` for an agent-oriented guide to ir and rx.",
+                "Mental model:\n",
+                "  rx is the package-executable frontend for `ir tool run`.\n",
+                "  It resolves the provider package plus any --with dependencies into an\n",
+                "  isolated cached R library, then launches the selected executable.\n",
+                "  The tool sees the resolved package library plus base, site, and system\n",
+                "  libraries; ambient user R libraries are not used.\n\n",
+                "Examples:\n",
+                "  rx btw --help\n",
+                "      # shorthand for: rx --from btw btw --help.\n\n",
+                "  rx --from pkg command --help\n",
+                "      # resolve package `pkg`, run executable `command`.\n\n",
+                "  rx --from pkg --with cli command --flag value\n",
+                "      # --from and --with are for rx; --flag value is passed to command.\n\n",
+                "Workflow:\n",
+                "  Use rx for ad hoc package tools and executable frontends.\n",
+                "  Use `ir tool install` for repeated shell use.\n",
+                "  For durable scripts and documents, use `ir run` or `ir render` with\n",
+                "  frontmatter; see `ir quickstart`.\n\n",
+                "Use `ir tool run --help` for full command details.",
             )),
     )
 }

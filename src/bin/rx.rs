@@ -1,12 +1,7 @@
-use std::ffi::{OsStr, OsString};
-use std::io::{self, Write as _};
+use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
-#[cfg(not(unix))]
-use std::process::ExitStatus;
 use std::process::{Command, ExitCode};
-
-const QUICKSTART: &str = include_str!("../rx_quickstart.txt");
-const QUICKSTART_HELP: &str = "Show a concise usage guide for AI agents\n\nUsage: rx quickstart\n\nOptions:\n  -h, --help  Print help\n";
 
 fn exec_or_status(cmd: &mut Command) -> io::Result<ExitCode> {
     #[cfg(unix)]
@@ -19,13 +14,8 @@ fn exec_or_status(cmd: &mut Command) -> io::Result<ExitCode> {
     #[cfg(not(unix))]
     {
         let status = cmd.status()?;
-        Ok(exit_code(status))
+        std::process::exit(status.code().unwrap_or(2));
     }
-}
-
-#[cfg(not(unix))]
-fn exit_code(status: ExitStatus) -> ExitCode {
-    u8::try_from(status.code().unwrap_or(2)).unwrap_or(2).into()
 }
 
 fn ir_path(rx: &Path) -> std::io::Result<PathBuf> {
@@ -47,39 +37,8 @@ fn ir_path(rx: &Path) -> std::io::Result<PathBuf> {
     Ok(ir)
 }
 
-fn is_arg(arg: &OsString, expected: &str) -> bool {
-    arg == OsStr::new(expected)
-}
-
-fn cmd_quickstart(args: &[OsString]) -> io::Result<ExitCode> {
-    match args {
-        [] => {
-            io::stdout().write_all(QUICKSTART.as_bytes())?;
-            Ok(ExitCode::SUCCESS)
-        }
-        [arg] if is_arg(arg, "--help") || is_arg(arg, "-h") => {
-            io::stdout().write_all(QUICKSTART_HELP.as_bytes())?;
-            Ok(ExitCode::SUCCESS)
-        }
-        [arg, ..] => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "unexpected argument '{}' for `rx quickstart`",
-                arg.to_string_lossy()
-            ),
-        )),
-    }
-}
-
 fn run() -> io::Result<ExitCode> {
     let user_args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if user_args
-        .first()
-        .is_some_and(|arg| is_arg(arg, "quickstart"))
-    {
-        return cmd_quickstart(&user_args[1..]);
-    }
-
     let current_exe = std::env::current_exe()?;
     let ir = ir_path(&current_exe)?;
     let args = ["tool", "rx"]
