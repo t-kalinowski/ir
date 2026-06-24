@@ -57,6 +57,15 @@ ir_env <- function(name, default = "") {
   if (nzchar(value)) value else default
 }
 
+ir_pkg_config_path <- function(option, envvar) {
+  value <- getOption(option, NULL)
+  if (!is.null(value)) {
+    return(as.character(value[[1L]]))
+  }
+
+  Sys.getenv(envvar, "")
+}
+
 ir_windows_local_app_data <- function() {
   local_app_data <- Sys.getenv("LOCALAPPDATA", "")
   if (nzchar(local_app_data)) {
@@ -102,7 +111,14 @@ ir_r_user_cache_dir <- function(package) {
   path.expand(file.path("~/.cache/R", package))
 }
 
-ir_pkgcache_cache_dir <- function() {
+ir_pkgcache_cache_dirs <- function() {
+  c(
+    ir_pkg_config_path("pkg.package_cache_dir", "PKG_PACKAGE_CACHE_DIR"),
+    ir_pkgcache_default_cache_dir()
+  )
+}
+
+ir_pkgcache_default_cache_dir <- function() {
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
     return(file.path(r_pkg_cache_dir, "R", "pkgcache"))
@@ -111,7 +127,14 @@ ir_pkgcache_cache_dir <- function() {
   ir_r_user_cache_dir("pkgcache")
 }
 
-ir_pak_cache_dir <- function() {
+ir_pak_cache_dirs <- function() {
+  c(
+    ir_pkg_config_path("pkg.cache_dir", "PKG_CACHE_DIR"),
+    ir_pak_default_cache_dir()
+  )
+}
+
+ir_pak_default_cache_dir <- function() {
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
     return(file.path(r_pkg_cache_dir, "lib"))
@@ -294,8 +317,8 @@ ir_clean_uv_cache <- function(uv, path) {
 uv <- ir_external_uv_binary()
 uv_cache <- ir_uv_dir(uv, c("cache", "dir"))
 
-ir_clear_cache("pak package cache", ir_pkgcache_cache_dir())
-ir_clear_cache("pak cache", ir_pak_cache_dir())
+ir_clear_cache("pak package cache", ir_pkgcache_cache_dirs())
+ir_clear_cache("pak cache", ir_pak_cache_dirs())
 ir_clear_cache("renv cache", ir_renv_cache_dirs())
 ir_clean_uv_cache(uv, uv_cache)
 ir_clear_cache("reticulate cache", ir_reticulate_cache_dir())
