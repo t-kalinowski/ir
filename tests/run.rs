@@ -2032,6 +2032,70 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn cache_clean_all_removes_reticulate_managed_uv_tool_dir_without_external_uv() {
+    let home = temp_dir("ir-cache-clean-all-managed-uv-home");
+    let cache_dir = temp_dir("ir-cache-clean-all-managed-uv-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-managed-uv-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-managed-uv-r-pkg");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-managed-uv-renv");
+    let path_bin = temp_dir("ir-cache-clean-all-managed-uv-path");
+    let uv_tool_dir = temp_dir("ir-cache-clean-all-managed-uv-tool");
+    let uv_log = temp_path("ir-cache-clean-all-managed-uv-log", "txt");
+    let reticulate_cache = r_user_cache_dir.join("R").join("reticulate");
+    let uv = reticulate_cache.join("uv").join("bin").join("uv");
+
+    fs::create_dir_all(uv.parent().unwrap()).unwrap();
+    write_executable(
+        &uv,
+        r#"#!/bin/sh
+case "$1:$2" in
+  --version:) printf 'uv 0.6.3\n' ;;
+  tool:dir) printf 'tool dir\n' > "$IR_TEST_UV_LOG"; printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
+  *) echo "unexpected uv args: $*" >&2; exit 2 ;;
+esac
+"#,
+    );
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+        uv_tool_dir.join("tools"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("HOME", &home)
+        .env("PATH", &path_bin)
+        .env("IR_RSCRIPT", rscript())
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("RETICULATE_UV", "managed")
+        .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .env("IR_TEST_UV_LOG", &uv_log)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_eq!(fs::read_to_string(&uv_log).unwrap(), "tool dir\n");
+    assert!(!reticulate_cache.exists());
+    assert!(!uv_tool_dir.exists());
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv tool cache at: {}", uv_tool_dir.display()),
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn cache_clean_all_finds_external_uv_under_home_local_bin() {
     let home = temp_dir("ir-cache-clean-all-home-local-uv-home");
     let cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-ir");

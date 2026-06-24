@@ -238,6 +238,19 @@ ir_external_uv_binary <- function() {
   if (ir_is_usable_uv(uv)) uv else ""
 }
 
+ir_reticulate_cache_dir <- function() {
+  ir_r_user_cache_dir("reticulate")
+}
+
+ir_reticulate_managed_uv_binary <- function() {
+  file.path(
+    ir_reticulate_cache_dir(),
+    "uv",
+    "bin",
+    if (.Platform$OS.type == "windows") "uv.exe" else "uv"
+  )
+}
+
 ir_uv_dir <- function(uv, args) {
   if (!nzchar(uv)) {
     return("")
@@ -263,6 +276,19 @@ ir_uv_dir <- function(uv, args) {
   out[[1L]]
 }
 
+ir_reticulate_managed_uv_tool_dir <- function(external_uv) {
+  if (nzchar(external_uv)) {
+    return("")
+  }
+
+  uv <- ir_reticulate_managed_uv_binary()
+  if (!ir_is_usable_uv(uv)) {
+    return("")
+  }
+
+  ir_uv_dir(uv, c("tool", "dir"))
+}
+
 ir_clean_uv_cache <- function(uv, path) {
   if (!nzchar(uv) || !nzchar(path)) {
     return(invisible(FALSE))
@@ -280,13 +306,16 @@ ir_clean_uv_cache <- function(uv, path) {
 uv <- ir_external_uv_binary()
 uv_cache <- ir_uv_dir(uv, c("cache", "dir"))
 uv_python_cache <- ir_uv_dir(uv, c("python", "dir"))
-uv_tool_cache <- ir_uv_dir(uv, c("tool", "dir"))
+uv_tool_cache <- c(
+  ir_uv_dir(uv, c("tool", "dir")),
+  ir_reticulate_managed_uv_tool_dir(uv)
+)
 
 ir_clear_cache("pak package cache", ir_pkgcache_cache_dir())
 ir_clear_cache("pak cache", ir_pak_cache_dir())
 ir_clear_cache("renv cache", ir_renv_cache_dirs())
 ir_clean_uv_cache(uv, uv_cache)
-ir_clear_cache("reticulate cache", ir_r_user_cache_dir("reticulate"))
+ir_clear_cache("reticulate cache", ir_reticulate_cache_dir())
 ir_clear_cache("reticulate legacy cache", ir_reticulate_legacy_cache_dir())
 
 ir_clear_cache("uv Python cache", uv_python_cache)
