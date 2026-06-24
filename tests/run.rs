@@ -9,6 +9,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const RAPPDIRS_UNAVAILABLE_PROFILE: &str = r#"
+requireNamespace <- function(package, ...) {
+  if (identical(package, "rappdirs")) {
+    return(FALSE)
+  }
+  base::requireNamespace(package, ...)
+}
+"#;
+
 #[test]
 fn ci_dependencies_are_available() {
     let r_expr = concat!(
@@ -1613,6 +1622,7 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
     let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-r-pkg");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-renv");
     let legacy_reticulate_cache = legacy_reticulate_cache_dir(&r_user_cache_dir);
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-ir-profile");
 
     let paths = [
         cache_dir.join("libraries").join("library").join("pkg"),
@@ -1633,6 +1643,7 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("RETICULATE_UV", "managed")
         .args(["cache", "clean", "--all"])
         .output()
@@ -1740,6 +1751,7 @@ fn cache_clean_all_uses_r_profile_cache_locations() {
         &profile,
         format!(
             r#"
+{RAPPDIRS_UNAVAILABLE_PROFILE}
 Sys.setenv(
   R_USER_CACHE_DIR = {},
   R_PKG_CACHE_DIR = {},
@@ -1818,6 +1830,7 @@ fn cache_clean_all_uses_pak_pkg_options() {
         &profile,
         format!(
             r#"
+{RAPPDIRS_UNAVAILABLE_PROFILE}
 options(
   pkg.cache_dir = {},
   pkg.package_cache_dir = {},
@@ -1886,6 +1899,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
     let package_cache = temp_dir("ir-cache-clean-all-pak-env-package");
     let metadata_cache = temp_dir("ir-cache-clean-all-pak-env-metadata");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-env-renv");
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-pak-env-profile");
 
     let paths = [
         cache_dir.join("libraries").join("library").join("pkg"),
@@ -1908,6 +1922,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("PKG_CACHE_DIR", &download_cache)
         .env("PKG_PACKAGE_CACHE_DIR", &package_cache)
         .env("PKG_METADATA_CACHE_DIR", &metadata_cache)
@@ -1941,6 +1956,12 @@ fn cache_clean_all_removes_default_windows_pak_cache() {
     fs::write(
         &profile,
         r#"
+requireNamespace <- function(package, ...) {
+  if (identical(package, "rappdirs")) {
+    return(FALSE)
+  }
+  base::requireNamespace(package, ...)
+}
 .Platform <- .Platform
 .Platform$OS.type <- "windows"
 Sys.info <- function() c(sysname = "Windows")
@@ -2182,6 +2203,7 @@ fn cache_clean_all_removes_external_uv_cache_only() {
     let uv_tool_dir = temp_dir("ir-cache-clean-all-external-uv-tool");
     let uv_log = temp_path("ir-cache-clean-all-external-uv-log", "txt");
     let uv = bin_dir.join("uv");
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-external-uv-profile");
 
     write_executable(
         &uv,
@@ -2219,6 +2241,7 @@ esac
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
         .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
         .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
@@ -2253,6 +2276,7 @@ fn cache_clean_all_resolves_reticulate_uv_before_clearing_reticulate_cache() {
     let uv_tool_dir = temp_dir("ir-cache-clean-all-reticulate-uv-tool");
     let reticulate_cache = r_user_cache_dir.join("R").join("reticulate");
     let uv = reticulate_cache.join("bin").join("uv");
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-reticulate-uv-profile");
 
     fs::create_dir_all(uv.parent().unwrap()).unwrap();
     write_executable(
@@ -2288,6 +2312,7 @@ esac
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("RETICULATE_UV", &uv)
         .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
         .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
@@ -2317,6 +2342,7 @@ fn cache_clean_all_preserves_reticulate_managed_uv_tool_dir_without_external_uv(
     let uv_log = temp_path("ir-cache-clean-all-managed-uv-log", "txt");
     let reticulate_cache = r_user_cache_dir.join("R").join("reticulate");
     let uv = reticulate_cache.join("uv").join("bin").join("uv");
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-managed-uv-profile");
 
     fs::create_dir_all(uv.parent().unwrap()).unwrap();
     write_executable(
@@ -2351,6 +2377,7 @@ esac
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("RETICULATE_UV", "managed")
         .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
         .env("IR_TEST_UV_LOG", &uv_log)
@@ -2379,6 +2406,7 @@ fn cache_clean_all_finds_external_uv_under_home_local_bin() {
     let uv_python_dir = temp_dir("ir-cache-clean-all-home-local-uv-python");
     let uv_tool_dir = temp_dir("ir-cache-clean-all-home-local-uv-tool");
     let uv = home.join(".local").join("bin").join("uv");
+    let profile = masked_rappdirs_profile("ir-cache-clean-all-home-local-uv-profile");
 
     fs::create_dir_all(uv.parent().unwrap()).unwrap();
     write_executable(
@@ -2419,6 +2447,7 @@ esac
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("R_PROFILE_USER", &profile)
         .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
         .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
         .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
@@ -2448,6 +2477,12 @@ fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
 #[cfg(not(windows))]
 fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
     r_user_cache_dir.join("r-reticulate")
+}
+
+fn masked_rappdirs_profile(name: &str) -> TempPath {
+    let profile = temp_path(name, "R");
+    fs::write(&profile, RAPPDIRS_UNAVAILABLE_PROFILE).unwrap();
+    profile
 }
 
 fn legacy_renv_root_dir(data_home: &Path) -> std::path::PathBuf {
