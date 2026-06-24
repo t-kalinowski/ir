@@ -2014,6 +2014,7 @@ requireNamespace <- function(...) FALSE
 #[test]
 fn cache_clean_all_uses_absolute_windows_r_user_dir_fallback() {
     let workdir = temp_dir("ir-cache-clean-all-windows-user-profile-workdir");
+    let home = temp_dir("ir-cache-clean-all-windows-user-profile-real-home");
     let user_profile = temp_dir("ir-cache-clean-all-windows-user-profile-home");
     let cache_dir = temp_dir("ir-cache-clean-all-windows-user-profile-ir");
     let profile = temp_path("ir-cache-clean-all-windows-user-profile-profile", "R");
@@ -2024,6 +2025,11 @@ fn cache_clean_all_uses_absolute_windows_r_user_dir_fallback() {
         .join("cache")
         .join("R")
         .join("pkgcache");
+    let user_profile_reticulate_legacy_cache = user_profile
+        .join("AppData")
+        .join("Local")
+        .join("r-reticulate")
+        .join("Cache");
     let relative_pkgcache = workdir.join("R").join("cache").join("R").join("pkgcache");
 
     fs::write(
@@ -2038,6 +2044,12 @@ if (exists("R_user_dir", envir = tools, inherits = FALSE)) {
   assign("R_user_dir", NULL, envir = tools)
   lockBinding("R_user_dir", tools)
 }
+requireNamespace <- function(package, ...) {
+  if (identical(package, "rappdirs") || identical(package, "renv")) {
+    return(FALSE)
+  }
+  base::requireNamespace(package, ...)
+}
 "#,
     )
     .unwrap();
@@ -2045,6 +2057,7 @@ if (exists("R_user_dir", envir = tools, inherits = FALSE)) {
     let paths = [
         cache_dir.join("libraries").join("library").join("pkg"),
         user_profile_pkgcache.join("pkg"),
+        user_profile_reticulate_legacy_cache.join("legacy"),
         relative_pkgcache.join("pkg"),
     ];
     for path in &paths {
@@ -2054,13 +2067,16 @@ if (exists("R_user_dir", envir = tools, inherits = FALSE)) {
 
     let out = ir()
         .current_dir(&workdir)
+        .env("HOME", &home)
         .env("IR_CACHE_DIR", &cache_dir)
         .env("USERPROFILE", &user_profile)
         .env("R_PROFILE_USER", &profile)
         .env("RETICULATE_UV", "managed")
+        .env_remove("APPDATA")
         .env_remove("LOCALAPPDATA")
         .env_remove("R_USER_CACHE_DIR")
         .env_remove("R_PKG_CACHE_DIR")
+        .env_remove("XDG_CACHE_HOME")
         .env_remove("RENV_PATHS_CACHE")
         .env_remove("RENV_PATHS_ROOT")
         .args(["cache", "clean", "--all"])
@@ -2069,11 +2085,17 @@ if (exists("R_user_dir", envir = tools, inherits = FALSE)) {
 
     assert_success(&out);
     assert!(!user_profile_pkgcache.exists());
+    assert!(!user_profile_reticulate_legacy_cache.exists());
     assert!(relative_pkgcache.exists());
     assert_stdout_contains_path(
         &out,
         "Clearing pak package cache at: ",
         &user_profile_pkgcache,
+    );
+    assert_stdout_contains_path(
+        &out,
+        "Clearing reticulate legacy cache at: ",
+        &user_profile_reticulate_legacy_cache,
     );
 }
 
