@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 use clap::ArgMatches;
 
-use crate::runtime::{count_files, ir_cache_dir, rscript_command, spawn_error};
+use crate::runtime::{count_files, ir_cache_dir, rscript_for_env, spawn_error};
 
 const TOOL_CACHE_CLEANER: &str = include_str!("../driver/cache-clean.R");
 
@@ -65,7 +65,7 @@ fn clear_labeled_cache(label: &str, path: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 fn clean_tool_caches_with_r() -> Result<(), Box<dyn Error>> {
-    let rscript = rscript_command();
+    let rscript = rscript_for_env()?;
     let mut child = Command::new(&rscript)
         .arg("-")
         .stdin(Stdio::piped())

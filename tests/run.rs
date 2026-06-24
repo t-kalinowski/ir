@@ -1611,14 +1611,16 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
     let r_user_cache_dir = temp_dir("ir-cache-clean-all-r-user");
     let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-r-pkg");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-renv");
+    let legacy_reticulate_cache = legacy_reticulate_cache_dir(&r_user_cache_dir);
 
     let paths = [
         cache_dir.join("libraries").join("library").join("pkg"),
         r_pkg_cache_dir.join("lib").join("pkg"),
         r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        r_pkg_cache_dir.join("unrelated"),
         renv_cache_dir.join("v5").join("pkg"),
         r_user_cache_dir.join("R").join("reticulate").join("uv"),
-        r_user_cache_dir.join("r-reticulate").join("legacy"),
+        legacy_reticulate_cache.join("legacy"),
     ];
     for path in &paths {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1636,17 +1638,22 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
 
     assert_success(&out);
     assert!(!cache_dir.exists());
-    assert!(!r_pkg_cache_dir.exists());
+    assert!(!r_pkg_cache_dir.join("lib").exists());
+    assert!(!r_pkg_cache_dir.join("R").join("pkgcache").exists());
+    assert!(r_pkg_cache_dir.join("unrelated").exists());
     assert!(!renv_cache_dir.exists());
     assert!(!r_user_cache_dir.join("R").join("reticulate").exists());
-    assert!(!r_user_cache_dir.join("r-reticulate").exists());
+    assert!(!legacy_reticulate_cache.exists());
     assert_stdout_contains(
         &out,
         &format!("Clearing ir cache at: {}", cache_dir.display()),
     );
     assert_stdout_contains(
         &out,
-        &format!("Clearing pak cache at: {}", r_pkg_cache_dir.display()),
+        &format!(
+            "Clearing pak cache at: {}",
+            r_pkg_cache_dir.join("lib").display()
+        ),
     );
     assert_stdout_contains(
         &out,
@@ -1670,7 +1677,7 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
         &out,
         &format!(
             "Clearing reticulate legacy cache at: {}",
-            r_user_cache_dir.join("r-reticulate").display()
+            legacy_reticulate_cache.display()
         ),
     );
 }
@@ -1682,6 +1689,7 @@ fn cache_clean_all_uses_r_profile_cache_locations() {
     let r_user_cache_dir = temp_dir("ir-cache-clean-all-r-profile-r-user");
     let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-r-profile-r-pkg");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-r-profile-renv");
+    let legacy_reticulate_cache = legacy_reticulate_cache_dir(&r_user_cache_dir);
     let profile = temp_path("ir-cache-clean-all-r-profile", "R");
 
     fs::write(
@@ -1705,9 +1713,10 @@ Sys.setenv(
         cache_dir.join("libraries").join("library").join("pkg"),
         r_pkg_cache_dir.join("lib").join("pkg"),
         r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        r_pkg_cache_dir.join("unrelated"),
         renv_cache_dir.join("v5").join("pkg"),
         r_user_cache_dir.join("R").join("reticulate").join("uv"),
-        r_user_cache_dir.join("r-reticulate").join("legacy"),
+        legacy_reticulate_cache.join("legacy"),
     ];
     for path in &paths {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1728,13 +1737,18 @@ Sys.setenv(
 
     assert_success(&out);
     assert!(!cache_dir.exists());
-    assert!(!r_pkg_cache_dir.exists());
+    assert!(!r_pkg_cache_dir.join("lib").exists());
+    assert!(!r_pkg_cache_dir.join("R").join("pkgcache").exists());
+    assert!(r_pkg_cache_dir.join("unrelated").exists());
     assert!(!renv_cache_dir.exists());
     assert!(!r_user_cache_dir.join("R").join("reticulate").exists());
-    assert!(!r_user_cache_dir.join("r-reticulate").exists());
+    assert!(!legacy_reticulate_cache.exists());
     assert_stdout_contains(
         &out,
-        &format!("Clearing pak cache at: {}", r_pkg_cache_dir.display()),
+        &format!(
+            "Clearing pak cache at: {}",
+            r_pkg_cache_dir.join("lib").display()
+        ),
     );
     assert_stdout_contains(
         &out,
@@ -1747,6 +1761,41 @@ Sys.setenv(
             r_user_cache_dir.join("R").join("reticulate").display()
         ),
     );
+}
+
+#[cfg(windows)]
+fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
+    r_user_cache_dir.join("r-reticulate").join("Cache")
+}
+
+#[cfg(not(windows))]
+fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
+    r_user_cache_dir.join("r-reticulate")
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_clean_all_honors_ir_rscript_env() {
+    let cache_dir = temp_dir("ir-cache-clean-all-ir-rscript-cache");
+    let bin_dir = temp_dir("ir-cache-clean-all-ir-rscript-bin");
+    let marker = temp_path("ir-cache-clean-all-ir-rscript-marker", "txt");
+    let rscript = bin_dir.join("Rscript");
+
+    write_executable(
+        &rscript,
+        "#!/bin/sh\ncat >/dev/null\nprintf 'selected\\n' > \"$IR_TEST_MARKER\"\n",
+    );
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_RSCRIPT", &rscript)
+        .env("IR_TEST_MARKER", &marker)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "selected\n");
 }
 
 #[test]

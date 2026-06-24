@@ -68,7 +68,7 @@ ir_pkgcache_cache_dir <- function() {
 ir_pak_cache_dir <- function() {
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
-    return(r_pkg_cache_dir)
+    return(file.path(r_pkg_cache_dir, "lib"))
   }
 
   ir_r_user_cache_dir("pak")
@@ -78,6 +78,10 @@ ir_renv_cache_dirs <- function() {
   cache <- Sys.getenv("RENV_PATHS_CACHE", "")
   if (nzchar(cache)) {
     return(ir_split_paths(cache))
+  }
+
+  if (requireNamespace("renv", quietly = TRUE)) {
+    return(renv::paths$root("cache"))
   }
 
   root <- Sys.getenv("RENV_PATHS_ROOT", "")
