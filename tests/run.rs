@@ -1802,6 +1802,7 @@ fn cache_clean_all_removes_external_uv_caches() {
     let uv_cache_dir = temp_dir("ir-cache-clean-all-external-uv-cache");
     let uv_python_dir = temp_dir("ir-cache-clean-all-external-uv-python");
     let uv_tool_dir = temp_dir("ir-cache-clean-all-external-uv-tool");
+    let uv_log = temp_path("ir-cache-clean-all-external-uv-log", "txt");
     let uv = bin_dir.join("uv");
 
     write_executable(
@@ -1810,6 +1811,7 @@ fn cache_clean_all_removes_external_uv_caches() {
 case "$1:$2" in
   --version:) printf 'uv 0.6.3\n' ;;
   cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  cache:clean) printf 'cache clean\n' > "$IR_TEST_UV_LOG"; /bin/rm -rf "$IR_TEST_UV_CACHE_DIR" ;;
   python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
   tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
   *) echo "unexpected uv args: $*" >&2; exit 2 ;;
@@ -1842,11 +1844,13 @@ esac
         .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
         .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
         .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .env("IR_TEST_UV_LOG", &uv_log)
         .args(["cache", "clean", "--all"])
         .output()
         .unwrap();
 
     assert_success(&out);
+    assert_eq!(fs::read_to_string(&uv_log).unwrap(), "cache clean\n");
     assert!(!uv_cache_dir.exists());
     assert!(!uv_python_dir.exists());
     assert!(!uv_tool_dir.exists());
@@ -1883,6 +1887,7 @@ fn cache_clean_all_resolves_reticulate_uv_before_clearing_reticulate_cache() {
         r#"#!/bin/sh
 case "$1:$2" in
   cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  cache:clean) /bin/rm -rf "$IR_TEST_UV_CACHE_DIR" ;;
   python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
   tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
   *) echo "unexpected uv args: $*" >&2; exit 2 ;;
@@ -1947,6 +1952,7 @@ fn cache_clean_all_finds_external_uv_under_home_local_bin() {
 case "$1:$2" in
   --version:) printf 'uv 0.6.3\n' ;;
   cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  cache:clean) /bin/rm -rf "$IR_TEST_UV_CACHE_DIR" ;;
   python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
   tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
   *) echo "unexpected uv args: $*" >&2; exit 2 ;;
