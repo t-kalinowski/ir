@@ -1866,6 +1866,68 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn cache_clean_all_resolves_reticulate_uv_before_clearing_reticulate_cache() {
+    let cache_dir = temp_dir("ir-cache-clean-all-reticulate-uv-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-reticulate-uv-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-reticulate-uv-r-pkg");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-reticulate-uv-renv");
+    let uv_cache_dir = temp_dir("ir-cache-clean-all-reticulate-uv-cache");
+    let uv_python_dir = temp_dir("ir-cache-clean-all-reticulate-uv-python");
+    let uv_tool_dir = temp_dir("ir-cache-clean-all-reticulate-uv-tool");
+    let reticulate_cache = r_user_cache_dir.join("R").join("reticulate");
+    let uv = reticulate_cache.join("bin").join("uv");
+
+    fs::create_dir_all(uv.parent().unwrap()).unwrap();
+    write_executable(
+        &uv,
+        r#"#!/bin/sh
+case "$1:$2" in
+  cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
+  tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
+  *) echo "unexpected uv args: $*" >&2; exit 2 ;;
+esac
+"#,
+    );
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+        uv_cache_dir.join("archive"),
+        uv_python_dir.join("cpython"),
+        uv_tool_dir.join("tools"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("RETICULATE_UV", &uv)
+        .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
+        .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
+        .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!cache_dir.exists());
+    assert!(!reticulate_cache.exists());
+    assert!(!uv_cache_dir.exists());
+    assert!(!uv_python_dir.exists());
+    assert!(!uv_tool_dir.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn cache_clean_all_finds_external_uv_under_home_local_bin() {
     let home = temp_dir("ir-cache-clean-all-home-local-uv-home");
     let cache_dir = temp_dir("ir-cache-clean-all-home-local-uv-ir");
