@@ -124,8 +124,60 @@ ir_reticulate_legacy_cache_dir <- function() {
   file.path(Sys.getenv("XDG_CACHE_HOME", path.expand("~/.cache")), "r-reticulate")
 }
 
+ir_external_uv_binary <- function() {
+  uv <- Sys.getenv("RETICULATE_UV", unset = NA_character_)
+  if (!is.na(uv)) {
+    if (identical(uv, "managed")) {
+      return("")
+    }
+    return(uv)
+  }
+
+  uv <- getOption("reticulate.uv_binary", NULL)
+  if (!is.null(uv)) {
+    uv <- as.character(uv[[1L]])
+    if (identical(uv, "managed")) {
+      return("")
+    }
+    return(uv)
+  }
+
+  uv <- unname(Sys.which("uv"))
+  if (nzchar(uv)) uv else ""
+}
+
+ir_uv_dir <- function(uv, args) {
+  if (!nzchar(uv)) {
+    return("")
+  }
+
+  out <- suppressWarnings(system2(uv, args, stdout = TRUE, stderr = FALSE))
+  status <- attr(out, "status", exact = TRUE)
+  if (!is.null(status) && !identical(status, 0L)) {
+    stop(
+      "failed to run `", uv, " ", paste(args, collapse = " "), "`",
+      call. = FALSE
+    )
+  }
+
+  out <- out[nzchar(out)]
+  if (length(out) != 1L) {
+    stop(
+      "`", uv, " ", paste(args, collapse = " "), "` must print exactly one path",
+      call. = FALSE
+    )
+  }
+
+  out[[1L]]
+}
+
 ir_clear_cache("pak package cache", ir_pkgcache_cache_dir())
 ir_clear_cache("pak cache", ir_pak_cache_dir())
 ir_clear_cache("renv cache", ir_renv_cache_dirs())
 ir_clear_cache("reticulate cache", ir_r_user_cache_dir("reticulate"))
 ir_clear_cache("reticulate legacy cache", ir_reticulate_legacy_cache_dir())
+
+uv <- ir_external_uv_binary()
+ir_clear_cache("uv cache", ir_uv_dir(uv, c("cache", "dir")))
+ir_clear_cache("uv Python cache", ir_uv_dir(uv, c("python", "dir")))
+ir_clear_cache("uv tool cache", ir_uv_dir(uv, c("tool", "dir")))

@@ -4,8 +4,9 @@ mod support;
 
 use support::*;
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
@@ -1632,6 +1633,7 @@ fn cache_clean_all_removes_ir_and_tool_caches() {
         .env("R_USER_CACHE_DIR", &r_user_cache_dir)
         .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("RETICULATE_UV", "managed")
         .args(["cache", "clean", "--all"])
         .output()
         .unwrap();
@@ -1727,6 +1729,7 @@ Sys.setenv(
         .env("HOME", &home)
         .env("IR_CACHE_DIR", &cache_dir)
         .env("R_PROFILE_USER", &profile)
+        .env("RETICULATE_UV", "managed")
         .env_remove("R_USER_CACHE_DIR")
         .env_remove("R_PKG_CACHE_DIR")
         .env_remove("RENV_PATHS_CACHE")
@@ -1763,6 +1766,78 @@ Sys.setenv(
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cache_clean_all_removes_external_uv_caches() {
+    let cache_dir = temp_dir("ir-cache-clean-all-external-uv-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-external-uv-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-external-uv-r-pkg");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-external-uv-renv");
+    let bin_dir = temp_dir("ir-cache-clean-all-external-uv-bin");
+    let uv_cache_dir = temp_dir("ir-cache-clean-all-external-uv-cache");
+    let uv_python_dir = temp_dir("ir-cache-clean-all-external-uv-python");
+    let uv_tool_dir = temp_dir("ir-cache-clean-all-external-uv-tool");
+    let uv = bin_dir.join("uv");
+
+    write_executable(
+        &uv,
+        r#"#!/bin/sh
+case "$1:$2" in
+  cache:dir) printf '%s\n' "$IR_TEST_UV_CACHE_DIR" ;;
+  python:dir) printf '%s\n' "$IR_TEST_UV_PYTHON_DIR" ;;
+  tool:dir) printf '%s\n' "$IR_TEST_UV_TOOL_DIR" ;;
+  *) echo "unexpected uv args: $*" >&2; exit 2 ;;
+esac
+"#,
+    );
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        r_user_cache_dir.join("R").join("reticulate").join("uv"),
+        legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
+        uv_cache_dir.join("archive"),
+        uv_python_dir.join("cpython"),
+        uv_tool_dir.join("tools"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("PATH", prepend_path(&bin_dir))
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .env("IR_TEST_UV_CACHE_DIR", &uv_cache_dir)
+        .env("IR_TEST_UV_PYTHON_DIR", &uv_python_dir)
+        .env("IR_TEST_UV_TOOL_DIR", &uv_tool_dir)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!uv_cache_dir.exists());
+    assert!(!uv_python_dir.exists());
+    assert!(!uv_tool_dir.exists());
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv cache at: {}", uv_cache_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv Python cache at: {}", uv_python_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing uv tool cache at: {}", uv_tool_dir.display()),
+    );
+}
+
 #[cfg(windows)]
 fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
     r_user_cache_dir.join("r-reticulate").join("Cache")
@@ -1771,6 +1846,13 @@ fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
 #[cfg(not(windows))]
 fn legacy_reticulate_cache_dir(r_user_cache_dir: &Path) -> std::path::PathBuf {
     r_user_cache_dir.join("r-reticulate")
+}
+
+#[cfg(unix)]
+fn prepend_path(path: &Path) -> OsString {
+    let path_env = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(path.to_path_buf()).chain(std::env::split_paths(&path_env));
+    std::env::join_paths(paths.collect::<Vec<PathBuf>>()).unwrap()
 }
 
 #[cfg(unix)]

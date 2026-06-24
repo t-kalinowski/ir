@@ -366,7 +366,7 @@ fn cache_command() -> ClapCommand {
                     Arg::new("all")
                         .long("all")
                         .action(ArgAction::SetTrue)
-                        .help("Also clear pak, renv, and reticulate caches"),
+                        .help("Also clear pak, renv, reticulate, and external uv caches"),
                 ),
         )
         .subcommand(ClapCommand::new("dir").about("Show the cache directory"))

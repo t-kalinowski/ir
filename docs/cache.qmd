@@ -34,4 +34,4 @@ $ ir cache clean --all
 `ir cache dir` prints the cache root.
 `ir cache clean` removes the whole `ir` cache, including materialised libraries and resolution markers.
 `--force` is accepted and has the same behavior.
-`--all` also removes the pak, renv, and reticulate caches that `ir` uses, printing each cache path before it is cleared.
+`--all` also removes the pak, renv, reticulate, and external uv caches that `ir` uses, printing each cache path before it is cleared.
