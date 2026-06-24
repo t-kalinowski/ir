@@ -213,27 +213,7 @@ ir_pkgcache_user_dirs_from_namespace <- function(ns) {
 }
 
 ir_pak_cache_dirs <- function() {
-  c(
-    ir_pkg_config_path("pkg.cache_dir", "PKG_CACHE_DIR"),
-    ir_pak_default_cache_dir()
-  )
-}
-
-ir_pak_default_cache_dir <- function() {
-  if (nzchar(Sys.getenv("R_PKG_CACHE_DIR", ""))) {
-    return(character())
-  }
-
-  r_user_cache_dir <- Sys.getenv("R_USER_CACHE_DIR", "")
-  if (nzchar(r_user_cache_dir)) {
-    return(file.path(r_user_cache_dir, "R", "pak"))
-  }
-
-  if (.Platform$OS.type == "windows") {
-    return(file.path(ir_windows_local_app_data(), "R", "Cache", "pak"))
-  }
-
-  ir_r_user_cache_dir("pak")
+  ir_pkg_config_path("pkg.cache_dir", "PKG_CACHE_DIR")
 }
 
 ir_renv_cache_dirs <- function() {

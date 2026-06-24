@@ -1890,12 +1890,11 @@ options(
         .unwrap();
 
     assert_success(&out);
-    assert!(!pak_cache.exists());
+    assert!(pak_cache.exists());
     assert!(!pkgcache_cache.exists());
     assert!(!download_cache.exists());
     assert!(!package_cache.exists());
     assert!(!metadata_cache.exists());
-    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &download_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &package_cache);
@@ -1947,12 +1946,11 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
         .unwrap();
 
     assert_success(&out);
-    assert!(!pak_cache.exists());
+    assert!(pak_cache.exists());
     assert!(!pkgcache_cache.exists());
     assert!(!download_cache.exists());
     assert!(!package_cache.exists());
     assert!(!metadata_cache.exists());
-    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &download_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &package_cache);
@@ -1960,7 +1958,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
 }
 
 #[test]
-fn cache_clean_all_removes_default_windows_pak_cache() {
+fn cache_clean_all_preserves_default_windows_pak_cache() {
     let home = temp_dir("ir-cache-clean-all-windows-pak-home");
     let cache_dir = temp_dir("ir-cache-clean-all-windows-pak-ir");
     let local_app_data = temp_dir("ir-cache-clean-all-windows-pak-local-app");
@@ -2007,8 +2005,7 @@ Sys.info <- function() c(sysname = "Windows")
         .unwrap();
 
     assert_success(&out);
-    assert!(!pak_cache.exists());
-    assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
+    assert!(pak_cache.exists());
 }
 
 #[test]
