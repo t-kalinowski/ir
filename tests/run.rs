@@ -1810,6 +1810,7 @@ fn cache_clean_all_uses_pak_pkg_options() {
     let pkgcache_cache = r_user_cache_dir.join("R").join("pkgcache");
     let download_cache = temp_dir("ir-cache-clean-all-pak-options-download");
     let package_cache = temp_dir("ir-cache-clean-all-pak-options-package");
+    let metadata_cache = temp_dir("ir-cache-clean-all-pak-options-metadata");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-options-renv");
     let profile = temp_path("ir-cache-clean-all-pak-options-profile", "R");
 
@@ -1819,11 +1820,13 @@ fn cache_clean_all_uses_pak_pkg_options() {
             r#"
 options(
   pkg.cache_dir = {},
-  pkg.package_cache_dir = {}
+  pkg.package_cache_dir = {},
+  pkg.metadata_cache_dir = {}
 )
 "#,
             serde_json::to_string(&renviron_path(&download_cache)).unwrap(),
             serde_json::to_string(&renviron_path(&package_cache)).unwrap(),
+            serde_json::to_string(&renviron_path(&metadata_cache)).unwrap(),
         ),
     )
     .unwrap();
@@ -1834,6 +1837,7 @@ options(
         pkgcache_cache.join("pkg"),
         download_cache.join("pkg"),
         package_cache.join("pkg"),
+        metadata_cache.join("pkg"),
         renv_cache_dir.join("v5").join("pkg"),
         r_user_cache_dir.join("R").join("reticulate").join("uv"),
         legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
@@ -1853,6 +1857,7 @@ options(
         .env_remove("R_PKG_CACHE_DIR")
         .env_remove("PKG_CACHE_DIR")
         .env_remove("PKG_PACKAGE_CACHE_DIR")
+        .env_remove("PKG_METADATA_CACHE_DIR")
         .args(["cache", "clean", "--all"])
         .output()
         .unwrap();
@@ -1862,10 +1867,12 @@ options(
     assert!(!pkgcache_cache.exists());
     assert!(!download_cache.exists());
     assert!(!package_cache.exists());
+    assert!(!metadata_cache.exists());
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &download_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &package_cache);
+    assert_stdout_contains_path(&out, "Clearing pak metadata cache at: ", &metadata_cache);
 }
 
 #[test]
@@ -1877,6 +1884,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
     let pkgcache_cache = r_user_cache_dir.join("R").join("pkgcache");
     let download_cache = temp_dir("ir-cache-clean-all-pak-env-download");
     let package_cache = temp_dir("ir-cache-clean-all-pak-env-package");
+    let metadata_cache = temp_dir("ir-cache-clean-all-pak-env-metadata");
     let renv_cache_dir = temp_dir("ir-cache-clean-all-pak-env-renv");
 
     let paths = [
@@ -1885,6 +1893,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
         pkgcache_cache.join("pkg"),
         download_cache.join("pkg"),
         package_cache.join("pkg"),
+        metadata_cache.join("pkg"),
         renv_cache_dir.join("v5").join("pkg"),
         r_user_cache_dir.join("R").join("reticulate").join("uv"),
         legacy_reticulate_cache_dir(&r_user_cache_dir).join("legacy"),
@@ -1901,6 +1910,7 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
         .env("RENV_PATHS_CACHE", &renv_cache_dir)
         .env("PKG_CACHE_DIR", &download_cache)
         .env("PKG_PACKAGE_CACHE_DIR", &package_cache)
+        .env("PKG_METADATA_CACHE_DIR", &metadata_cache)
         .env("RETICULATE_UV", "managed")
         .env_remove("R_PKG_CACHE_DIR")
         .args(["cache", "clean", "--all"])
@@ -1912,10 +1922,12 @@ fn cache_clean_all_uses_pak_pkg_environment_variables() {
     assert!(!pkgcache_cache.exists());
     assert!(!download_cache.exists());
     assert!(!package_cache.exists());
+    assert!(!metadata_cache.exists());
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &pak_cache);
     assert_stdout_contains_path(&out, "Clearing pak cache at: ", &download_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &pkgcache_cache);
     assert_stdout_contains_path(&out, "Clearing pak package cache at: ", &package_cache);
+    assert_stdout_contains_path(&out, "Clearing pak metadata cache at: ", &metadata_cache);
 }
 
 #[test]

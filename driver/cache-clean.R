@@ -118,6 +118,10 @@ ir_pkgcache_cache_dirs <- function() {
   )
 }
 
+ir_pkg_metadata_cache_dirs <- function() {
+  ir_pkg_config_path("pkg.metadata_cache_dir", "PKG_METADATA_CACHE_DIR")
+}
+
 ir_pkgcache_default_cache_dir <- function() {
   r_pkg_cache_dir <- Sys.getenv("R_PKG_CACHE_DIR", "")
   if (nzchar(r_pkg_cache_dir)) {
@@ -318,6 +322,7 @@ uv <- ir_external_uv_binary()
 uv_cache <- ir_uv_dir(uv, c("cache", "dir"))
 
 ir_clear_cache("pak package cache", ir_pkgcache_cache_dirs())
+ir_clear_cache("pak metadata cache", ir_pkg_metadata_cache_dirs())
 ir_clear_cache("pak cache", ir_pak_cache_dirs())
 ir_clear_cache("renv cache", ir_renv_cache_dirs())
 ir_clean_uv_cache(uv, uv_cache)
