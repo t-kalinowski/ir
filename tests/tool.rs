@@ -85,6 +85,84 @@ fn rx_executes_real_package_entrypoint() {
     assert_stdout_contains(&out, "cransearch.R [-h | --help]");
 }
 
+#[cfg(unix)]
+#[test]
+fn rx_preserves_quickstart_package_shorthand() {
+    let cache_dir = temp_dir("ir-rx-quickstart-package-cache");
+    let library = temp_dir("ir-rx-quickstart-package-library");
+    let rscript_dir = temp_dir("ir-rx-quickstart-package-rscript");
+    let exec_dir = library.join("quickstart").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    write_executable(&exec_dir.join("quickstart.R"), "#!/usr/bin/env Rscript\n");
+
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        concat!(
+            "#!/bin/sh\n",
+            "if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n",
+            "  cat >/dev/null\n",
+            "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+            "  printf '%s\\n' quickstart > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "printf '%s\\n' quickstart.package.help\n",
+        ),
+    );
+
+    let out = rx()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("IR_RSCRIPT", &rscript)
+        .args(["quickstart", "--help"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert_stdout_contains(&out, "quickstart.package.help");
+}
+
+#[cfg(windows)]
+#[test]
+fn rx_preserves_windows_child_exit_code() {
+    let cache_dir = temp_dir("ir-rx-windows-exit-code-cache");
+    let library = temp_dir("ir-rx-windows-exit-code-library");
+    let rscript_dir = temp_dir("ir-rx-windows-exit-code-rscript");
+    let exec_dir = library.join("irhighstatus").join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("irhighstatus.cmd"),
+        "@echo off\r\nexit /b 300\r\n",
+    )
+    .unwrap();
+
+    let rscript = rscript_dir.join("Rscript.cmd");
+    fs::write(
+        &rscript,
+        concat!(
+            "@echo off\r\n",
+            "if not \"%IR_RESOLVE_RESULT_FILE%\" == \"\" (\r\n",
+            "  more > nul\r\n",
+            "  echo %IR_TEST_LIBRARY%> \"%IR_RESOLVE_RESULT_FILE%\"\r\n",
+            "  echo irhighstatus> \"%IR_RESOLVE_PACKAGE_RESULT_FILE%\"\r\n",
+            "  exit /b 0\r\n",
+            ")\r\n",
+            "exit /b 0\r\n",
+        ),
+    )
+    .unwrap();
+
+    let out = rx()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("IR_RSCRIPT", &rscript)
+        .arg("irhighstatus")
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(300), "{}", output_text(&out));
+}
+
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
     let cache_dir = temp_cache("ir-tool-install-real-cache");
