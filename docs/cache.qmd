@@ -28,8 +28,10 @@ Source refs are still passed to `renv::use()` on each run so renv can refresh so
 $ ir cache dir
 $ ir cache clean
 $ ir cache clean --force
+$ ir cache clean --all
 ```
 
 `ir cache dir` prints the cache root.
 `ir cache clean` removes the whole `ir` cache, including materialised libraries and resolution markers.
 `--force` is accepted and has the same behavior.
+`--all` also removes the pak, renv, and reticulate caches that `ir` uses, printing each cache path before it is cleared.

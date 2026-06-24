@@ -986,7 +986,7 @@ fn env_string(name: &str, value: OsString) -> Result<String, Box<dyn Error>> {
         .map_err(|_| format!("`{name}` must be valid UTF-8").into())
 }
 
-fn r_user_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
+pub(crate) fn r_user_cache_dir() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(path) = nonempty_env("R_USER_CACHE_DIR") {
         return Ok(PathBuf::from(path));
     }

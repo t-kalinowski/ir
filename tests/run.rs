@@ -1606,6 +1606,76 @@ fn cache_clean_removes_cache_dir() {
 }
 
 #[test]
+fn cache_clean_all_removes_ir_and_tool_caches() {
+    let cache_dir = temp_dir("ir-cache-clean-all-ir");
+    let r_user_cache_dir = temp_dir("ir-cache-clean-all-r-user");
+    let r_pkg_cache_dir = temp_dir("ir-cache-clean-all-r-pkg");
+    let renv_cache_dir = temp_dir("ir-cache-clean-all-renv");
+
+    let paths = [
+        cache_dir.join("libraries").join("library").join("pkg"),
+        r_pkg_cache_dir.join("lib").join("pkg"),
+        r_pkg_cache_dir.join("R").join("pkgcache").join("pkg"),
+        renv_cache_dir.join("v5").join("pkg"),
+        r_user_cache_dir.join("R").join("reticulate").join("uv"),
+        r_user_cache_dir.join("r-reticulate").join("legacy"),
+    ];
+    for path in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "cached").unwrap();
+    }
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("R_USER_CACHE_DIR", &r_user_cache_dir)
+        .env("R_PKG_CACHE_DIR", &r_pkg_cache_dir)
+        .env("RENV_PATHS_CACHE", &renv_cache_dir)
+        .args(["cache", "clean", "--all"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+    assert!(!cache_dir.exists());
+    assert!(!r_pkg_cache_dir.exists());
+    assert!(!renv_cache_dir.exists());
+    assert!(!r_user_cache_dir.join("R").join("reticulate").exists());
+    assert!(!r_user_cache_dir.join("r-reticulate").exists());
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing ir cache at: {}", cache_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing pak cache at: {}", r_pkg_cache_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!(
+            "Clearing pak package cache at: {}",
+            r_pkg_cache_dir.join("R").join("pkgcache").display()
+        ),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!("Clearing renv cache at: {}", renv_cache_dir.display()),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!(
+            "Clearing reticulate cache at: {}",
+            r_user_cache_dir.join("R").join("reticulate").display()
+        ),
+    );
+    assert_stdout_contains(
+        &out,
+        &format!(
+            "Clearing reticulate legacy cache at: {}",
+            r_user_cache_dir.join("r-reticulate").display()
+        ),
+    );
+}
+
+#[test]
 fn run_script_fixture_resolves_packages_and_isolates_user_library() {
     let script = fixture("run/packages.R");
     let cache_dir = temp_cache("ir-run-script-cache");
