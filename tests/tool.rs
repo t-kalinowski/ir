@@ -372,6 +372,71 @@ fn tool_run_and_install_use_selected_bin_architecture() {
     assert_stdout_contains(&out, "helper.arch=x64");
 }
 
+#[cfg(unix)]
+#[test]
+fn tool_run_queries_architecture_with_forwarded_rscript_args() {
+    let cache_dir = temp_dir("ir-tool-rscript-arch-args-cache");
+    let library = temp_dir("ir-tool-rscript-arch-args-library");
+    let rscript_dir = temp_dir("ir-tool-rscript-arch-args-rscript");
+    let package = library.join("irarchargs");
+    let i386_bin_dir = package.join("bin").join("i386");
+    fs::create_dir_all(&i386_bin_dir).unwrap();
+    write_executable(
+        &i386_bin_dir.join("archtool.R"),
+        "#!/usr/bin/env Rscript\ncat('not reached\\n')\n",
+    );
+    let rscript = write_fake_tool_resolver_with_forwarded_arch(&rscript_dir, "irarchargs", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--arch=i386", "--from", "irarchargs", "archtool"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.ran=true");
+    assert_stdout_contains(&out, "tool.arch.arg=true");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_run_prefers_selected_arch_bin_on_path() {
+    let cache_dir = temp_dir("ir-tool-bin-path-arch-cache");
+    let library = temp_dir("ir-tool-bin-path-arch-library");
+    let rscript_dir = temp_dir("ir-tool-bin-path-arch-rscript");
+    let package = library.join("irpatharch");
+    let exec_dir = package.join("exec");
+    let bin_dir = package.join("bin");
+    let x64_bin_dir = bin_dir.join("x64");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::create_dir_all(&x64_bin_dir).unwrap();
+    write_executable(
+        &bin_dir.join("helper"),
+        "#!/bin/sh\nprintf 'helper.arch=generic\\n'\n",
+    );
+    write_executable(
+        &x64_bin_dir.join("helper"),
+        "#!/bin/sh\nprintf 'helper.arch=x64\\n'\n",
+    );
+    write_executable(&exec_dir.join("path-probe"), "#!/bin/sh\nhelper\n");
+    let rscript = write_fake_tool_resolver(&rscript_dir, "irpatharch", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--from", "irpatharch", "path-probe"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "helper.arch=x64");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn tool_install_adds_default_macos_bin_dir_to_zprofile_once() {
@@ -1475,6 +1540,47 @@ fn write_fake_tool_resolver(rscript_dir: &Path, package: &str, arch: &str) -> Pa
                 "printf '%s\\n' {}\n",
             ),
             package, arch
+        ),
+    );
+    rscript
+}
+
+#[cfg(unix)]
+fn write_fake_tool_resolver_with_forwarded_arch(
+    rscript_dir: &Path,
+    package: &str,
+    default_arch: &str,
+) -> PathBuf {
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
+                "  cat >/dev/null\n",
+                "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+                "  printf '%s\\n' {} > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "case \" $* \" in\n",
+                "  *' -e '*) is_arch_query=true ;;\n",
+                "  *) is_arch_query=false ;;\n",
+                "esac\n",
+                "if [ \"$is_arch_query\" = true ]; then\n",
+                "  case \" $* \" in\n",
+                "    *' --arch=i386 '*) printf '%s\\n' i386 ;;\n",
+                "    *) printf '%s\\n' {} ;;\n",
+                "  esac\n",
+                "  exit 0\n",
+                "fi\n",
+                "printf 'tool.ran=true\\n'\n",
+                "case \" $* \" in\n",
+                "  *' --arch=i386 '*) printf 'tool.arch.arg=true\\n' ;;\n",
+                "  *) printf 'tool.arch.arg=false\\n' ;;\n",
+                "esac\n",
+            ),
+            package, default_arch
         ),
     );
     rscript

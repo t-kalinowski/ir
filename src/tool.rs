@@ -31,7 +31,7 @@ pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
         },
     )?;
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
-    let r_arch = selected_r_arch(&rscript)?;
+    let r_arch = selected_r_arch(&rscript, &run.rscript_args)?;
     let executable = find_package_executable(
         &library,
         &package_name,
@@ -64,7 +64,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
         },
     )?;
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec)?;
-    let r_arch = selected_r_arch(&rscript)?;
+    let r_arch = selected_r_arch(&rscript, &[])?;
     let executables = discover_package_executables(&library, &package_name, r_arch.as_deref())?;
     if executables.is_empty() {
         return Err(format!(
@@ -181,9 +181,13 @@ fn package_executable_not_found_error(
     format!("could not find executable `{executable}` or `{executable}.R` in `{dirs}`").into()
 }
 
-fn selected_r_arch(rscript: &OsStr) -> Result<Option<String>, Box<dyn Error>> {
+fn selected_r_arch(
+    rscript: &OsStr,
+    rscript_args: &[String],
+) -> Result<Option<String>, Box<dyn Error>> {
     let output = Command::new(rscript)
         .arg("--vanilla")
+        .args(rscript_args)
         .arg("-e")
         .arg(concat!(
             "arch <- sub('^/', '', Sys.getenv('R_ARCH')); ",
@@ -974,7 +978,6 @@ fn package_runtime_path_dirs(
     if !bin.is_dir() {
         return Ok(entries);
     }
-    entries.push(bin.clone());
 
     let mut arch_dirs = fs::read_dir(&bin)
         .map_err(|e| format!("cannot read bin directory `{}`: {e}", bin.display()))?
@@ -986,6 +989,7 @@ fn package_runtime_path_dirs(
             .into_iter()
             .filter(|path| path.is_dir() && arch_dir_matches(path, r_arch)),
     );
+    entries.push(bin.clone());
 
     Ok(entries)
 }
