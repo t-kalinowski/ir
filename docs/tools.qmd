@@ -80,7 +80,7 @@ For compiled CLIs, put the executable at `bin/tool` or `bin/<arch>/tool`.
 
 ## Install launchers
 
-`ir tool install` resolves a package and installs the executables it provides.
+`ir tool install` resolves a package, materialises its package library into the durable tool store, and installs the executables it provides.
 
 ```console
 $ ir tool install btw
@@ -91,6 +91,10 @@ $ ir tool install --with cli --r-version 4.5 btw
 $ ir tool install --rscript /path/to/Rscript btw
 ```
 
+The tool store is configured with `IR_TOOL_STORE_DIR`.
+By default, it is `$XDG_DATA_HOME/ir/tools` or `~/.local/share/ir/tools` on Unix and macOS, and `%LOCALAPPDATA%\Programs\R\ir\tools` or `%USERPROFILE%\AppData\Local\Programs\R\ir\tools` on Windows.
+Installed tool libraries are persistent state, so `ir cache clean` does not remove them.
+
 For `exec/` entries, generated launchers keep the same resolved package ref, `--with` package additions, and R selection that were used at install time.
 They set `R_LIBS` to the resolved library and `R_LIBS_USER=NULL`.
 Nested `#| launcher:` metadata is included in generated launchers.
@@ -99,7 +103,7 @@ Plain `Rscript` package executables keep Rscript's normal startup package behavi
 For `bin/` entries, installed files are symlinks to the resolved executable files.
 `ir` does not inspect their contents or launcher metadata.
 
-By default, `ir tool install` writes generated launchers and symlinks to `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`, `XDG_DATA_HOME/../bin`, or `~/.local/bin` on Unix.
+By default, `ir tool install` writes command names as generated launchers and symlinks to `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`, `XDG_DATA_HOME/../bin`, or `~/.local/bin` on Unix.
 On Windows, it uses `%LOCALAPPDATA%\Programs\R\ir\bin`, falling back to `%USERPROFILE%\AppData\Local\Programs\R\ir\bin`.
 `--bin-dir` overrides those defaults.
 When no `--bin-dir` override is used, `ir tool install` also sets up `PATH` for the selected executable install directory where needed.

@@ -43,6 +43,7 @@ Set `IR_INSTALL_DIR` to choose another directory.
 | `IR_R_VERSION` | R version selected through `rig` | unset |
 | `IR_RSCRIPT` | Rscript executable path or command | `Rscript` on `PATH` |
 | `IR_QUARTO` | Quarto rendering | `quarto` on `PATH` |
+| `IR_TOOL_STORE_DIR` | `ir tool install` | durable installed-tool library store |
 | `IR_TOOL_BIN_DIR` | `ir tool install` | first executable install directory override |
 | `IR_NO_MODIFY_PATH` | install scripts, `ir tool install` | disables automatic PATH setup when nonempty |
 | `RAPP_BIN_DIR` | `ir tool install` | second executable install directory override |
@@ -55,6 +56,9 @@ Set `IR_INSTALL_DIR` to choose another directory.
 The default cache directory is computed before launching R.
 `IR_CACHE_DIR` is authoritative; otherwise `ir` uses the process `R_USER_CACHE_DIR`, process `XDG_CACHE_HOME`, or a platform default and appends `R/ir`.
 The selected path is passed to the resolver R session, so R startup files do not redirect the `ir` cache.
+Installed tool libraries use `IR_TOOL_STORE_DIR`.
+When unset, the default is `$XDG_DATA_HOME/ir/tools` or `~/.local/share/ir/tools` on Unix and macOS, and `%LOCALAPPDATA%\Programs\R\ir\tools` or `%USERPROFILE%\AppData\Local\Programs\R\ir\tools` on Windows.
+This store is persistent state and is not removed by `ir cache clean`.
 
 Package snapshot date precedence for `ir run` and `ir render` is `--exclude-newer`, then `IR_EXCLUDE_NEWER`, then frontmatter `exclude-newer`.
 `IR_EXCLUDE_NEWER` is ignored when `--exclude-newer` is supplied.

@@ -288,8 +288,25 @@ pub(crate) fn resolve_library_and_primary_package(
     spec: &RuntimeSpec,
     rscript_args: &[String],
 ) -> Result<(PathBuf, String), Box<dyn Error>> {
+    resolve_library_and_primary_package_in_root(rscript, spec, rscript_args, None)
+}
+
+pub(crate) fn resolve_library_and_primary_package_in_root(
+    rscript: &OsStr,
+    spec: &RuntimeSpec,
+    rscript_args: &[String],
+    library_root: Option<&Path>,
+) -> Result<(PathBuf, String), Box<dyn Error>> {
     let cache_dir = ir_cache_dir()?;
-    let resolved = resolve_library_inner(rscript, spec, true, None, rscript_args, &cache_dir)?;
+    let resolved = resolve_library_inner(
+        rscript,
+        spec,
+        true,
+        None,
+        rscript_args,
+        &cache_dir,
+        library_root,
+    )?;
     let library = resolved
         .library
         .ok_or("dependency resolver did not return a library path")?;
@@ -314,6 +331,7 @@ fn resolve_runtime(
         python_request.as_ref(),
         rscript_args,
         &cache_dir,
+        None,
     )
 }
 
@@ -330,6 +348,7 @@ fn resolve_library_inner(
     python_request: Option<&python::EnvRequest>,
     rscript_args: &[String],
     cache_dir: &Path,
+    library_root: Option<&Path>,
 ) -> Result<ResolvedLibrary, Box<dyn Error>> {
     let dependencies = normalized_dependencies(&spec.dependencies);
     let resolution_cache_paths = resolve_cache::paths(
@@ -339,6 +358,7 @@ fn resolve_library_inner(
         &dependencies,
         spec.exclude_newer.as_deref(),
         spec.quarto_render,
+        library_root,
     )?;
     let cached_library = resolve_cache::read(resolution_cache_paths.as_ref(), primary_package)?;
     let cached_python = python::read_cache(python_request)?;
@@ -426,6 +446,7 @@ fn resolve_library_inner(
             .env_remove("IR_RESOLVE_PACKAGE_RESULT_FILE")
             .env_remove("IR_RESOLUTION_MARKER")
             .env_remove("IR_PRIMARY_PACKAGE_MARKER")
+            .env_remove("IR_LIBRARY_ROOT")
             .env_remove("IR_QUARTO_RENDER")
             .env_remove("IR_EXCLUDE_NEWER")
             .env_remove("IR_PYTHON_RESULT_FILE")
@@ -435,6 +456,9 @@ fn resolve_library_inner(
             .env_remove("IR_TOOLING_RESTART_FILE")
             .env_remove(TOOLING_SAFE_MODE_ENV)
             .env("IR_TOOLING_RESTART_FILE", &restart_file);
+        if let Some(library_root) = library_root {
+            cmd.env("IR_LIBRARY_ROOT", library_root);
+        }
         if safe_mode {
             cmd.env(TOOLING_SAFE_MODE_ENV, "1");
         }

@@ -253,6 +253,155 @@ fn tool_run_rx_and_install_support_package_bin_executables() {
 
 #[cfg(unix)]
 #[test]
+fn tool_install_materializes_exec_and_bin_tools_in_tool_store() {
+    let cache_dir = temp_dir("ir-tool-store-install-cache");
+    let store_dir = temp_dir("ir-tool-store-install-store");
+    let bin_dir = temp_dir("ir-tool-store-install-bin");
+    let rscript_dir = temp_dir("ir-tool-store-install-rscript");
+    let rscript = write_fake_tool_store_resolver(&rscript_dir, "irstorepkg");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TOOL_STORE_DIR", &store_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irstorepkg")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "hello");
+    assert_stdout_contains(&out, "native");
+
+    let stored_library = store_dir.join("libraries").join("durable");
+    let stored_package = stored_library.join("irstorepkg");
+    assert!(stored_package.exists(), "{}", stored_package.display());
+    assert!(
+        cache_dir
+            .join("resolutions")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some(),
+        "resolution markers should stay in IR_CACHE_DIR"
+    );
+    assert!(
+        !store_dir.join("resolutions").exists(),
+        "resolution markers should not be written to IR_TOOL_STORE_DIR"
+    );
+
+    let exec_launcher = fs::read_to_string(launcher_path(&bin_dir, "hello")).unwrap();
+    assert!(
+        exec_launcher.contains(&store_dir.to_string_lossy().into_owned()),
+        "{exec_launcher}"
+    );
+    assert!(
+        !exec_launcher.contains(&cache_dir.to_string_lossy().into_owned()),
+        "{exec_launcher}"
+    );
+
+    let bin_target = fs::read_link(launcher_path(&bin_dir, "native")).unwrap();
+    assert!(
+        bin_target.starts_with(&store_dir),
+        "bin tool should point into tool store: {}",
+        bin_target.display()
+    );
+    assert!(
+        !bin_target.starts_with(&cache_dir),
+        "bin tool should not point into cache: {}",
+        bin_target.display()
+    );
+
+    let out = Command::new(launcher_path(&bin_dir, "hello"))
+        .arg("before-clean")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=exec");
+    assert_stdout_contains(&out, &format!("tool.r_libs={}", stored_library.display()));
+
+    let out = Command::new(launcher_path(&bin_dir, "native"))
+        .arg("before-clean")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=bin");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .args(["cache", "clean"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert!(
+        !cache_dir.exists(),
+        "cache clean should remove IR_CACHE_DIR"
+    );
+    assert!(
+        stored_package.exists(),
+        "tool store should survive cache clean"
+    );
+
+    let out = Command::new(launcher_path(&bin_dir, "hello"))
+        .arg("after-clean")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=exec");
+    assert_stdout_contains(&out, "after-clean");
+
+    let out = Command::new(launcher_path(&bin_dir, "native"))
+        .arg("after-clean")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=bin");
+    assert_stdout_contains(&out, "tool.args=after-clean");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_run_materializes_package_tools_in_cache() {
+    let cache_dir = temp_dir("ir-tool-store-run-cache");
+    let store_dir = temp_dir("ir-tool-store-run-store");
+    let rscript_dir = temp_dir("ir-tool-store-run-rscript");
+    let rscript = write_fake_tool_store_resolver(&rscript_dir, "irrunstorepkg");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TOOL_STORE_DIR", &store_dir)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--from", "irrunstorepkg", "native", "run", "arg"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=bin");
+    assert_stdout_contains(&out, "tool.args=run arg");
+
+    assert!(
+        cache_dir
+            .join("libraries")
+            .join("durable")
+            .join("irrunstorepkg")
+            .exists(),
+        "tool run should use IR_CACHE_DIR"
+    );
+    assert!(
+        !store_dir
+            .join("libraries")
+            .join("durable")
+            .join("irrunstorepkg")
+            .exists(),
+        "tool run should not use IR_TOOL_STORE_DIR"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn tool_run_and_install_treat_bin_executables_opaquely() {
     let cache_dir = temp_dir("ir-tool-bin-opaque-cache");
     let bin_dir = temp_dir("ir-tool-bin-opaque-install-bin");
@@ -1858,6 +2007,55 @@ fn write_fake_tool_resolver(rscript_dir: &Path, package: &str, arch: &str) -> Pa
                 "printf '%s\\n' {}\n",
             ),
             package, arch
+        ),
+    );
+    rscript
+}
+
+#[cfg(unix)]
+fn write_fake_tool_store_resolver(rscript_dir: &Path, package: &str) -> PathBuf {
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
+                "  cat >/dev/null\n",
+                "  root=\"${{IR_LIBRARY_ROOT:-$IR_CACHE_DIR}}\"\n",
+                "  library=\"$root/libraries/durable\"\n",
+                "  mkdir -p \"$library/{}/exec\" \"$library/{}/bin\" \"$IR_CACHE_DIR/resolutions\"\n",
+                "  cat >\"$library/{}/exec/hello.R\" <<'EOF'\n",
+                "#!/usr/bin/env Rscript\n",
+                "cat('not reached\\n')\n",
+                "EOF\n",
+                "  cat >\"$library/{}/bin/native\" <<'EOF'\n",
+                "#!/bin/sh\n",
+                "printf 'tool.location=bin\\n'\n",
+                "printf 'tool.args=%s\\n' \"$*\"\n",
+                "EOF\n",
+                "  chmod +x \"$library/{}/bin/native\"\n",
+                "  printf 'fake\\n%s\\n' \"$library\" > \"$IR_CACHE_DIR/resolutions/fake-tool-store-marker\"\n",
+                "  if [ -n \"${{IR_RESOLUTION_MARKER:-}}\" ]; then\n",
+                "    mkdir -p \"$(dirname \"$IR_RESOLUTION_MARKER\")\"\n",
+                "    printf 'latest: %s\\n%s\\n' \"$(date +%s)\" \"$library\" > \"$IR_RESOLUTION_MARKER\"\n",
+                "  fi\n",
+                "  if [ -n \"${{IR_PRIMARY_PACKAGE_MARKER:-}}\" ]; then\n",
+                "    mkdir -p \"$(dirname \"$IR_PRIMARY_PACKAGE_MARKER\")\"\n",
+                "    printf '%s\\n' {} > \"$IR_PRIMARY_PACKAGE_MARKER\"\n",
+                "  fi\n",
+                "  printf '%s\\n' \"$library\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+                "  printf '%s\\n' {} > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "case \" $* \" in\n",
+                "  *' -e '*) printf '%s\\n' x64; exit 0 ;;\n",
+                "esac\n",
+                "printf 'tool.location=exec\\n'\n",
+                "printf 'tool.r_libs=%s\\n' \"$R_LIBS\"\n",
+                "printf 'tool.args=%s\\n' \"$*\"\n",
+            ),
+            package, package, package, package, package, package, package
         ),
     );
     rscript

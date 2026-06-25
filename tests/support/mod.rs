@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn command_on_path(command: &str) -> Option<OsString> {
@@ -38,11 +39,23 @@ fn executable_file(path: &Path) -> bool {
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn ir() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ir"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ir"));
+    command.env("IR_TOOL_STORE_DIR", test_tool_store_dir());
+    command
 }
 
 pub(crate) fn rx() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_rx"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rx"));
+    command.env("IR_TOOL_STORE_DIR", test_tool_store_dir());
+    command
+}
+
+fn test_tool_store_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let (dir, _) = unique_dir_in(&std::env::temp_dir(), "ir-test-tool-store");
+        dir
+    })
 }
 
 pub(crate) fn ir_bin_name() -> String {

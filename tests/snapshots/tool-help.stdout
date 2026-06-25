@@ -17,5 +17,5 @@ Tools:
   `ir tool run` resolves the package plus any --with dependencies into an
   isolated library, then runs the selected executable. The user R library is not
   used.
-  `ir tool install` writes generated launchers for exec/ entries and symlinks
-  for bin/ entries.
+  `ir tool install` materializes a durable package library, then writes
+  generated launchers for exec/ entries and symlinks for bin/ entries.

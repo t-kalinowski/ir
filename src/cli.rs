@@ -80,6 +80,35 @@ fn tool_discovery_examples_help(body: &'static str) -> StyledStr {
     help
 }
 
+fn tool_install_examples_help(body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Tool discovery:{header:#}");
+    help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
+    help.push_str("  and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,\n");
+    help.push_str(
+        "  Rapp, and direct executable scripts; bin/ entries are opaque executables.\n\n",
+    );
+    let _ = writeln!(help, "{header}Install storage:{header:#}");
+    help.push_str("  `ir tool install` materializes the package library under the durable tool\n");
+    help.push_str("  store, configurable with IR_TOOL_STORE_DIR, then installs command names\n");
+    help.push_str("  into --bin-dir as launchers or symlinks.\n\n");
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
+}
+
 fn section_help(title: &'static str, body: &'static str) -> StyledStr {
     let header = HELP_STYLES.get_header();
     let mut help = StyledStr::new();
@@ -250,8 +279,8 @@ fn tool_command() -> ClapCommand {
                 "  `ir tool run` resolves the package plus any --with dependencies into an\n",
                 "  isolated library, then runs the selected executable. The user R library is not\n",
                 "  used.\n",
-                "  `ir tool install` writes generated launchers for exec/ entries and symlinks\n",
-                "  for bin/ entries.",
+                "  `ir tool install` materializes a durable package library, then writes\n",
+                "  generated launchers for exec/ entries and symlinks for bin/ entries.",
             ),
         ))
         .subcommand(tool_run_command())
@@ -355,7 +384,7 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
 fn tool_install_command() -> ClapCommand {
     ClapCommand::new("install")
         .about("Install package executables")
-        .after_help(tool_discovery_examples_help(concat!(
+        .after_help(tool_install_examples_help(concat!(
             "  ir tool install btw\n",
             "  ir tool install --bin-dir ~/.local/bin btw\n",
             "  ir tool install --with cli --bin-dir ~/.local/bin btw",

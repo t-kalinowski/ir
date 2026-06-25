@@ -18,6 +18,11 @@ Tool discovery:
   and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,
   Rapp, and direct executable scripts; bin/ entries are opaque executables.
 
+Install storage:
+  `ir tool install` materializes the package library under the durable tool
+  store, configurable with IR_TOOL_STORE_DIR, then installs command names
+  into --bin-dir as launchers or symlinks.
+
 Examples:
   ir tool install btw
   ir tool install --bin-dir ~/.local/bin btw
