@@ -532,6 +532,133 @@ fn tool_run_and_install_prefer_selected_arch_bin_over_generic_bin() {
 
 #[cfg(unix)]
 #[test]
+fn tool_run_and_install_prefer_exec_over_same_named_bin_helper() {
+    let cache_dir = temp_dir("ir-tool-exec-bin-shadow-cache");
+    let bin_dir = temp_dir("ir-tool-exec-bin-shadow-install-bin");
+    let library = temp_dir("ir-tool-exec-bin-shadow-library");
+    let rscript_dir = temp_dir("ir-tool-exec-bin-shadow-rscript");
+    let package = library.join("irexecshadow");
+    let exec_dir = package.join("exec");
+    let package_bin_dir = package.join("bin");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    write_executable(
+        &exec_dir.join("shadowed"),
+        "#!/bin/sh\nprintf 'tool.location=exec\\n'\n",
+    );
+    write_executable(
+        &package_bin_dir.join("shadowed"),
+        "#!/bin/sh\nprintf 'tool.location=bin\\n'\n",
+    );
+    let rscript = write_fake_tool_resolver(&rscript_dir, "irexecshadow", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--from", "irexecshadow", "shadowed"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=exec");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irexecshadow")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "shadowed");
+
+    let out = Command::new(launcher_path(&bin_dir, "shadowed"))
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=exec");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_launcher_preserves_selected_r_arch_env() {
+    let cache_dir = temp_dir("ir-tool-install-r-arch-cache");
+    let bin_dir = temp_dir("ir-tool-install-r-arch-bin");
+    let library = temp_dir("ir-tool-install-r-arch-library");
+    let rscript_dir = temp_dir("ir-tool-install-r-arch-rscript");
+    let package = library.join("irinstallarch");
+    let i386_bin_dir = package.join("bin").join("i386");
+    fs::create_dir_all(&i386_bin_dir).unwrap();
+    fs::write(
+        i386_bin_dir.join("archtool.R"),
+        "#!/usr/bin/env Rscript\ncat('not reached\\n')\n",
+    )
+    .unwrap();
+    let rscript = write_fake_tool_resolver_with_env_arch(&rscript_dir, "irinstallarch", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env("R_ARCH", "/i386")
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irinstallarch")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "archtool");
+
+    let out = Command::new(launcher_path(&bin_dir, "archtool"))
+        .env_remove("R_ARCH")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.r_arch=/i386");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tool_install_does_not_slurp_large_native_bin_executable() {
+    let cache_dir = temp_dir("ir-tool-large-native-cache");
+    let bin_dir = temp_dir("ir-tool-large-native-install-bin");
+    let library = temp_dir("ir-tool-large-native-library");
+    let rscript_dir = temp_dir("ir-tool-large-native-rscript");
+    let package = library.join("irlargebin");
+    let package_bin_dir = package.join("bin");
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    let large_bin = package_bin_dir.join("large-native");
+    let file = fs::File::create(&large_bin).unwrap();
+    file.set_len(512 * 1024 * 1024).unwrap();
+    make_executable(&large_bin);
+    let rscript = write_fake_tool_resolver(&rscript_dir, "irlargebin", "x64");
+
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 262144; exec \"$1\" tool install --rscript \"$2\" --bin-dir \"$3\" irlargebin")
+        .arg("sh")
+        .arg(env!("CARGO_BIN_EXE_ir"))
+        .arg(&rscript)
+        .arg(&bin_dir)
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert!(launcher_path(&bin_dir, "large-native").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn tool_run_resolves_package_with_forwarded_architecture() {
     let cache_dir = temp_dir("ir-tool-resolve-arch-cache");
     let library = temp_dir("ir-tool-resolve-arch-library");
@@ -1695,6 +1822,37 @@ fn write_fake_tool_resolver_with_forwarded_arch(
                 "  *' --arch=i386 '*) printf 'tool.arch.arg=true\\n' ;;\n",
                 "  *) printf 'tool.arch.arg=false\\n' ;;\n",
                 "esac\n",
+            ),
+            package, default_arch
+        ),
+    );
+    rscript
+}
+
+#[cfg(unix)]
+fn write_fake_tool_resolver_with_env_arch(
+    rscript_dir: &Path,
+    package: &str,
+    default_arch: &str,
+) -> PathBuf {
+    let rscript = rscript_dir.join("Rscript");
+    write_executable(
+        &rscript,
+        &format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ -n \"${{IR_RESOLVE_RESULT_FILE:-}}\" ]; then\n",
+                "  cat >/dev/null\n",
+                "  printf '%s\\n' \"$IR_TEST_LIBRARY\" > \"$IR_RESOLVE_RESULT_FILE\"\n",
+                "  printf '%s\\n' {} > \"$IR_RESOLVE_PACKAGE_RESULT_FILE\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "arch=${{R_ARCH#/}}\n",
+                "if [ -z \"$arch\" ]; then arch={}; fi\n",
+                "case \" $* \" in\n",
+                "  *' -e '*) printf '%s\\n' \"$arch\"; exit 0 ;;\n",
+                "esac\n",
+                "printf 'tool.r_arch=%s\\n' \"${{R_ARCH:-<unset>}}\"\n",
             ),
             package, default_arch
         ),

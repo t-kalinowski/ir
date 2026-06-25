@@ -412,23 +412,44 @@ mod tests {
 
         env::set_var("R_ARCH", "x64");
         env::remove_var("R_HOME");
-        let x64_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
-            .unwrap()
-            .unwrap()
-            .marker;
+        let x64_marker = paths(
+            &cache_dir,
+            rscript.as_os_str(),
+            &[],
+            &dependencies,
+            None,
+            false,
+        )
+        .unwrap()
+        .unwrap()
+        .marker;
 
         env::set_var("R_ARCH", "i386");
-        let i386_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
-            .unwrap()
-            .unwrap()
-            .marker;
+        let i386_marker = paths(
+            &cache_dir,
+            rscript.as_os_str(),
+            &[],
+            &dependencies,
+            None,
+            false,
+        )
+        .unwrap()
+        .unwrap()
+        .marker;
 
         env::set_var("R_ARCH", "x64");
         env::set_var("R_HOME", dir.join("R-home"));
-        let r_home_marker = paths(&cache_dir, rscript.as_os_str(), &dependencies, None, false)
-            .unwrap()
-            .unwrap()
-            .marker;
+        let r_home_marker = paths(
+            &cache_dir,
+            rscript.as_os_str(),
+            &[],
+            &dependencies,
+            None,
+            false,
+        )
+        .unwrap()
+        .unwrap()
+        .marker;
 
         assert_ne!(x64_marker, i386_marker);
         assert_ne!(x64_marker, r_home_marker);
@@ -457,6 +478,7 @@ mod tests {
                 paths(
                     &cache_dir,
                     rscript.as_os_str(),
+                    &[],
                     &dependencies,
                     Some("2026-06-01"),
                     false
@@ -483,6 +505,7 @@ mod tests {
                 paths(
                     &cache_dir,
                     rscript.as_os_str(),
+                    &[],
                     &dependencies,
                     Some("2026-06-01"),
                     false

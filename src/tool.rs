@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -84,6 +84,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript, r_arch.as_deref())?;
+    let r_arch_env = nonempty_env("R_ARCH");
     let reinstall_command = tool_install_recovery_command(install, &rscript);
     for executable in &executables {
         let target = launcher_target_path(&install.bin_dir, &executable.name);
@@ -104,6 +105,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
             &library,
             &executable,
             &path_prefix,
+            r_arch_env.as_deref(),
             &reinstall_command,
         )?;
         fs::write(&target, contents)
@@ -135,7 +137,7 @@ fn find_package_executable(
     for dir in &dirs {
         matches.extend(find_package_executables_in_dir(dir, executable)?);
     }
-    shadow_generic_bin_executables(&mut matches);
+    shadow_lower_precedence_executables(&mut matches);
 
     matches.sort_by(|a, b| a.path.cmp(&b.path));
     match matches.len() {
@@ -243,7 +245,7 @@ fn discover_package_executables(
     for dir in &dirs {
         executables.extend(package_executables_in_dir(dir)?);
     }
-    shadow_generic_bin_executables(&mut executables);
+    shadow_lower_precedence_executables(&mut executables);
     reject_duplicate_launcher_names(&executables, package)?;
 
     executables.sort_by(|a, b| a.name.cmp(&b.name));
@@ -380,7 +382,12 @@ fn rapp_frontend_executable(path: PathBuf) -> PackageExecutable {
     }
 }
 
-fn shadow_generic_bin_executables(executables: &mut Vec<PackageExecutable>) {
+fn shadow_lower_precedence_executables(executables: &mut Vec<PackageExecutable>) {
+    let exec_names = executables
+        .iter()
+        .filter(|executable| executable.dir_kind == PackageExecutableDirKind::Exec)
+        .map(|executable| executable.name.clone())
+        .collect::<Vec<_>>();
     let arch_names = executables
         .iter()
         .filter(|executable| executable.dir_kind == PackageExecutableDirKind::BinArch)
@@ -388,6 +395,9 @@ fn shadow_generic_bin_executables(executables: &mut Vec<PackageExecutable>) {
         .collect::<Vec<_>>();
 
     executables.retain(|executable| {
+        if executable.dir_kind.is_bin() && exec_names.contains(&executable.name) {
+            return false;
+        }
         executable.dir_kind != PackageExecutableDirKind::Bin
             || !arch_names.contains(&executable.name)
     });
@@ -1110,15 +1120,22 @@ enum PackageLauncher {
     RappFrontend,
 }
 
+const EXECUTABLE_PREFIX_LIMIT_BYTES: u64 = 4096;
+
 fn package_executable_launcher_kind(
     executable: &Path,
     dir_kind: PackageExecutableDirKind,
 ) -> Result<Option<PackageLauncher>, Box<dyn Error>> {
-    let file = File::open(executable)
+    let mut file = File::open(executable)
         .map_err(|e| format!("cannot read executable `{}`: {e}", executable.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut shebang = Vec::new();
-    reader.read_until(b'\n', &mut shebang)?;
+    let mut prefix = Vec::new();
+    file.by_ref()
+        .take(EXECUTABLE_PREFIX_LIMIT_BYTES)
+        .read_to_end(&mut prefix)?;
+    let shebang = prefix
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or(prefix.as_slice());
 
     if !shebang.starts_with(b"#!") {
         return if is_direct_package_script_without_shebang(executable, dir_kind)? {
@@ -1128,9 +1145,9 @@ fn package_executable_launcher_kind(
         };
     }
 
-    if shebang_mentions(&shebang, b"Rapp") {
+    if shebang_mentions(shebang, b"Rapp") {
         Ok(Some(PackageLauncher::Rapp))
-    } else if shebang_mentions(&shebang, b"Rscript") {
+    } else if shebang_mentions(shebang, b"Rscript") {
         Ok(Some(PackageLauncher::Rscript))
     } else if is_direct_package_script(executable, dir_kind)? {
         Ok(Some(PackageLauncher::Direct))
@@ -1263,6 +1280,7 @@ fn installed_launcher_contents(
     library: &Path,
     executable: &PackageExecutable,
     path_prefix: &[PathBuf],
+    r_arch_env: Option<&OsStr>,
     recovery_command: &str,
 ) -> Result<String, Box<dyn Error>> {
     let mut lines = vec![
@@ -1286,6 +1304,9 @@ fn installed_launcher_contents(
             sh_quote_str(&executable.name)
         ),
     ];
+    if let Some(r_arch_env) = r_arch_env {
+        lines.push(format!("export R_ARCH={}", sh_quote_os(r_arch_env)));
+    }
 
     if !path_prefix.is_empty() {
         let prefix = path_prefix
@@ -1329,6 +1350,7 @@ fn installed_launcher_contents(
     library: &Path,
     executable: &PackageExecutable,
     path_prefix: &[PathBuf],
+    r_arch_env: Option<&OsStr>,
     recovery_command: &str,
 ) -> Result<String, Box<dyn Error>> {
     let mut cmd = Vec::new();
@@ -1362,6 +1384,9 @@ fn installed_launcher_contents(
         r#"set "R_LIBS_USER=NULL""#.to_string(),
         format!(r#"set "RAPP_LAUNCHER_NAME={}""#, executable.name),
     ];
+    if let Some(r_arch_env) = r_arch_env {
+        env_lines.push(format!(r#"set "R_ARCH={}""#, r_arch_env.to_string_lossy()));
+    }
     if let Some(path_assignment) = cmd_path_prefix_assignment(path_prefix)? {
         env_lines.push(path_assignment);
     }
