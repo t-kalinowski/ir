@@ -659,6 +659,47 @@ fn tool_install_launcher_preserves_selected_r_arch_env() {
     assert_stdout_contains(&out, "tool.r_arch=/i386");
 }
 
+#[cfg(unix)]
+#[test]
+fn tool_install_launcher_pins_default_selected_r_arch() {
+    let cache_dir = temp_dir("ir-tool-install-default-r-arch-cache");
+    let bin_dir = temp_dir("ir-tool-install-default-r-arch-bin");
+    let library = temp_dir("ir-tool-install-default-r-arch-library");
+    let rscript_dir = temp_dir("ir-tool-install-default-r-arch-rscript");
+    let package = library.join("irinstalldefaultarch");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("archtool.R"),
+        "#!/usr/bin/env Rscript\ncat('not reached\\n')\n",
+    )
+    .unwrap();
+    let rscript =
+        write_fake_tool_resolver_with_env_arch(&rscript_dir, "irinstalldefaultarch", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("R_ARCH")
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irinstalldefaultarch")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "archtool");
+
+    let out = Command::new(launcher_path(&bin_dir, "archtool"))
+        .env("R_ARCH", "/i386")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.r_arch=/x64");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn tool_install_does_not_slurp_large_native_bin_executable() {

@@ -66,6 +66,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     )?;
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec, &[])?;
     let r_arch = selected_r_arch(&rscript, &[])?;
+    let r_arch_env = selected_r_arch_env(&rscript, &[])?;
     let executables = discover_package_executables(&library, &package_name, r_arch.as_deref())?;
     if executables.is_empty() {
         return Err(format!(
@@ -84,7 +85,6 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     })?;
 
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript, r_arch.as_deref())?;
-    let r_arch_env = nonempty_env("R_ARCH");
     let reinstall_command = tool_install_recovery_command(install, &rscript);
     for executable in &executables {
         let target = installed_executable_target_path(&install.bin_dir, executable);
@@ -229,6 +229,55 @@ fn selected_r_arch(
     })?;
     let arch = arch.trim();
     Ok((!arch.is_empty()).then(|| arch.to_string()))
+}
+
+fn selected_r_arch_env(
+    rscript: &OsStr,
+    rscript_args: &[String],
+) -> Result<Option<OsString>, Box<dyn Error>> {
+    let output = Command::new(rscript)
+        .arg("--vanilla")
+        .args(rscript_args)
+        .arg("-e")
+        .arg(concat!(
+            "arch <- Sys.getenv('R_ARCH'); ",
+            "if (!nzchar(arch) && !is.null(.Platform$r_arch)) { ",
+            "arch <- sub('^/', '', .Platform$r_arch); ",
+            "if (nzchar(arch)) arch <- paste0('/', arch); ",
+            "}; ",
+            "cat(arch)"
+        ))
+        .env_remove("IR_RESOLVE_RESULT_FILE")
+        .env_remove("IR_RESOLVE_PACKAGE_RESULT_FILE")
+        .env_remove("IR_RESOLUTION_MARKER")
+        .env_remove("IR_PRIMARY_PACKAGE_MARKER")
+        .output()
+        .map_err(|e| spawn_error(rscript, e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "failed to query R architecture environment with `{}`: {}",
+            rscript.to_string_lossy(),
+            stderr.trim()
+        )
+        .into());
+    }
+
+    let arch = String::from_utf8(output.stdout).map_err(|e| {
+        format!(
+            "R architecture environment output from `{}` is not valid UTF-8: {e}",
+            rscript.to_string_lossy()
+        )
+    })?;
+    let arch = arch.trim();
+    if arch.is_empty() {
+        Ok(None)
+    } else if arch.starts_with('/') {
+        Ok(Some(OsString::from(arch)))
+    } else {
+        Ok(Some(OsString::from(format!("/{arch}"))))
+    }
 }
 
 struct PackageExecutable {
