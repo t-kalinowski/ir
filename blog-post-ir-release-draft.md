@@ -122,12 +122,14 @@ $ rx btw
 $ ir tool run btw
 ```
 
-Package authors can put executable scripts in a package's
-[`exec/`](https://r-pkgs.org/misc.html#other-directories) directory.
-Those scripts can be regular `Rscript` files or
-[`Rapp`](https://github.com/r-lib/Rapp) apps. `rx` resolves the package,
-finds the requested executable, and runs it in an isolated library. For
-tools you use regularly, `ir tool install` writes persistent launchers:
+Package authors can expose command-line entry points through standard
+package subdirectories such as [`exec/` and `bin/`](
+  https://cran.r-project.org/doc/manuals/r-release/R-exts.html#Package-subdirectories-1
+). Files in `exec/` can be regular `Rscript` files,
+[`Rapp`](https://github.com/r-lib/Rapp) apps, or direct executable
+scripts. `rx` resolves the package, finds the requested executable, and
+runs it in an isolated library. For tools you use regularly,
+`ir tool install` writes persistent launchers:
 
 ```console
 $ ir tool install btw
