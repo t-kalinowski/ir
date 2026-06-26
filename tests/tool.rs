@@ -252,6 +252,60 @@ fn tool_install_wraps_windows_bin_commands() {
     assert_stdout_contains(&out, "tool.args=install arg");
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_install_wraps_windows_bin_exe_with_runtime_env() {
+    let cache_dir = temp_dir("ir-tool-windows-bin-exe-env-cache");
+    let bin_dir = temp_dir("ir-tool-windows-bin-exe-env-bin");
+    let library = temp_dir("ir-tool-windows-bin-exe-env-library");
+    let rscript_dir = temp_dir("ir-tool-windows-bin-exe-env-rscript");
+    let package_bin_dir = library.join("irwinexeenv").join("bin");
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    let cmd = std::env::var_os("COMSPEC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+    fs::copy(&cmd, package_bin_dir.join("native.exe")).unwrap();
+    fs::write(
+        package_bin_dir.join("helper.cmd"),
+        "@echo off\r\necho helper.path=resolved\r\n",
+    )
+    .unwrap();
+    let rscript = write_windows_fake_tool_resolver(&rscript_dir, "irwinexeenv");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irwinexeenv")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "native.exe");
+
+    let installed = launcher_path(&bin_dir, "native.exe");
+    assert!(installed.exists(), "{}", installed.display());
+    assert!(!bin_dir.join("native.exe").exists());
+
+    let out = Command::new(&installed)
+        .args([
+            "/C",
+            "echo tool.r_libs=%R_LIBS% && echo tool.r_libs_user=%R_LIBS_USER% && helper",
+        ])
+        .env_remove("R_LIBS")
+        .env_remove("R_LIBS_USER")
+        .env("PATH", r"C:\Windows\System32")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, &format!("tool.r_libs={}", library.display()));
+    assert_stdout_contains(&out, "tool.r_libs_user=NULL");
+    assert_stdout_contains(&out, "helper.path=resolved");
+}
+
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
     let cache_dir = temp_cache("ir-tool-install-real-cache");

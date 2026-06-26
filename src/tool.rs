@@ -97,19 +97,15 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     let mut installed = Vec::new();
     for executable in executables {
         let target = installed_executable_target_path(&install.bin_dir, &executable);
-        if install_package_executable_as_plain_file(&executable) {
-            install_package_executable(&executable.path, &target)?;
-        } else {
-            let contents = installed_launcher_contents(
-                &rscript,
-                &library,
-                &executable,
-                &path_prefix,
-                r_arch_env.as_deref(),
-                &reinstall_command,
-            )?;
-            write_installed_launcher(&target, contents)?;
-        }
+        let contents = installed_launcher_contents(
+            &rscript,
+            &library,
+            &executable,
+            &path_prefix,
+            r_arch_env.as_deref(),
+            &reinstall_command,
+        )?;
+        write_installed_launcher(&target, contents)?;
         installed.push(executable.name);
     }
     if install.setup_bin_dir_on_path {
@@ -1304,11 +1300,21 @@ fn shebang_mentions(shebang: &[u8], name: &[u8]) -> bool {
 }
 
 fn installed_executable_target_path(bin_dir: &Path, executable: &PackageExecutable) -> PathBuf {
-    if executable.dir_kind.is_bin() {
-        bin_dir.join(&executable.name)
-    } else {
-        launcher_target_path(bin_dir, &executable.name)
+    #[cfg(not(unix))]
+    {
+        if executable.dir_kind.is_bin()
+            && executable
+                .path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat")
+                })
+        {
+            return bin_dir.join(&executable.name);
+        }
     }
+    launcher_target_path(bin_dir, &executable.name)
 }
 
 fn reject_colliding_installed_target_paths(
@@ -1357,42 +1363,6 @@ fn path_exists(path: &Path) -> bool {
     path.exists() || fs::symlink_metadata(path).is_ok()
 }
 
-fn install_package_executable_as_plain_file(executable: &PackageExecutable) -> bool {
-    #[cfg(windows)]
-    {
-        executable.dir_kind.is_bin()
-            && executable
-                .path
-                .extension()
-                .and_then(OsStr::to_str)
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = executable;
-        false
-    }
-}
-
-fn install_package_executable(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
-    if path_exists(target) {
-        fs::remove_file(target).map_err(|e| {
-            format!(
-                "failed to remove existing installed executable `{}`: {e}",
-                target.display()
-            )
-        })?;
-    }
-    let source = std::path::absolute(source).map_err(|e| {
-        format!(
-            "failed to normalize package executable `{}` as an absolute path: {e}",
-            source.display()
-        )
-    })?;
-    install_package_executable_file(&source, target)
-}
-
 fn write_installed_launcher(target: &Path, contents: String) -> Result<(), Box<dyn Error>> {
     if path_exists(target) {
         fs::remove_file(target).map_err(|e| {
@@ -1405,42 +1375,6 @@ fn write_installed_launcher(target: &Path, contents: String) -> Result<(), Box<d
     fs::write(target, contents)
         .map_err(|e| format!("failed to write launcher `{}`: {e}", target.display()))?;
     make_executable(target)
-}
-
-#[cfg(unix)]
-fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
-    std::os::unix::fs::symlink(source, target).map_err(|e| {
-        format!(
-            "failed to symlink installed executable `{}` to `{}`: {e}",
-            target.display(),
-            source.display()
-        )
-        .into()
-    })
-}
-
-#[cfg(windows)]
-fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
-    fs::copy(source, target).map(|_| ()).map_err(|e| {
-        format!(
-            "failed to copy installed executable `{}` from `{}`: {e}",
-            target.display(),
-            source.display()
-        )
-        .into()
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
-    fs::hard_link(source, target).map_err(|e| {
-        format!(
-            "failed to link installed executable `{}` to `{}`: {e}",
-            target.display(),
-            source.display()
-        )
-        .into()
-    })
 }
 
 fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
