@@ -52,7 +52,22 @@ faster, more capable `install.packages()`. For project libraries, use
 
 `ir` builds on that stack for non-project workflows: resolving the
 runtime for a self-describing script or Quarto document, and running or
-installing command-line entry points distributed by R packages.
+## How `ir` fits with existing tools
+
+  `ir` sits alongside the R tools people already use and relies on several of them under the hood:
+
+  - **[rig](https://github.com/r-lib/rig)** manages R installations across macOS, Windows, and Linux — installing, removing, and switching between versions. `ir` uses
+  `rig` to find and select among installed R versions when a script requests a specific one. `rig` is optional; scripts that only declare packages do not need it.
+
+  - **[pak](https://pak.r-lib.org/)** is a fast, parallel package installer with a built-in solver that detects dependency conflicts before anything touches disk. `ir`
+  uses `pak` to resolve the dependency graph from a script's declared packages and fetch them from the appropriate repositories. `pak` is bootstrapped automatically on
+  first use — you do not need to install it separately.
+
+  - **[renv](https://rstudio.github.io/renv/)** gives R projects isolated, reproducible package libraries with version lockfiles. `ir` borrows `renv`'s global package
+  cache to assemble a content-addressed, reusable library — without creating a `renv` project or lockfile.
+
+  For machine-level R management, use `rig` directly. For package installation inside an R session or project, use `pak`. For full project-level reproducibility, use
+  `renv`. `ir` builds on that stack for the non-project case: scripts and documents that need a resolved, cached runtime without a surrounding project directory.
 
 ## A self-describing R script
 
