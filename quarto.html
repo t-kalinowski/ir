@@ -339,7 +339,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
    
   <ul>
   <li><a href="#python-environments" id="toc-python-environments" class="nav-link active" data-scroll-target="#python-environments">Python environments</a></li>
-  <li><a href="#rmarkdown-injection" id="toc-rmarkdown-injection" class="nav-link" data-scroll-target="#rmarkdown-injection">rmarkdown injection</a></li>
+  <li><a href="#r-package-injection" id="toc-r-package-injection" class="nav-link" data-scroll-target="#r-package-injection">R package injection</a></li>
   </ul>
 </nav>
     </div>
@@ -410,10 +410,12 @@ $ ir render --vanilla report.qmd</code></pre>
 <span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">python-exclude-newer</span><span class="kw">:</span><span class="at"> 2026-05-01</span></span>
 <span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="pp">---</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="rmarkdown-injection" class="level2">
-<h2 class="anchored" data-anchor-id="rmarkdown-injection">rmarkdown injection</h2>
+<section id="r-package-injection" class="level2">
+<h2 class="anchored" data-anchor-id="r-package-injection">R package injection</h2>
 <p>A Quarto render needs the <code>rmarkdown</code> package for the knitr engine. <code>ir</code> appends <code>rmarkdown</code> to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of <code>exclude-newer</code> when set).</p>
 <p>Declare <code>rmarkdown</code> yourself under <code>ir.packages</code> - directly (for example, <code>rmarkdown@2.29</code>) or transitively through a package that imports it - to override the injected seed.</p>
+<p>Knitr-backed Quarto documents with Python chunks can use <code>reticulate</code> for Python execution. <code>ir</code> detects local Python chunks in <code>.Rmd</code> files and in <code>.qmd</code> files that select knitr or contain both R and Python chunks, then appends <code>reticulate</code> when the resolved package set does not already provide it.</p>
+<p>For Jupyter renders, declare <code>ir.python-packages</code> or <code>ir.python-version</code> when <code>ir render</code> should create the Python environment and inject <code>jupyter</code>.</p>
 
 
 </section>

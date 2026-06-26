@@ -105,11 +105,11 @@
     "text": "Python environments\nUse ir.python-packages to ask ir render for a Python environment before launching Quarto. ir resolves the environment with reticulate:::uv_get_or_create_env() and injects jupyter. It passes the resulting Python executable to Quarto with QUARTO_PYTHON and to reticulate with RETICULATE_PYTHON. Python environment resolution uses ir’s private reticulate tooling. Declare render-time R dependencies with ir.packages and Python dependencies with ir.python-packages. When Python metadata is present, ir.exclude-newer is also used during Python environment resolution unless ir.python-exclude-newer is set. Set ir.python-exclude-newer to null or \"\" to use latest Python packages while keeping ir.exclude-newer for R.\n---\ntitle: Python report\njupyter: python3\nir:\n  python-packages:\n    - pandas\n    - matplotlib\n  python-version: \"3.11\"\n  exclude-newer: 2026-06-01\n  python-exclude-newer: 2026-05-01\n---"
   },
   {
-    "objectID": "quarto.html#rmarkdown-injection",
-    "href": "quarto.html#rmarkdown-injection",
+    "objectID": "quarto.html#r-package-injection",
+    "href": "quarto.html#r-package-injection",
     "title": "Quarto Rendering",
-    "section": "rmarkdown injection",
-    "text": "rmarkdown injection\nA Quarto render needs the rmarkdown package for the knitr engine. ir appends rmarkdown to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of exclude-newer when set).\nDeclare rmarkdown yourself under ir.packages - directly (for example, rmarkdown@2.29) or transitively through a package that imports it - to override the injected seed."
+    "section": "R package injection",
+    "text": "R package injection\nA Quarto render needs the rmarkdown package for the knitr engine. ir appends rmarkdown to the resolved packages automatically when it is not already present, pulling the latest version (or the latest as of exclude-newer when set).\nDeclare rmarkdown yourself under ir.packages - directly (for example, rmarkdown@2.29) or transitively through a package that imports it - to override the injected seed.\nKnitr-backed Quarto documents with Python chunks can use reticulate for Python execution. ir detects local Python chunks in .Rmd files and in .qmd files that select knitr or contain both R and Python chunks, then appends reticulate when the resolved package set does not already provide it.\nFor Jupyter renders, declare ir.python-packages or ir.python-version when ir render should create the Python environment and inject jupyter."
   },
   {
     "objectID": "index.html",
