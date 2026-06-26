@@ -13,7 +13,7 @@ Options:
 Tools:
   A tool is a supported executable in an R package's exec/, bin/, or
   architecture-specific bin/<arch>/ directory. exec/ supports Rscript, Rapp,
-  and direct executable scripts; bin/ entries are opaque executables.
+  and direct executable scripts; bin/ entries are run as-is.
   `ir tool run` resolves the package plus any --with dependencies into an
   isolated library, then runs the selected executable. The user R library is not
   used.

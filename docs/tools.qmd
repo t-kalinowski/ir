@@ -16,7 +16,7 @@ For `rx --from pkg tool`, `ir` installs `pkg`, finds the named package executabl
 Tool runs use an isolated library containing the resolved package plus any `--with` dependencies; the user R library is not used.
 Here, a package executable means a supported file in the installed package's `exec/`, `bin/`, or architecture-specific `bin/<arch>/` directory.
 Files in `exec/` are interpreted as package launchers: Rscript and Rapp entries use the selected Rscript, while direct executable scripts run as package executables.
-Files in `bin/` and `bin/<arch>/` are treated opaquely as executable files; their command names are their exact file names.
+Files in `bin/` and `bin/<arch>/` are run as-is; their command names are their exact file names.
 On Unix, direct executables must be executable; on Windows, direct script executables are `.bat` or `.cmd` files, and native binaries under `bin/` may be `.exe` files.
 A bare self-named package ref such as `rx btw` is shorthand for `rx --from btw btw`.
 

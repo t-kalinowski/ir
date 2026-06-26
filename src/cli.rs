@@ -62,9 +62,7 @@ fn tool_discovery_examples_help(body: &'static str) -> StyledStr {
     let _ = writeln!(help, "{header}Tool discovery:{header:#}");
     help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
     help.push_str("  and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,\n");
-    help.push_str(
-        "  Rapp, and direct executable scripts; bin/ entries are opaque executables.\n\n",
-    );
+    help.push_str("  Rapp, and direct executable scripts; bin/ entries are run as-is.\n\n");
     let _ = writeln!(help, "{header}Examples:{header:#}");
     for line in body.split_inclusive('\n') {
         let (line, newline) = line
@@ -87,9 +85,7 @@ fn tool_install_examples_help(body: &'static str) -> StyledStr {
     let _ = writeln!(help, "{header}Tool discovery:{header:#}");
     help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
     help.push_str("  and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,\n");
-    help.push_str(
-        "  Rapp, and direct executable scripts; bin/ entries are opaque executables.\n\n",
-    );
+    help.push_str("  Rapp, and direct executable scripts; bin/ entries are run as-is.\n\n");
     let _ = writeln!(help, "{header}Install storage:{header:#}");
     help.push_str("  `ir tool install` materializes the package library under the durable tool\n");
     help.push_str("  store, configurable with IR_TOOL_STORE_DIR, then installs command names\n");
@@ -275,7 +271,7 @@ fn tool_command() -> ClapCommand {
             concat!(
                 "  A tool is a supported executable in an R package's exec/, bin/, or\n",
                 "  architecture-specific bin/<arch>/ directory. exec/ supports Rscript, Rapp,\n",
-                "  and direct executable scripts; bin/ entries are opaque executables.\n",
+                "  and direct executable scripts; bin/ entries are run as-is.\n",
                 "  `ir tool run` resolves the package plus any --with dependencies into an\n",
                 "  isolated library, then runs the selected executable. The user R library is not\n",
                 "  used.\n",
@@ -317,8 +313,8 @@ fn tool_rx_command() -> ClapCommand {
                 "  It resolves the provider package plus any --with dependencies into an\n",
                 "  isolated cached R library, then launches the selected executable.\n",
                 "  Package executables are discovered from installed package exec/, bin/,\n",
-                "  and architecture-specific bin/<arch>/ directories. bin/ entries are opaque\n",
-                "  executables.\n",
+                "  and architecture-specific bin/<arch>/ directories. bin/ entries are run\n",
+                "  as-is.\n",
                 "  The tool sees the resolved package library plus base, site, and system\n",
                 "  libraries; ambient user R libraries are not used.\n\n",
                 "Examples:\n",
