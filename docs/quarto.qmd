@@ -14,7 +14,7 @@ ir:
     - gt@1.0
   r-version: ">= 4.0"
   isolated: true
-  exclude-newer: 2024-01-15
+  exclude-newer: 2025-05-15
 ---
 ```
 
@@ -23,7 +23,7 @@ Render the document with the `render` subcommand:
 ```console
 $ ir render report.qmd
 $ ir render report.qmd --to pdf
-$ ir render --exclude-newer 2024-01-15 report.qmd
+$ ir render --exclude-newer 2025-05-15 report.qmd
 $ ir render --vanilla report.qmd
 ```
 
@@ -89,6 +89,7 @@ A Quarto render needs the `rmarkdown` package for the knitr engine.
 Declare `rmarkdown` yourself under `ir.packages` - directly (for example, `rmarkdown@2.29`) or transitively through a package that imports it - to override the injected seed.
 
 Knitr-backed Quarto documents with Python chunks can use `reticulate` for Python execution.
-`ir` detects local Python chunks in `.Rmd` files and in `.qmd` files that select knitr or contain both R and Python chunks, then appends `reticulate` when the resolved package set does not already provide it.
+`ir` detects local Python chunks in `.Rmd` files and in `.qmd` files that select knitr in the document YAML or contain both R and Python chunks, then appends `reticulate` when the resolved package set does not already provide it.
+`ir render` does not inspect `_quarto.yml` or `_metadata.yml` when deciding whether to seed `reticulate`; if a `.qmd` relies on project metadata to select knitr, declare `reticulate` explicitly under `ir.packages`.
 
 For Jupyter renders, declare `ir.python-packages` or `ir.python-version` when `ir render` should create the Python environment and inject `jupyter`.

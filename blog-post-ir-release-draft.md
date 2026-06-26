@@ -213,7 +213,7 @@ ir:
     - dplyr>=1.0
     - gt@1.0
   isolated: true
-  exclude-newer: 2024-01-15
+  exclude-newer: 2025-05-15
 ---
 ```
 
@@ -289,8 +289,7 @@ For Quarto renders, `ir` injects `jupyter` into the Python environment,
 passes the resolved interpreter to Quarto with `QUARTO_PYTHON`, and also
 sets `RETICULATE_PYTHON` so documents that use reticulate see the same
 interpreter. If the document uses the knitr engine and contains Python
-chunks, `ir` automatically adds `reticulate` to the R package
-manifest.
+chunks, `ir` automatically adds `reticulate` to the R package manifest.
 
 When Python metadata is present, `exclude-newer` is also used for Python
 environment resolution unless `python-exclude-newer` is set. Use
