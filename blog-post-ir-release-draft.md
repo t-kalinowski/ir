@@ -19,6 +19,13 @@ code, then run the file. `ir` resolves the requirements, prepares cached
 package libraries, and launches R or Quarto with the runtime ready to
 use.
 
+The shape is inspired by [`uv`](https://docs.astral.sh/uv/): a script
+can carry enough metadata to describe its runtime, and the runner can
+resolve that runtime into a cached environment on demand. `ir` brings
+that pattern to R scripts and Quarto documents, using `pak`, `renv`, and
+`rig` on the R side, and reticulate's uv-backed helper when Python is
+part of the runtime.
+
 `ir` focuses on two workflows:
 
 - running or rendering self-describing scripts and documents (`ir run`,
