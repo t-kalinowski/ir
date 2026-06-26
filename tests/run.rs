@@ -175,6 +175,8 @@ fn help_outputs_match_snapshots() {
         ("run-help", &["run", "-h"]),
         ("render-help", &["render", "--help"]),
         ("render-help", &["render", "-h"]),
+        ("quickstart-help", &["quickstart", "--help"]),
+        ("quickstart-help", &["quickstart", "-h"]),
         ("tool-help", &["tool", "--help"]),
         ("tool-help", &["tool", "-h"]),
         ("tool-run-help", &["tool", "run", "--help"]),
@@ -193,10 +195,27 @@ fn help_outputs_match_snapshots() {
 }
 
 #[test]
+fn quickstart_output_matches_snapshot() {
+    assert_help_snapshot("quickstart", &["quickstart"]);
+}
+
+#[test]
 fn rx_help_outputs_match_snapshots() {
     for (name, args) in [("rx-help", &["--help"][..]), ("rx-help", &["-h"])] {
         assert_rx_help_snapshot(name, args);
     }
+}
+
+#[test]
+fn rx_quickstart_flag_is_not_a_special_mode() {
+    let out = rx().arg("--quickstart").output().unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    assert!(
+        normalize_cli_output(&out.stderr).contains("`rx` requires a package ref"),
+        "{}",
+        output_text(&out)
+    );
 }
 
 #[test]

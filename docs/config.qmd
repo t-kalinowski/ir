@@ -4,7 +4,7 @@ title: Install and Configuration
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH`, a selected `rscript`, or `IR_RSCRIPT`, when R is not selected by `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer`.
+- `R` / `Rscript` on `PATH`, `--rscript`, or `IR_RSCRIPT`, when R is not selected by frontmatter `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer`.
 - `rig` on `PATH` when `r-version`, `IR_R_VERSION`, or `--r-version` is set, or when date-only `exclude-newer` selects R.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 - `ir` installs its own resolver tooling (`pak`, `renv`, `secretbase`) on first use into a dedicated library under the cache directory, so you do not need to pre-install them.
@@ -29,6 +29,7 @@ The installers download the latest release archive and install `ir` and `rx` int
 On macOS, the default `~/.local/bin` directory is added to `~/.zprofile` when needed.
 On Windows, the install directory is added to the user `PATH`.
 On Linux, the installer tells you if the install directory is not on `PATH`.
+If `rig` is not on `PATH`, the installers print platform-specific rig install guidance.
 Set `IR_NO_MODIFY_PATH=1` to skip PATH changes.
 Set `IR_INSTALL_DIR` to choose another directory.
 
@@ -42,11 +43,12 @@ Set `IR_INSTALL_DIR` to choose another directory.
 | `IR_R_VERSION` | R version selected through `rig` | unset |
 | `IR_RSCRIPT` | Rscript executable path or command | `Rscript` on `PATH` |
 | `IR_QUARTO` | Quarto rendering | `quarto` on `PATH` |
-| `IR_TOOL_BIN_DIR` | `ir tool install` | first launcher-directory override |
+| `IR_TOOL_STORE_DIR` | `ir tool install` | durable installed-tool library store |
+| `IR_TOOL_BIN_DIR` | `ir tool install` | first executable install directory override |
 | `IR_NO_MODIFY_PATH` | install scripts, `ir tool install` | disables automatic PATH setup when nonempty |
-| `RAPP_BIN_DIR` | `ir tool install` | second launcher-directory override |
-| `RAPP_NO_MODIFY_PATH` | `ir tool install` | also disables automatic launcher PATH setup when nonempty |
-| `XDG_BIN_HOME` | `ir tool install` on Unix | third launcher-directory override |
+| `RAPP_BIN_DIR` | `ir tool install` | second executable install directory override |
+| `RAPP_NO_MODIFY_PATH` | `ir tool install` | also disables automatic executable install directory PATH setup when nonempty |
+| `XDG_BIN_HOME` | `ir tool install` on Unix | third executable install directory override |
 | `XDG_DATA_HOME` | `ir tool install` on Unix | `<parent of XDG_DATA_HOME>/bin` |
 | `LOCALAPPDATA` | `ir tool install` on Windows | `%LOCALAPPDATA%\Programs\R\ir\bin` |
 | `USERPROFILE` | `ir tool install` on Windows | fallback under `%USERPROFILE%\AppData` |
@@ -54,6 +56,9 @@ Set `IR_INSTALL_DIR` to choose another directory.
 The default cache directory is computed before launching R.
 `IR_CACHE_DIR` is authoritative; otherwise `ir` uses the process `R_USER_CACHE_DIR`, process `XDG_CACHE_HOME`, or a platform default and appends `R/ir`.
 The selected path is passed to the resolver R session, so R startup files do not redirect the `ir` cache.
+Installed tool libraries use `IR_TOOL_STORE_DIR`.
+When unset, the default is `$XDG_DATA_HOME/ir/tools` or `~/.local/share/ir/tools` on Unix and macOS, and `%LOCALAPPDATA%\Programs\R\ir\tools` or `%USERPROFILE%\AppData\Local\Programs\R\ir\tools` on Windows.
+This store is persistent state and is not removed by `ir cache clean`.
 
 Package snapshot date precedence for `ir run` and `ir render` is `--exclude-newer`, then `IR_EXCLUDE_NEWER`, then frontmatter `exclude-newer`.
 `IR_EXCLUDE_NEWER` is ignored when `--exclude-newer` is supplied.
@@ -61,11 +66,12 @@ Set `--exclude-newer` or `IR_EXCLUDE_NEWER` to an empty string to override front
 Future snapshot dates also resolve latest packages.
 When Python metadata is present, the selected `exclude-newer` value is also used during Python environment resolution unless `--python-exclude-newer` or frontmatter `python-exclude-newer` is set.
 Set `python-exclude-newer` to `null`, or set `--python-exclude-newer` or frontmatter `python-exclude-newer` to an empty string, to resolve latest Python packages while keeping `exclude-newer` for R.
-R selection precedence is command line, then environment, then frontmatter.
-Use `--rscript`, `IR_RSCRIPT`, or frontmatter `rscript` to select a specific Rscript executable.
+R selection precedence is command line, then environment, then frontmatter `r-version`.
+Use `--rscript` or `IR_RSCRIPT` to select a specific Rscript executable.
 Use `--r-version`, `IR_R_VERSION`, or frontmatter `r-version` to select an installed R through `rig`.
-Within one layer, set either `rscript` or `r-version`, not both.
+Do not set both `--rscript` and `--r-version`, or both `IR_RSCRIPT` and `IR_R_VERSION`.
+Frontmatter `rscript` is rejected.
 When `exclude-newer` is set without an explicit R selector, `ir` uses `rig` to select the latest R minor version available on that date.
-`--bin-dir <dir>` overrides the launcher-directory environment variables for `ir tool install`.
+`--bin-dir <dir>` overrides the executable install directory environment variables for `ir tool install`.
 On macOS, `ir tool install` adds the default `~/.local/bin` directory to the zsh profile when needed.
-On Windows, it adds the default or environment-selected launcher directory to the user `Path`.
+On Windows, it adds the default or environment-selected executable install directory to the user `Path`.

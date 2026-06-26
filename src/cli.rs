@@ -32,6 +32,7 @@ pub(crate) fn root() -> ClapCommand {
         .subcommand(run_command())
         .subcommand(render_command())
         .subcommand(tool_command())
+        .subcommand(quickstart_command())
         .subcommand(cache_command())
 }
 
@@ -39,6 +40,56 @@ fn examples_help(body: &'static str) -> StyledStr {
     let header = HELP_STYLES.get_header();
     let comment = HELP_STYLES.get_placeholder();
     let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
+}
+
+fn tool_discovery_examples_help(body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Tool discovery:{header:#}");
+    help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
+    help.push_str("  and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,\n");
+    help.push_str("  Rapp, and direct executable scripts; bin/ entries are run as-is.\n\n");
+    let _ = writeln!(help, "{header}Examples:{header:#}");
+    for line in body.split_inclusive('\n') {
+        let (line, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |line| (line, "\n"));
+        if line.trim_start().starts_with('#') {
+            let _ = write!(help, "{comment}{line}{comment:#}");
+        } else {
+            help.push_str(line);
+        }
+        help.push_str(newline);
+    }
+    help
+}
+
+fn tool_install_examples_help(body: &'static str) -> StyledStr {
+    let header = HELP_STYLES.get_header();
+    let comment = HELP_STYLES.get_placeholder();
+    let mut help = StyledStr::new();
+    let _ = writeln!(help, "{header}Tool discovery:{header:#}");
+    help.push_str("  Supported executables are discovered from installed package exec/, bin/,\n");
+    help.push_str("  and architecture-specific bin/<arch>/ directories. exec/ supports Rscript,\n");
+    help.push_str("  Rapp, and direct executable scripts; bin/ entries are run as-is.\n\n");
+    let _ = writeln!(help, "{header}Install storage:{header:#}");
+    help.push_str("  `ir tool install` materializes the package library under the durable tool\n");
+    help.push_str("  store, configurable with IR_TOOL_STORE_DIR, then installs command names\n");
+    help.push_str("  into --bin-dir as launchers backed by that library.\n\n");
     let _ = writeln!(help, "{header}Examples:{header:#}");
     for line in body.split_inclusive('\n') {
         let (line, newline) = line
@@ -207,6 +258,10 @@ fn render_command() -> ClapCommand {
         )
 }
 
+fn quickstart_command() -> ClapCommand {
+    ClapCommand::new("quickstart").about("Show a concise usage guide for AI agents")
+}
+
 fn tool_command() -> ClapCommand {
     ClapCommand::new("tool")
         .about("Run package executables")
@@ -214,13 +269,14 @@ fn tool_command() -> ClapCommand {
         .after_help(section_help(
             "Tools",
             concat!(
-                "  A tool is a supported executable in an R package's exec/ directory.\n",
-                "  Rscript and Rapp entries use the selected Rscript; direct executable scripts\n",
-                "  run as package scripts.\n",
+                "  A tool is a supported executable in an R package's exec/, bin/, or\n",
+                "  architecture-specific bin/<arch>/ directory. exec/ supports Rscript, Rapp,\n",
+                "  and direct executable scripts; bin/ entries are run as-is.\n",
                 "  `ir tool run` resolves the package plus any --with dependencies into an\n",
                 "  isolated library, then runs the selected executable. The user R library is not\n",
                 "  used.\n",
-                "  `ir tool install` writes launchers that recreate the resolved tool runtime.",
+                "  `ir tool install` materializes a durable package library, then writes\n",
+                "  launchers backed by that library.",
             ),
         ))
         .subcommand(tool_run_command())
@@ -232,7 +288,7 @@ fn tool_run_command() -> ClapCommand {
     tool_run_args(
         ClapCommand::new("run")
             .about("Run an executable provided by an R package")
-            .after_help(examples_help(concat!(
+            .after_help(tool_discovery_examples_help(concat!(
                 "  ir tool run btw\n",
                 "  ir tool run btw --help\n",
                 "      # btw is shorthand for --from btw btw.\n\n",
@@ -251,7 +307,30 @@ fn tool_rx_command() -> ClapCommand {
             .override_usage("rx [OPTIONS] [ARGS]...")
             .about("Run a package executable")
             .version(env!("CARGO_PKG_VERSION"))
-            .after_help("Use `ir tool run` for more details."),
+            .after_help(concat!(
+                "Mental model:\n",
+                "  rx is the package-executable frontend for `ir tool run`.\n",
+                "  It resolves the provider package plus any --with dependencies into an\n",
+                "  isolated cached R library, then launches the selected executable.\n",
+                "  Package executables are discovered from installed package exec/, bin/,\n",
+                "  and architecture-specific bin/<arch>/ directories. bin/ entries are run\n",
+                "  as-is.\n",
+                "  The tool sees the resolved package library plus base, site, and system\n",
+                "  libraries; ambient user R libraries are not used.\n\n",
+                "Examples:\n",
+                "  rx btw --help\n",
+                "      # shorthand for: rx --from btw btw --help.\n\n",
+                "  rx --from pkg command --help\n",
+                "      # resolve package `pkg`, run executable `command`.\n\n",
+                "  rx --from pkg --with cli command --flag value\n",
+                "      # --from and --with are for rx; --flag value is passed to command.\n\n",
+                "Workflow:\n",
+                "  Use rx for ad hoc package tools and executable frontends.\n",
+                "  Use `ir tool install` for repeated shell use.\n",
+                "  For durable scripts and documents, use `ir run` or `ir render` with\n",
+                "  frontmatter; see `ir quickstart`.\n\n",
+                "Use `ir tool run --help` for full command details.",
+            )),
     )
 }
 
@@ -300,8 +379,8 @@ fn tool_run_args(command: ClapCommand) -> ClapCommand {
 
 fn tool_install_command() -> ClapCommand {
     ClapCommand::new("install")
-        .about("Install package executable launchers")
-        .after_help(examples_help(concat!(
+        .about("Install package executables")
+        .after_help(tool_install_examples_help(concat!(
             "  ir tool install btw\n",
             "  ir tool install --bin-dir ~/.local/bin btw\n",
             "  ir tool install --with cli --bin-dir ~/.local/bin btw",
@@ -312,14 +391,14 @@ fn tool_install_command() -> ClapCommand {
                 .value_name("PKG")
                 .num_args(1)
                 .action(ArgAction::Append)
-                .help("Add a dependency for installed launchers; may be repeated"),
+                .help("Add a dependency for installed tools; may be repeated"),
         )
         .arg(
             Arg::new("r-version")
                 .long("r-version")
                 .value_name("SPEC")
                 .num_args(1)
-                .help("Select the R version for installed launchers with rig"),
+                .help("Select the R version for installed tools with rig"),
         )
         .arg(
             Arg::new("rscript")
@@ -333,13 +412,13 @@ fn tool_install_command() -> ClapCommand {
                 .long("bin-dir")
                 .value_name("DIR")
                 .num_args(1)
-                .help("Directory where launchers are written"),
+                .help("Directory where executables are installed"),
         )
         .arg(
             Arg::new("force")
                 .long("force")
                 .action(ArgAction::SetTrue)
-                .help("Overwrite an existing launcher path"),
+                .help("Overwrite an existing installed executable path"),
         )
         .arg(
             Arg::new("package-ref")
@@ -673,7 +752,7 @@ impl ToolRunInvocation {
 }
 
 /// Parse `ir tool run`, which resolves a provider package and runs a command
-/// from that package's `exec/` directory. This is intentionally separate from
+/// from that package's executable directories. This is intentionally separate from
 /// `ir run`: script and expression runs are source-oriented, tool runs are
 /// package-oriented and isolated by default.
 pub(crate) fn parse_tool_run_args(
@@ -886,8 +965,9 @@ fn tool_install_bin_dir() -> Result<PathBuf, Box<dyn Error>> {
 
     #[cfg(unix)]
     {
-        let home = nonempty_env("HOME")
-            .ok_or("cannot determine launcher directory; set --bin-dir or IR_TOOL_BIN_DIR")?;
+        let home = nonempty_env("HOME").ok_or(
+            "cannot determine executable install directory; set --bin-dir or IR_TOOL_BIN_DIR",
+        )?;
         Ok(PathBuf::from(home).join(".local").join("bin"))
     }
 
@@ -900,8 +980,9 @@ fn tool_install_bin_dir() -> Result<PathBuf, Box<dyn Error>> {
                 .join("ir")
                 .join("bin"));
         }
-        let home = nonempty_env("USERPROFILE")
-            .ok_or("cannot determine launcher directory; set --bin-dir or IR_TOOL_BIN_DIR")?;
+        let home = nonempty_env("USERPROFILE").ok_or(
+            "cannot determine executable install directory; set --bin-dir or IR_TOOL_BIN_DIR",
+        )?;
         Ok(PathBuf::from(home)
             .join("AppData")
             .join("Local")

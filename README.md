@@ -31,9 +31,9 @@ Full documentation: <https://t-kalinowski.github.io/ir/>
 
 - **The file explains itself.** R and Python package requirements live in the script or document, not in a separate setup note.
 - **Fast by design.** `ir` keeps package setup direct and reuses cached resolutions and libraries when the same requirements are seen again.
-- **Reproducibility is explicit.** Use `r-version`, `rscript`, or their command-line and environment equivalents to select R. Use `--exclude-newer`, `IR_EXCLUDE_NEWER`, or frontmatter `exclude-newer` to resolve packages as of a specific date. When `exclude-newer` is set without an R selection, `ir` selects the latest R minor version available on that date.
+- **Reproducibility is explicit.** Use frontmatter `r-version`, `--r-version`, or `IR_R_VERSION` to select R by version. Use `--rscript` or `IR_RSCRIPT` only when you need a machine-local Rscript override. Use `--exclude-newer`, `IR_EXCLUDE_NEWER`, or frontmatter `exclude-newer` to resolve packages as of a specific date. When `exclude-newer` is set without an R selection, `ir` selects the latest R minor version available on that date.
 - **It works with normal R habits.** Forward `Rscript` options, render Quarto documents, evaluate inline expressions, or use `--with` for one-off packages.
-- **Package tools are easy to try.** Run package executables with `rx`, or install persistent launchers for R, Rapp, and direct executable scripts without setting up a project by hand.
+- **Package tools are easy to try.** Run package executables with `rx`, or install persistent launchers backed by a durable tool store.
 
 `ir` is designed to be small, fast, and predictable: resolve once, reuse cached libraries aggressively, and avoid making you manage a project directory for a one-file workflow.
 
@@ -70,6 +70,7 @@ The installers download the latest release and install `ir` and `rx` into `~/.lo
 On macOS, the default `~/.local/bin` directory is added to `~/.zprofile` when needed.
 On Windows, the install directory is added to the user `PATH`.
 On Linux, the installer tells you if the install directory is not on `PATH`.
+If `rig` is not on `PATH`, the installers print platform-specific rig install guidance.
 Set `IR_NO_MODIFY_PATH=1` to skip PATH changes.
 Set `IR_INSTALL_DIR` to choose another directory.
 
@@ -103,7 +104,7 @@ inspect the plan.
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH`, or a selected `rscript`/`IR_RSCRIPT`, when R is not selected by version or date.
+- `R` / `Rscript` on `PATH`, or `--rscript`/`IR_RSCRIPT`, when R is not selected by version or date.
 - `rig` on `PATH` when using `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer` R selection.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 
