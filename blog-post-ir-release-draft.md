@@ -23,8 +23,8 @@ use.
 
 - running or rendering self-describing scripts and documents (`ir run`,
   `ir render`)
-- running or installing command-line tools distributed through R packages
-  (`rx`, `ir tool install`)
+- running or installing command-line tools distributed through R
+  packages (`rx`, `ir tool install`)
 
 ## Why `ir`?
 
@@ -34,15 +34,18 @@ a colleague. Over time, the script can become important, but the setup
 still lives somewhere else: in a README, in a shell history, in a
 project library, or in the author's current R installation.
 
-`ir` makes the runtime specification part of the source file. That means a script can
-say, directly:
+`ir` makes the runtime specification part of the source file. That means
+a script can say, directly:
 
 - which packages it needs
 - which R should run it, when that needs to be explicit
 - whether user libraries should be visible
 - whether CRAN packages should be resolved as of a specific date
 
-This should help you to re-run the script reliably at a later date. As the metadata is part of the file, you don't need to worry about it being lost or accidentally overwritten.
+This should help you to re-run the script reliably at a later date. As
+the metadata is part of the file, you don't need to worry about it being
+lost or accidentally overwritten.
+
 ## How `ir` fits with existing tools
 
 `ir` sits alongside the R tools people already use and builds on several
@@ -120,8 +123,8 @@ $ ir tool run btw
 ```
 
 Package authors can put executable scripts in a package's
-[`exec/`](https://r-pkgs.org/misc.html#other-directories)
-directory. Those scripts can be regular `Rscript` files or
+[`exec/`](https://r-pkgs.org/misc.html#other-directories) directory.
+Those scripts can be regular `Rscript` files or
 [`Rapp`](https://github.com/r-lib/Rapp) apps. `rx` resolves the package,
 finds the requested executable, and runs it in an isolated library. For
 tools you use regularly, `ir tool install` writes persistent launchers:
@@ -243,9 +246,11 @@ $ ir render report.qmd --to pdf
 ```
 
 When `ir` selects an R executable by `rscript`, `r-version`, or
-date-only `exclude-newer`, it pins Quarto's knitr R to that selection using [`QUARTO_R` environment variable.](https://quarto.org/docs/advanced/environment-vars.html#variables-quarto-inspects) 
-`ir` also seeds `rmarkdown` automatically for knitr-based renders unless
-you declare it yourself.
+date-only `exclude-newer`, it sets [`QUARTO_R`](
+  https://quarto.org/docs/advanced/environment-vars.html#variables-quarto-inspects
+) so Quarto renders with that R. `ir` also seeds `rmarkdown`
+automatically for knitr-based renders unless you declare it yourself.
+
 
 ## Install `ir`
 
