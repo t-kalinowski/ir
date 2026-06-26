@@ -160,7 +160,7 @@ $ ir render report.qmd --to html
 `ir` also bootstraps its own resolver tooling on first use, so you do
 not need to pre-install `pak` or `renv`.
 
-## Reproducibility controls for small files
+## Reproducibility without a project
 
 For scripts and reports that need more explicit reproducibility,
 `exclude-newer` is usually the first thing to reach for:
