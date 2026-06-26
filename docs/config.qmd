@@ -4,7 +4,7 @@ title: Install and Configuration
 
 ## Requirements
 
-- `R` / `Rscript` on `PATH`, a selected `rscript`, or `IR_RSCRIPT`, when R is not selected by `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer`.
+- `R` / `Rscript` on `PATH`, `--rscript`, or `IR_RSCRIPT`, when R is not selected by frontmatter `r-version`, `IR_R_VERSION`, `--r-version`, or date-only `exclude-newer`.
 - `rig` on `PATH` when `r-version`, `IR_R_VERSION`, or `--r-version` is set, or when date-only `exclude-newer` selects R.
 - `quarto` on `PATH`, or `IR_QUARTO`, when rendering `.qmd`, `.Rmd`, or R script files.
 - `ir` installs its own resolver tooling (`pak`, `renv`, `secretbase`) on first use into a dedicated library under the cache directory, so you do not need to pre-install them.
@@ -66,10 +66,11 @@ Set `--exclude-newer` or `IR_EXCLUDE_NEWER` to an empty string to override front
 Future snapshot dates also resolve latest packages.
 When Python metadata is present, the selected `exclude-newer` value is also used during Python environment resolution unless `--python-exclude-newer` or frontmatter `python-exclude-newer` is set.
 Set `python-exclude-newer` to `null`, or set `--python-exclude-newer` or frontmatter `python-exclude-newer` to an empty string, to resolve latest Python packages while keeping `exclude-newer` for R.
-R selection precedence is command line, then environment, then frontmatter.
-Use `--rscript`, `IR_RSCRIPT`, or frontmatter `rscript` to select a specific Rscript executable.
+R selection precedence is command line, then environment, then frontmatter `r-version`.
+Use `--rscript` or `IR_RSCRIPT` to select a specific Rscript executable.
 Use `--r-version`, `IR_R_VERSION`, or frontmatter `r-version` to select an installed R through `rig`.
-Within one layer, set either `rscript` or `r-version`, not both.
+Do not set both `--rscript` and `--r-version`, or both `IR_RSCRIPT` and `IR_R_VERSION`.
+Frontmatter `rscript` is rejected.
 When `exclude-newer` is set without an explicit R selector, `ir` uses `rig` to select the latest R minor version available on that date.
 `--bin-dir <dir>` overrides the executable install directory environment variables for `ir tool install`.
 On macOS, `ir tool install` adds the default `~/.local/bin` directory to the zsh profile when needed.

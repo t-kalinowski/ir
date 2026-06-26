@@ -138,7 +138,7 @@ pub(crate) fn rscript_for_spec(
     if let Some(selection) = env_r_selection()? {
         return resolve_r_selection(selection, spec.exclude_newer.as_deref());
     }
-    if let Some(selection) = frontmatter_r_selection(spec)? {
+    if let Some(selection) = frontmatter_r_selection(spec) {
         return resolve_r_selection(selection, spec.exclude_newer.as_deref());
     }
     if let Some(exclude_newer) = &spec.exclude_newer {
@@ -176,13 +176,10 @@ fn env_r_selection() -> Result<Option<RSelection>, Box<dyn Error>> {
     }
 }
 
-fn frontmatter_r_selection(spec: &RuntimeSpec) -> Result<Option<RSelection>, Box<dyn Error>> {
-    match (&spec.r_requirement, &spec.rscript) {
-        (Some(_), Some(_)) => Err("frontmatter cannot set both `r-version` and `rscript`".into()),
-        (Some(req), None) => Ok(Some(RSelection::Version(req.clone()))),
-        (None, Some(rscript)) => Ok(Some(RSelection::Rscript(OsString::from(rscript)))),
-        (None, None) => Ok(None),
-    }
+fn frontmatter_r_selection(spec: &RuntimeSpec) -> Option<RSelection> {
+    spec.r_requirement
+        .as_ref()
+        .map(|req| RSelection::Version(req.clone()))
 }
 
 fn resolve_r_selection(

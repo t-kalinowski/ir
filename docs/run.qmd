@@ -36,7 +36,6 @@ The script frontmatter supports:
 
 - `packages`: package refs resolved with pak.
 - `r-version`: an optional R version requirement selected from installed versions reported by rig.
-- `rscript`: an optional Rscript executable path or command.
 - `python-packages`: optional Python package specs resolved with reticulate's uv environment helper.
 - `python-version`: an optional Python version requirement.
 - `python-exclude-newer`: an optional Python package snapshot date.
@@ -44,8 +43,9 @@ The script frontmatter supports:
 - `exclude-newer`: an optional `YYYY-MM-DD` date that resolves CRAN from the Posit Package Manager snapshot for that date. When no R selector is set, it also selects the latest R major.minor version available on that date.
 
 Snapshot date precedence is `--exclude-newer`, then `IR_EXCLUDE_NEWER`, then frontmatter `exclude-newer`.
-R selection precedence is command line, then environment, then frontmatter.
-Use either `rscript` or `r-version` within one layer, not both.
+R selection precedence is command line, then environment, then frontmatter `r-version`.
+Use `--rscript` or `IR_RSCRIPT` when you need a machine-local Rscript override.
+Frontmatter `rscript` is rejected.
 Command-line and environment values are trimmed before use.
 An empty `--exclude-newer` or `IR_EXCLUDE_NEWER` overrides frontmatter `exclude-newer` and resolves latest packages.
 Future snapshot dates also resolve latest packages.

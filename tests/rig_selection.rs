@@ -912,54 +912,6 @@ fn env_rscript_overrides_frontmatter_r_version_without_rig() {
 
 #[cfg(unix)]
 #[test]
-fn env_r_version_overrides_frontmatter_rscript() {
-    let cache_dir = temp_dir("ir-env-r-version-frontmatter-rscript-cache");
-    let bin_dir = temp_dir("ir-env-r-version-frontmatter-rscript-bin");
-    let rscript_dir = temp_dir("ir-env-r-version-frontmatter-rscript-r");
-    let rig_r_dir = temp_dir("ir-env-r-version-frontmatter-rscript-rig-r");
-    let script = temp_path("ir-env-r-version-frontmatter-rscript", "R");
-
-    let frontmatter_rscript = rscript_dir.join("Rscript");
-    write_selected_rscript(&frontmatter_rscript, "frontmatter-rscript");
-    fs::write(
-        &script,
-        format!(
-            "#| rscript: {}\ncat('ignored')\n",
-            r_string(&frontmatter_rscript)
-        ),
-    )
-    .unwrap();
-
-    let rig_binary = selected_r_binary(&rig_r_dir, "env-r-version");
-    write_executable(
-        &bin_dir.join("rig"),
-        &format!(
-            concat!(
-                "#!/bin/sh\n",
-                "cat <<'JSON'\n",
-                r#"[{{"name":"4.4.3","version":"4.4.3","aliases":[],"binary":"{}"}}]"#,
-                "\nJSON\n",
-            ),
-            rig_binary.display()
-        ),
-    );
-
-    let out = ir()
-        .env("IR_CACHE_DIR", &cache_dir)
-        .env("IR_R_VERSION", "4.4")
-        .env("PATH", path_with_bin_dir(&bin_dir))
-        .env_remove("IR_RSCRIPT")
-        .arg("run")
-        .arg(&script)
-        .output()
-        .unwrap();
-
-    assert_success(&out);
-    assert_stdout_contains(&out, "selected=env-r-version");
-}
-
-#[cfg(unix)]
-#[test]
 fn cli_rscript_overrides_env_r_version_and_frontmatter_r_version() {
     let cache_dir = temp_dir("ir-cli-rscript-precedence-cache");
     let bin_dir = temp_dir("ir-cli-rscript-precedence-bin");
@@ -1062,18 +1014,15 @@ fn env_r_selection_conflict_errors() {
 
 #[cfg(unix)]
 #[test]
-fn frontmatter_r_selection_conflict_errors() {
-    let cache_dir = temp_dir("ir-frontmatter-r-selection-conflict-cache");
-    let rscript_dir = temp_dir("ir-frontmatter-r-selection-conflict-r");
-    let script = temp_path("ir-frontmatter-r-selection-conflict", "R");
+fn run_frontmatter_rscript_errors() {
+    let cache_dir = temp_dir("ir-frontmatter-rscript-cache");
+    let rscript_dir = temp_dir("ir-frontmatter-rscript-r");
+    let script = temp_path("ir-frontmatter-rscript", "R");
     let rscript = rscript_dir.join("Rscript");
     write_selected_rscript(&rscript, "unused");
     fs::write(
         &script,
-        format!(
-            "#| r-version: \"4.4\"\n#| rscript: {}\ncat('ignored')\n",
-            r_string(&rscript)
-        ),
+        format!("#| rscript: {}\ncat('ignored')\n", r_string(&rscript)),
     )
     .unwrap();
 
@@ -1088,7 +1037,49 @@ fn frontmatter_r_selection_conflict_errors() {
 
     assert_failure_contains(
         &out,
-        &["frontmatter cannot set both `r-version` and `rscript`"],
+        &[
+            "frontmatter `rscript` is no longer supported",
+            "Use `--rscript` or `IR_RSCRIPT` instead",
+        ],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn render_frontmatter_rscript_errors() {
+    let cache_dir = temp_dir("ir-render-frontmatter-rscript-cache");
+    let quarto_dir = temp_dir("ir-render-frontmatter-rscript-quarto");
+    let rscript_dir = temp_dir("ir-render-frontmatter-rscript-r");
+    let doc = temp_path("ir-render-frontmatter-rscript", "qmd");
+    let rscript = rscript_dir.join("Rscript");
+
+    write_selected_rscript(&rscript, "unused");
+    write_executable(&quarto_dir.join("quarto"), "#!/bin/sh\nexit 0\n");
+    fs::write(
+        &doc,
+        format!(
+            "---\ntitle: rscript render\nir:\n  rscript: {}\n---\n",
+            r_string(&rscript)
+        ),
+    )
+    .unwrap();
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", quarto_dir.join("quarto"))
+        .env_remove("IR_RSCRIPT")
+        .env_remove("IR_R_VERSION")
+        .arg("render")
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_failure_contains(
+        &out,
+        &[
+            "frontmatter `ir.rscript` is no longer supported",
+            "Use `--rscript` or `IR_RSCRIPT` instead",
+        ],
     );
 }
 
