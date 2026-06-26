@@ -261,10 +261,14 @@ Install on Windows PowerShell:
 > irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
 ```
 
-The installers download the latest release and install both `ir` and
-`rx`. You will also need `R` / `Rscript`; `rig` is required when
-selecting R by version or by date-only `exclude-newer`, and Quarto is
-required when rendering Quarto sources.
+The installers download the latest GitHub release and install both `ir`
+and `rx`. You can also download release artifacts from the
+[GitHub releases](https://github.com/t-kalinowski/ir/releases) page or
+with `gh release download`.
+
+You will also need `R` / `Rscript`; `rig` is required when selecting R
+by version or by date-only `exclude-newer`, and Quarto is required when
+rendering Quarto sources.
 
 ## Learn more
 
