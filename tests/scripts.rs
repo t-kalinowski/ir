@@ -1,7 +1,5 @@
-#[cfg(target_os = "linux")]
 mod support;
 
-#[cfg(target_os = "linux")]
 use support::{rscript, temp_cache, temp_dir, temp_path};
 
 use std::fs;
@@ -314,6 +312,7 @@ fn ci_uses_dev_deps_script_for_non_default_r_setup() {
     assert!(warm_script.contains("Sys.getenv(\"R_LIBS_USER\", unset = \"\")"));
     assert!(warm_script.contains("dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)"));
     assert!(warm_script.contains(".libPaths(c(user_libs, .libPaths()))"));
+    assert!(warm_script.contains("Sys.setenv(RENV_PATHS_SOURCE = source_cache)"));
     assert!(warm_script.contains("pak::repo_resolve(\"PPM@latest\")"));
     assert!(!warm_script.contains("https://cran.r-project.org"));
 }
@@ -329,6 +328,43 @@ fn warm_renv_cache_replaces_unnamed_at_cran_with_real_package() {
     let out = Command::new(rscript())
         .current_dir(repo_root())
         .env("RENV_PATHS_CACHE", &renv_cache)
+        .env("R_LIBS_USER", &user_library)
+        .env("R_PROFILE_USER", &profile)
+        .env("CC", "false")
+        .env("CXX", "false")
+        .env("CXX11", "false")
+        .env("CXX14", "false")
+        .env("CXX17", "false")
+        .env("CXX20", "false")
+        .args(["scripts/warm-renv-cache.R", "zip"])
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+}
+
+#[test]
+fn warm_renv_cache_ignores_corrupt_user_source_cache() {
+    let renv_cache = temp_cache("ir-warm-corrupt-renv-cache");
+    let user_library = temp_dir("ir-warm-corrupt-user-library");
+    let user_cache = temp_dir("ir-warm-corrupt-user-cache");
+    let profile = temp_path("ir-warm-corrupt-profile", "R");
+    fs::write(&profile, "options(repos = \"@CRAN@\")\n").unwrap();
+
+    let corrupt_archive = user_cache
+        .join("R")
+        .join("renv")
+        .join("source")
+        .join("repository")
+        .join("cli")
+        .join("cli_3.6.6.tar.gz");
+    fs::create_dir_all(corrupt_archive.parent().unwrap()).unwrap();
+    fs::write(&corrupt_archive, b"partial archive").unwrap();
+
+    let out = Command::new(rscript())
+        .current_dir(repo_root())
+        .env("RENV_PATHS_CACHE", &renv_cache)
+        .env("R_USER_CACHE_DIR", &user_cache)
         .env("R_LIBS_USER", &user_library)
         .env("R_PROFILE_USER", &profile)
         .env("CC", "false")

@@ -9,7 +9,6 @@ pub(crate) struct RuntimeSpec {
     pub(crate) exclude_newer: Option<String>,
     pub(crate) isolated: bool,
     pub(crate) r_requirement: Option<String>,
-    pub(crate) rscript: Option<String>,
     pub(crate) python: Option<PythonSpec>,
     // A Quarto render needs rmarkdown injected for the knitr engine.
     pub(crate) quarto_render: bool,
@@ -65,7 +64,7 @@ pub(crate) fn parse_quarto_frontmatter(document: &str) -> Result<RuntimeSpec, Bo
 
 fn runtime_spec_from_yaml_mapping(
     doc: &Yaml<'_>,
-    python_key_prefix: &str,
+    key_prefix: &str,
 ) -> Result<RuntimeSpec, Box<dyn Error>> {
     if doc.is_null() {
         return Ok(RuntimeSpec::default());
@@ -73,18 +72,29 @@ fn runtime_spec_from_yaml_mapping(
     if !doc.is_mapping() {
         return Err("script frontmatter must be a YAML mapping".into());
     }
+    reject_frontmatter_rscript(doc, key_prefix)?;
 
     Ok(RuntimeSpec {
         dependencies: frontmatter_dependencies(doc)?,
         exclude_newer: frontmatter_optional_string(doc, "exclude-newer")?,
         isolated: frontmatter_optional_bool(doc, "isolated")?.unwrap_or(false),
         r_requirement: frontmatter_optional_string(doc, "r-version")?,
-        rscript: frontmatter_optional_string(doc, "rscript")?,
-        python: frontmatter_python_spec(doc, python_key_prefix)?,
+        python: frontmatter_python_spec(doc, key_prefix)?,
         // Quarto rendering is a property of the command, not the frontmatter.
         // cmd_render sets it after parsing.
         ..RuntimeSpec::default()
     })
+}
+
+fn reject_frontmatter_rscript(doc: &Yaml<'_>, key_prefix: &str) -> Result<(), Box<dyn Error>> {
+    if doc.as_mapping_get("rscript").is_some() {
+        return Err(format!(
+            "frontmatter `{}` is no longer supported. Use `--rscript` or `IR_RSCRIPT` instead.",
+            frontmatter_key(key_prefix, "rscript")
+        )
+        .into());
+    }
+    Ok(())
 }
 
 pub(crate) fn load_first_yaml_document<'a>(
