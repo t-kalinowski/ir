@@ -291,10 +291,12 @@ fn tool_run_rx_and_install_support_package_bin_executables() {
     let package = package_dir.join("rustbinpkg");
     copy_dir_tree(&fixture("tool/rustbinpkg"), &package);
     let package_ref = format!("local::{}", renviron_path(&package));
+    let bin_tool = platform_package_bin_executable_name("irrustbin");
+    let arch_bin_tool = platform_package_bin_executable_name("irrustbin-arch");
 
     let out = ir()
         .env("IR_CACHE_DIR", &cache_dir)
-        .args(["tool", "run", "--from", &package_ref, "irrustbin"])
+        .args(["tool", "run", "--from", &package_ref, &bin_tool])
         .args(["run", "arg"])
         .output()
         .unwrap();
@@ -304,7 +306,7 @@ fn tool_run_rx_and_install_support_package_bin_executables() {
 
     let out = rx()
         .env("IR_CACHE_DIR", &cache_dir)
-        .args(["--from", &package_ref, "irrustbin-arch"])
+        .args(["--from", &package_ref, &arch_bin_tool])
         .args(["rx", "arg"])
         .output()
         .unwrap();
@@ -320,8 +322,8 @@ fn tool_run_rx_and_install_support_package_bin_executables() {
         .output()
         .unwrap();
     assert_success(&out);
-    assert_stdout_contains(&out, "irrustbin");
-    assert_stdout_contains(&out, "irrustbin-arch");
+    assert_stdout_contains(&out, &bin_tool);
+    assert_stdout_contains(&out, &arch_bin_tool);
 
     let out = Command::new(launcher_path(&bin_dir, "irrustbin"))
         .args(["install", "arg"])
@@ -2198,6 +2200,18 @@ fn launcher_path(bin_dir: &Path, name: &str) -> PathBuf {
     #[cfg(not(unix))]
     {
         bin_dir.join(format!("{name}.cmd"))
+    }
+}
+
+fn platform_package_bin_executable_name(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{name}.cmd")
+    }
+
+    #[cfg(not(windows))]
+    {
+        name.to_string()
     }
 }
 
