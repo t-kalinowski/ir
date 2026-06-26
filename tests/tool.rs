@@ -163,6 +163,95 @@ fn rx_preserves_windows_child_exit_code() {
     assert_eq!(out.status.code(), Some(300), "{}", output_text(&out));
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_install_rejects_windows_target_path_collisions() {
+    let cache_dir = temp_dir("ir-tool-windows-target-collision-cache");
+    let bin_dir = temp_dir("ir-tool-windows-target-collision-bin");
+    let library = temp_dir("ir-tool-windows-target-collision-library");
+    let rscript_dir = temp_dir("ir-tool-windows-target-collision-rscript");
+    let package = library.join("irwincollide");
+    let exec_dir = package.join("exec");
+    let package_bin_dir = package.join("bin");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    fs::write(exec_dir.join("foo.R"), "#!/usr/bin/env Rscript\r\n").unwrap();
+    fs::write(package_bin_dir.join("foo.cmd"), "@echo off\r\n").unwrap();
+    let rscript = write_windows_fake_tool_resolver(&rscript_dir, "irwincollide");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irwincollide")
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", output_text(&out));
+    let text = output_text(&out);
+    assert!(
+        text.contains("multiple package executables map to installed executable path"),
+        "{text}"
+    );
+    assert!(
+        !bin_dir.join("foo.cmd").exists(),
+        "colliding install should not write either executable"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_copies_windows_bin_executables() {
+    let cache_dir = temp_dir("ir-tool-windows-bin-copy-cache");
+    let bin_dir = temp_dir("ir-tool-windows-bin-copy-bin");
+    let library = temp_dir("ir-tool-windows-bin-copy-library");
+    let rscript_dir = temp_dir("ir-tool-windows-bin-copy-rscript");
+    let package_bin_dir = library.join("irwincopy").join("bin");
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    fs::write(
+        package_bin_dir.join("native.cmd"),
+        "@echo off\r\necho tool.location=bin\r\necho tool.args=%*\r\n",
+    )
+    .unwrap();
+    let rscript = write_windows_fake_tool_resolver(&rscript_dir, "irwincopy");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irwincopy")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "native.cmd");
+
+    let installed = bin_dir.join("native.cmd");
+    assert!(installed.exists(), "{}", installed.display());
+    assert!(
+        !fs::symlink_metadata(&installed)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "Windows bin executable installs should not require symlink privileges"
+    );
+
+    let out = Command::new(&installed)
+        .args(["install", "arg"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.location=bin");
+    assert_stdout_contains(&out, "tool.args=install arg");
+}
+
 #[test]
 fn tool_install_installs_real_package_entrypoint() {
     let cache_dir = temp_cache("ir-tool-install-real-cache");
@@ -2009,6 +2098,30 @@ fn write_fake_tool_resolver(rscript_dir: &Path, package: &str, arch: &str) -> Pa
             package, arch
         ),
     );
+    rscript
+}
+
+#[cfg(windows)]
+fn write_windows_fake_tool_resolver(rscript_dir: &Path, package: &str) -> PathBuf {
+    fs::create_dir_all(rscript_dir).unwrap();
+    let rscript = rscript_dir.join("Rscript.cmd");
+    fs::write(
+        &rscript,
+        format!(
+            concat!(
+                "@echo off\r\n",
+                "if not \"%IR_RESOLVE_RESULT_FILE%\" == \"\" (\r\n",
+                "  more > nul\r\n",
+                "  echo %IR_TEST_LIBRARY%> \"%IR_RESOLVE_RESULT_FILE%\"\r\n",
+                "  echo {}> \"%IR_RESOLVE_PACKAGE_RESULT_FILE%\"\r\n",
+                "  exit /b 0\r\n",
+                ")\r\n",
+                "echo x64\r\n",
+            ),
+            package
+        ),
+    )
+    .unwrap();
     rscript
 }
 

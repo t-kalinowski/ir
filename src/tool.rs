@@ -87,24 +87,16 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
         )
     })?;
 
+    reject_colliding_installed_target_paths(&install.bin_dir, &executables)?;
+    reject_existing_installed_target_paths(&install.bin_dir, &executables, install.force)?;
+
     let path_prefix = resolved_runtime_path_prefix(&library, &rscript, r_arch.as_deref())?;
     let reinstall_command = tool_install_recovery_command(install, &rscript);
-    for executable in &executables {
-        let target = installed_executable_target_path(&install.bin_dir, executable);
-        if path_exists(&target) && !install.force {
-            return Err(format!(
-                "installed executable path `{}` already exists; pass --force to overwrite it",
-                target.display()
-            )
-            .into());
-        }
-    }
-
     let mut installed = Vec::new();
     for executable in executables {
         let target = installed_executable_target_path(&install.bin_dir, &executable);
         if executable.dir_kind.is_bin() {
-            symlink_package_executable(&executable.path, &target)?;
+            install_package_executable(&executable.path, &target)?;
         } else {
             let contents = installed_launcher_contents(
                 &rscript,
@@ -1315,11 +1307,53 @@ fn installed_executable_target_path(bin_dir: &Path, executable: &PackageExecutab
     }
 }
 
+fn reject_colliding_installed_target_paths(
+    bin_dir: &Path,
+    executables: &[PackageExecutable],
+) -> Result<(), Box<dyn Error>> {
+    for (index, executable) in executables.iter().enumerate() {
+        let target = installed_executable_target_path(bin_dir, executable);
+        if executables[..index]
+            .iter()
+            .any(|known| installed_executable_target_path(bin_dir, known) == target)
+        {
+            return Err(format!(
+                "multiple package executables map to installed executable path `{}`",
+                target.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn reject_existing_installed_target_paths(
+    bin_dir: &Path,
+    executables: &[PackageExecutable],
+    force: bool,
+) -> Result<(), Box<dyn Error>> {
+    if force {
+        return Ok(());
+    }
+
+    for executable in executables {
+        let target = installed_executable_target_path(bin_dir, executable);
+        if path_exists(&target) {
+            return Err(format!(
+                "installed executable path `{}` already exists; pass --force to overwrite it",
+                target.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn path_exists(path: &Path) -> bool {
     path.exists() || fs::symlink_metadata(path).is_ok()
 }
 
-fn symlink_package_executable(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
+fn install_package_executable(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
     if path_exists(target) {
         fs::remove_file(target).map_err(|e| {
             format!(
@@ -1334,7 +1368,12 @@ fn symlink_package_executable(source: &Path, target: &Path) -> Result<(), Box<dy
             source.display()
         )
     })?;
-    symlink_file(&source, target).map_err(|e| {
+    install_package_executable_file(&source, target)
+}
+
+#[cfg(unix)]
+fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
+    std::os::unix::fs::symlink(source, target).map_err(|e| {
         format!(
             "failed to symlink installed executable `{}` to `{}`: {e}",
             target.display(),
@@ -1344,19 +1383,28 @@ fn symlink_package_executable(source: &Path, target: &Path) -> Result<(), Box<dy
     })
 }
 
-#[cfg(unix)]
-fn symlink_file(source: &Path, target: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(source, target)
-}
-
 #[cfg(windows)]
-fn symlink_file(source: &Path, target: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_file(source, target)
+fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
+    fs::copy(source, target).map(|_| ()).map_err(|e| {
+        format!(
+            "failed to copy installed executable `{}` from `{}`: {e}",
+            target.display(),
+            source.display()
+        )
+        .into()
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
-fn symlink_file(source: &Path, target: &Path) -> io::Result<()> {
-    fs::hard_link(source, target)
+fn install_package_executable_file(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
+    fs::hard_link(source, target).map_err(|e| {
+        format!(
+            "failed to link installed executable `{}` to `{}`: {e}",
+            target.display(),
+            source.display()
+        )
+        .into()
+    })
 }
 
 fn launcher_target_path(bin_dir: &Path, name: &str) -> PathBuf {
