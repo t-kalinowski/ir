@@ -93,7 +93,7 @@ fn tool_install_examples_help(body: &'static str) -> StyledStr {
     let _ = writeln!(help, "{header}Install storage:{header:#}");
     help.push_str("  `ir tool install` materializes the package library under the durable tool\n");
     help.push_str("  store, configurable with IR_TOOL_STORE_DIR, then installs command names\n");
-    help.push_str("  into --bin-dir as launchers or symlinks.\n\n");
+    help.push_str("  into --bin-dir as launchers backed by that library.\n\n");
     let _ = writeln!(help, "{header}Examples:{header:#}");
     for line in body.split_inclusive('\n') {
         let (line, newline) = line
@@ -280,7 +280,7 @@ fn tool_command() -> ClapCommand {
                 "  isolated library, then runs the selected executable. The user R library is not\n",
                 "  used.\n",
                 "  `ir tool install` materializes a durable package library, then writes\n",
-                "  generated launchers for exec/ entries and symlinks for bin/ entries.",
+                "  launchers backed by that library.",
             ),
         ))
         .subcommand(tool_run_command())

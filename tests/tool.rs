@@ -205,7 +205,7 @@ fn tool_install_rejects_windows_target_path_collisions() {
 
 #[cfg(windows)]
 #[test]
-fn tool_install_copies_windows_bin_executables() {
+fn tool_install_wraps_windows_bin_commands() {
     let cache_dir = temp_dir("ir-tool-windows-bin-copy-cache");
     let bin_dir = temp_dir("ir-tool-windows-bin-copy-bin");
     let library = temp_dir("ir-tool-windows-bin-copy-library");
@@ -391,16 +391,14 @@ fn tool_install_materializes_exec_and_bin_tools_in_tool_store() {
         "{exec_launcher}"
     );
 
-    let bin_target = fs::read_link(launcher_path(&bin_dir, "native")).unwrap();
+    let bin_launcher = fs::read_to_string(launcher_path(&bin_dir, "native")).unwrap();
     assert!(
-        bin_target.starts_with(&store_dir),
-        "bin tool should point into tool store: {}",
-        bin_target.display()
+        bin_launcher.contains(&store_dir.to_string_lossy().into_owned()),
+        "{bin_launcher}"
     );
     assert!(
-        !bin_target.starts_with(&cache_dir),
-        "bin tool should not point into cache: {}",
-        bin_target.display()
+        !bin_launcher.contains(&cache_dir.to_string_lossy().into_owned()),
+        "{bin_launcher}"
     );
 
     let out = Command::new(launcher_path(&bin_dir, "hello"))
@@ -563,11 +561,11 @@ fn tool_run_and_install_treat_bin_executables_opaquely() {
     assert!(launcher_path(&bin_dir, "native.exe").exists());
     assert!(launcher_path(&bin_dir, "script.R").exists());
     assert!(
-        fs::symlink_metadata(launcher_path(&bin_dir, "native.exe"))
+        !fs::symlink_metadata(launcher_path(&bin_dir, "native.exe"))
             .unwrap()
             .file_type()
             .is_symlink(),
-        "installed bin executable should be a symlink"
+        "installed bin executable should be a launcher"
     );
     assert!(!launcher_path(&bin_dir, "native").exists());
 
@@ -578,6 +576,57 @@ fn tool_run_and_install_treat_bin_executables_opaquely() {
     assert_success(&out);
     assert_stdout_contains(&out, "tool.fixture=exe");
     assert_stdout_contains(&out, "tool.args=install arg");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_bin_launcher_preserves_resolved_runtime_env() {
+    let cache_dir = temp_dir("ir-tool-bin-install-env-cache");
+    let bin_dir = temp_dir("ir-tool-bin-install-env-bin");
+    let library = temp_dir("ir-tool-bin-install-env-library");
+    let rscript_dir = temp_dir("ir-tool-bin-install-env-rscript");
+    let package = library.join("irbinenv");
+    let package_bin_dir = package.join("bin");
+    fs::create_dir_all(&package_bin_dir).unwrap();
+    write_executable(
+        &package_bin_dir.join("native"),
+        concat!(
+            "#!/bin/sh\n",
+            "printf 'tool.r_libs=%s\\n' \"${R_LIBS:-<unset>}\"\n",
+            "printf 'tool.r_libs_user=%s\\n' \"${R_LIBS_USER:-<unset>}\"\n",
+            "helper\n",
+        ),
+    );
+    write_executable(
+        &package_bin_dir.join("helper"),
+        "#!/bin/sh\nprintf 'helper.path=resolved\\n'\n",
+    );
+    let rscript = write_fake_tool_resolver(&rscript_dir, "irbinenv", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irbinenv")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "native");
+
+    let out = Command::new(launcher_path(&bin_dir, "native"))
+        .env_remove("R_LIBS")
+        .env_remove("R_LIBS_USER")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, &format!("tool.r_libs={}", library.display()));
+    assert_stdout_contains(&out, "tool.r_libs_user=NULL");
+    assert_stdout_contains(&out, "helper.path=resolved");
 }
 
 #[cfg(unix)]
@@ -671,6 +720,35 @@ fn tool_run_queries_architecture_with_forwarded_rscript_args() {
         .unwrap();
     assert_success(&out);
     assert_stdout_contains(&out, "tool.arch=i386");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_run_direct_executable_exports_selected_r_arch_env() {
+    let cache_dir = temp_dir("ir-tool-direct-r-arch-env-cache");
+    let library = temp_dir("ir-tool-direct-r-arch-env-library");
+    let rscript_dir = temp_dir("ir-tool-direct-r-arch-env-rscript");
+    let package = library.join("irdirectarch");
+    let i386_bin_dir = package.join("bin").join("i386");
+    fs::create_dir_all(&i386_bin_dir).unwrap();
+    write_executable(
+        &i386_bin_dir.join("archenv"),
+        "#!/bin/sh\nprintf 'tool.r_arch=%s\\n' \"${R_ARCH:-<unset>}\"\n",
+    );
+    let rscript = write_fake_tool_resolver_with_forwarded_arch(&rscript_dir, "irdirectarch", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .env_remove("R_ARCH")
+        .args(["tool", "run", "--rscript"])
+        .arg(&rscript)
+        .args(["--arch=i386", "--from", "irdirectarch", "archenv"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    assert_stdout_contains(&out, "tool.r_arch=/i386");
 }
 
 #[cfg(unix)]
@@ -1760,6 +1838,50 @@ fn tool_install_warm_resolution_cache_skips_resolver_rscript() {
 
     assert_success(&cached);
     assert_stdout_contains(&cached, "Installed");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_force_replaces_existing_symlink_before_writing_exec_launcher() {
+    let cache_dir = temp_dir("ir-tool-force-replace-symlink-cache");
+    let bin_dir = temp_dir("ir-tool-force-replace-symlink-bin");
+    let library = temp_dir("ir-tool-force-replace-symlink-library");
+    let rscript_dir = temp_dir("ir-tool-force-replace-symlink-rscript");
+    let package = library.join("irforceexec");
+    let exec_dir = package.join("exec");
+    fs::create_dir_all(&exec_dir).unwrap();
+    fs::write(
+        exec_dir.join("replaced.R"),
+        "#!/usr/bin/env Rscript\ncat('replaced\\n')\n",
+    )
+    .unwrap();
+    let stale_target = temp_path("ir-tool-force-replace-symlink-stale-target", "sh");
+    fs::write(&stale_target, "stale target\n").unwrap();
+    let installed = launcher_path(&bin_dir, "replaced");
+    std::os::unix::fs::symlink(&stale_target, &installed).unwrap();
+    let rscript = write_fake_tool_resolver(&rscript_dir, "irforceexec", "x64");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_TEST_LIBRARY", &library)
+        .env_remove("IR_RSCRIPT")
+        .args(["tool", "install", "--force", "--rscript"])
+        .arg(&rscript)
+        .args(["--bin-dir"])
+        .arg(&bin_dir)
+        .arg("irforceexec")
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    assert!(
+        !fs::symlink_metadata(&installed)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "force install should replace the installed symlink"
+    );
+    assert_eq!(fs::read_to_string(&stale_target).unwrap(), "stale target\n");
 }
 
 #[test]

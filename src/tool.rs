@@ -34,6 +34,7 @@ pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
     let arch_args = rscript_arch_args(&run.rscript_args);
     let (library, package_name) = resolve_library_and_primary_package(&rscript, &spec, &arch_args)?;
     let r_arch = selected_r_arch(&rscript, &arch_args)?;
+    let r_arch_env = selected_r_arch_env(&rscript, &arch_args)?;
     let executable = find_package_executable(
         &library,
         &package_name,
@@ -45,6 +46,7 @@ pub(crate) fn cmd_tool_run(run: &ToolRunArgs) -> Result<(), Box<dyn Error>> {
         &library,
         &executable,
         r_arch.as_deref(),
+        r_arch_env.as_deref(),
         &run.rscript_args,
         &run.tool_args,
     )?;
@@ -95,7 +97,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
     let mut installed = Vec::new();
     for executable in executables {
         let target = installed_executable_target_path(&install.bin_dir, &executable);
-        if executable.dir_kind.is_bin() {
+        if install_package_executable_as_plain_file(&executable) {
             install_package_executable(&executable.path, &target)?;
         } else {
             let contents = installed_launcher_contents(
@@ -106,9 +108,7 @@ pub(crate) fn cmd_tool_install(install: &ToolInstallArgs) -> Result<(), Box<dyn 
                 r_arch_env.as_deref(),
                 &reinstall_command,
             )?;
-            fs::write(&target, contents)
-                .map_err(|e| format!("failed to write launcher `{}`: {e}", target.display()))?;
-            make_executable(&target)?;
+            write_installed_launcher(&target, contents)?;
         }
         installed.push(executable.name);
     }
@@ -1137,6 +1137,7 @@ fn run_package_executable(
     library: &Path,
     executable: &PackageExecutable,
     r_arch: Option<&str>,
+    r_arch_env: Option<&OsStr>,
     rscript_args: &[String],
     args: &[String],
 ) -> Result<i32, Box<dyn Error>> {
@@ -1184,6 +1185,9 @@ fn run_package_executable(
         .env("R_LIBS_USER", "NULL")
         .env("RAPP_LAUNCHER_NAME", &executable.name)
         .env("PATH", resolved_runtime_path(library, rscript, r_arch)?);
+    if let Some(r_arch_env) = r_arch_env {
+        cmd.env("R_ARCH", r_arch_env);
+    }
 
     #[cfg(unix)]
     {
@@ -1353,6 +1357,24 @@ fn path_exists(path: &Path) -> bool {
     path.exists() || fs::symlink_metadata(path).is_ok()
 }
 
+fn install_package_executable_as_plain_file(executable: &PackageExecutable) -> bool {
+    #[cfg(windows)]
+    {
+        executable.dir_kind.is_bin()
+            && executable
+                .path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = executable;
+        false
+    }
+}
+
 fn install_package_executable(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
     if path_exists(target) {
         fs::remove_file(target).map_err(|e| {
@@ -1369,6 +1391,20 @@ fn install_package_executable(source: &Path, target: &Path) -> Result<(), Box<dy
         )
     })?;
     install_package_executable_file(&source, target)
+}
+
+fn write_installed_launcher(target: &Path, contents: String) -> Result<(), Box<dyn Error>> {
+    if path_exists(target) {
+        fs::remove_file(target).map_err(|e| {
+            format!(
+                "failed to remove existing installed executable `{}`: {e}",
+                target.display()
+            )
+        })?;
+    }
+    fs::write(target, contents)
+        .map_err(|e| format!("failed to write launcher `{}`: {e}", target.display()))?;
+    make_executable(target)
 }
 
 #[cfg(unix)]

@@ -76,7 +76,7 @@ If that file is `exec/greet.R`, it is installed and discovered as `friendly-gree
 Rapp apps use `base,<pkg>` as their default startup packages unless `#| launcher:` sets `default-packages`.
 
 For compiled CLIs, put the executable at `bin/tool` or `bin/<arch>/tool`.
-`rx --from mypkg tool` runs that file directly, and `ir tool install mypkg` installs a symlink to it.
+`rx --from mypkg tool` runs that file directly, and `ir tool install mypkg` installs a launcher for it.
 
 ## Install launchers
 
@@ -95,15 +95,15 @@ The tool store is configured with `IR_TOOL_STORE_DIR`.
 By default, it is `$XDG_DATA_HOME/ir/tools` or `~/.local/share/ir/tools` on Unix and macOS, and `%LOCALAPPDATA%\Programs\R\ir\tools` or `%USERPROFILE%\AppData\Local\Programs\R\ir\tools` on Windows.
 Installed tool libraries are persistent state, so `ir cache clean` does not remove them.
 
-For `exec/` entries, generated launchers keep the same resolved package ref, `--with` package additions, and R selection that were used at install time.
+Generated launchers keep the same resolved package ref, `--with` package additions, and R selection that were used at install time.
 They set `R_LIBS` to the resolved library and `R_LIBS_USER=NULL`.
 Nested `#| launcher:` metadata is included in generated launchers.
 If there is no `launcher.name`, top-level `#| name:` is used for the launcher name when present.
 Plain `Rscript` package executables keep Rscript's normal startup package behavior unless launcher metadata explicitly sets `default-packages`.
-For `bin/` entries, installed files are symlinks to the resolved executable files.
-`ir` does not inspect their contents or launcher metadata.
+For `bin/` entries, launchers execute the resolved file with the installed tool runtime environment.
+`ir` does not inspect launcher metadata in `bin/` files.
 
-By default, `ir tool install` writes command names as generated launchers and symlinks to `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`, `XDG_DATA_HOME/../bin`, or `~/.local/bin` on Unix.
+By default, `ir tool install` writes command launchers to `IR_TOOL_BIN_DIR`, `RAPP_BIN_DIR`, `XDG_BIN_HOME`, `XDG_DATA_HOME/../bin`, or `~/.local/bin` on Unix.
 On Windows, it uses `%LOCALAPPDATA%\Programs\R\ir\bin`, falling back to `%USERPROFILE%\AppData\Local\Programs\R\ir\bin`.
 `--bin-dir` overrides those defaults.
 When no `--bin-dir` override is used, `ir tool install` also sets up `PATH` for the selected executable install directory where needed.

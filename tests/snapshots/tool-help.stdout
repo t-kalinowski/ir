@@ -18,4 +18,4 @@ Tools:
   isolated library, then runs the selected executable. The user R library is not
   used.
   `ir tool install` materializes a durable package library, then writes
-  generated launchers for exec/ entries and symlinks for bin/ entries.
+  launchers backed by that library.
