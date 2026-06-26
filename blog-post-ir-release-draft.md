@@ -249,7 +249,7 @@ $ ir render report.qmd --to pdf
 ```
 
 When `ir` selects an R executable by `rscript`, `r-version`, or
-date-only `exclude-newer`, it pins Quarto's knitr R to that selection.
+date-only `exclude-newer`, it pins Quarto's knitr R to that selection using [`QUARTO_R` environment variable.](https://quarto.org/docs/advanced/environment-vars.html#variables-quarto-inspects) 
 `ir` also seeds `rmarkdown` automatically for knitr-based renders unless
 you declare it yourself.
 
