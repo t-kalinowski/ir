@@ -162,8 +162,8 @@ not need to pre-install `pak` or `renv`.
 
 ## Reproducibility without a project
 
-For scripts and reports that need more explicit reproducibility,
-`exclude-newer` is usually the first thing to reach for:
+For R scripts that need more explicit reproducibility, `exclude-newer`
+is usually the first thing to reach for:
 
 ```yaml
 exclude-newer: 2024-01-15
