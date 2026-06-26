@@ -179,8 +179,8 @@ writing with the current release of R and current CRAN packages, the
 date alone is usually enough.
 
 Use `r-version` when the script really needs a specific installed R
-version or version range, or `rscript` when it needs a specific Rscript
-executable:
+version or version range (requires [`rig`](https://github.com/r-lib/rig)),
+or `rscript` when it needs a specific Rscript executable
 
 ```yaml
 r-version: "4.3"
