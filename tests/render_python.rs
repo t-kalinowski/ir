@@ -258,6 +258,115 @@ exit 1\n",
 
 #[cfg(unix)]
 #[test]
+fn render_quarto_knitr_python_chunk_requests_reticulate() {
+    let cache_dir = temp_dir("ir-render-knitr-python-reticulate-cache");
+    let bin_dir = temp_dir("ir-render-knitr-python-reticulate-bin");
+    let doc = temp_path("ir-render-knitr-python-reticulate", "qmd");
+    let rscript = bin_dir.join("Rscript");
+    let quarto = bin_dir.join("quarto");
+
+    fs::write(
+        &doc,
+        r#"---
+title: knitr python chunk
+format: html
+---
+
+```{r}
+1 + 1
+```
+
+```{python}
+print("ok")
+```
+"#,
+    )
+    .unwrap();
+    write_executable(
+        &rscript,
+        "#!/bin/sh\n\
+if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n\
+  cat > /dev/null\n\
+  if [ -z \"${IR_QUARTO_RETICULATE:-}\" ]; then\n\
+    echo expected reticulate injection for knitr Python chunk >&2\n\
+    exit 1\n\
+  fi\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+echo unexpected Rscript invocation >&2\n\
+exit 1\n",
+    );
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .args(["render", "--rscript"])
+        .arg(&rscript)
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+}
+
+#[cfg(unix)]
+#[test]
+fn render_quarto_jupyter_python_chunk_does_not_request_reticulate() {
+    let cache_dir = temp_dir("ir-render-jupyter-python-reticulate-cache");
+    let bin_dir = temp_dir("ir-render-jupyter-python-reticulate-bin");
+    let doc = temp_path("ir-render-jupyter-python-reticulate", "qmd");
+    let rscript = bin_dir.join("Rscript");
+    let quarto = bin_dir.join("quarto");
+
+    fs::write(
+        &doc,
+        r#"---
+title: jupyter python chunk
+format: html
+jupyter: python3
+---
+
+```{python}
+print("ok")
+```
+"#,
+    )
+    .unwrap();
+    write_executable(
+        &rscript,
+        "#!/bin/sh\n\
+if [ -n \"${IR_RESOLVE_RESULT_FILE:-}\" ]; then\n\
+  cat > /dev/null\n\
+  if [ -n \"${IR_QUARTO_RETICULATE:-}\" ]; then\n\
+    echo jupyter Python chunk should not inject reticulate >&2\n\
+    exit 1\n\
+  fi\n\
+  mkdir -p \"$IR_CACHE_DIR/fake-library\"\n\
+  printf '%s\\n' \"$IR_CACHE_DIR/fake-library\" > \"$IR_RESOLVE_RESULT_FILE\"\n\
+  exit 0\n\
+fi\n\
+echo unexpected Rscript invocation >&2\n\
+exit 1\n",
+    );
+    write_executable(&quarto, "#!/bin/sh\nexit 0\n");
+
+    let out = ir()
+        .env("IR_CACHE_DIR", &cache_dir)
+        .env("IR_QUARTO", &quarto)
+        .args(["render", "--rscript"])
+        .arg(&rscript)
+        .arg(&doc)
+        .output()
+        .unwrap();
+
+    assert_success(&out);
+}
+
+#[cfg(unix)]
+#[test]
 fn render_quarto_ir_python_frontmatter_uses_normalized_exclude_newer_override() {
     let cache_dir = temp_dir("ir-render-python-env-cache");
     let bin_dir = temp_dir("ir-render-python-env-bin");

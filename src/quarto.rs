@@ -6,7 +6,9 @@ use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::spec::{parse_quarto_frontmatter, RuntimeSpec};
+use saphyr::Yaml;
+
+use crate::spec::{load_first_yaml_document, parse_quarto_frontmatter, RuntimeSpec};
 
 pub(crate) struct RenderSource {
     path: PathBuf,
@@ -85,7 +87,10 @@ pub(crate) fn run(
 }
 
 fn read_quarto_document_spec(script: &Path) -> Result<RuntimeSpec, Box<dyn Error>> {
-    parse_quarto_frontmatter(&read_to_string(script)?)
+    let document = read_to_string(script)?;
+    let mut spec = parse_quarto_frontmatter(&document)?;
+    spec.quarto_reticulate = quarto_reticulate_required(script, &document)?;
+    Ok(spec)
 }
 
 fn read_quarto_script_spec(script: &Path) -> Result<RuntimeSpec, Box<dyn Error>> {
@@ -94,6 +99,186 @@ fn read_quarto_script_spec(script: &Path) -> Result<RuntimeSpec, Box<dyn Error>>
 
 fn read_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
     Ok(fs::read_to_string(script)?)
+}
+
+fn quarto_reticulate_required(script: &Path, document: &str) -> Result<bool, Box<dyn Error>> {
+    let chunks = chunk_languages(document);
+    if !chunks.has_python {
+        return Ok(false);
+    }
+
+    let engine = frontmatter_engine(document)?;
+    if engine.explicit_knitr {
+        return Ok(true);
+    }
+    if engine.explicit_jupyter {
+        return Ok(false);
+    }
+
+    Ok(is_r_markdown(script) || chunks.has_r)
+}
+
+#[derive(Default)]
+struct ChunkLanguages {
+    has_r: bool,
+    has_python: bool,
+}
+
+fn chunk_languages(document: &str) -> ChunkLanguages {
+    let mut chunks = ChunkLanguages::default();
+    let mut in_yaml = false;
+    let mut frontmatter_closed = false;
+    let mut seen_content = false;
+    let mut fence_ticks = None;
+
+    for line in document.lines() {
+        if !seen_content {
+            if line.trim().is_empty() {
+                continue;
+            }
+            seen_content = true;
+            if line.trim_end() == "---" {
+                in_yaml = true;
+                continue;
+            }
+        }
+        if in_yaml {
+            if line.trim_end() == "---" {
+                in_yaml = false;
+                frontmatter_closed = true;
+            }
+            continue;
+        }
+        if !frontmatter_closed && line.trim().is_empty() {
+            continue;
+        }
+
+        if let Some(ticks) = fence_ticks {
+            if closing_fence(line, ticks) {
+                fence_ticks = None;
+            }
+            continue;
+        }
+
+        if let Some((language, ticks)) = executable_chunk_start(line) {
+            match language.as_str() {
+                "r" => chunks.has_r = true,
+                "python" => chunks.has_python = true,
+                _ => {}
+            }
+            fence_ticks = Some(ticks);
+            continue;
+        }
+
+        if let Some((ticks, _)) = backtick_fence_start(line) {
+            fence_ticks = Some(ticks);
+        }
+    }
+
+    chunks
+}
+
+fn executable_chunk_start(line: &str) -> Option<(String, usize)> {
+    let (ticks, rest) = backtick_fence_start(line)?;
+    let rest = rest.trim_start();
+    let inside = rest.strip_prefix('{')?;
+    let language_end = inside
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .unwrap_or(inside.len());
+    if language_end == 0 {
+        return None;
+    }
+    let language = &inside[..language_end];
+    let suffix = &inside[language_end..];
+    if !matches!(suffix.chars().next(), Some('}' | ' ' | ',')) {
+        return None;
+    }
+    let Some(close) = suffix.rfind('}') else {
+        return None;
+    };
+    if !suffix[(close + 1)..].trim().is_empty() {
+        return None;
+    }
+
+    Some((language.to_ascii_lowercase(), ticks))
+}
+
+fn backtick_fence_start(line: &str) -> Option<(usize, &str)> {
+    let line = line.trim_start_matches([' ', '\t', '>']);
+    let ticks = line.chars().take_while(|ch| *ch == '`').count();
+    (ticks >= 3).then(|| (ticks, &line[ticks..]))
+}
+
+fn closing_fence(line: &str, expected_ticks: usize) -> bool {
+    let Some((ticks, rest)) = backtick_fence_start(line) else {
+        return false;
+    };
+    ticks == expected_ticks && rest.trim().is_empty()
+}
+
+#[derive(Default)]
+struct FrontmatterEngine {
+    explicit_knitr: bool,
+    explicit_jupyter: bool,
+}
+
+fn frontmatter_engine(document: &str) -> Result<FrontmatterEngine, Box<dyn Error>> {
+    let Some(doc) = load_first_yaml_document(document, "script frontmatter")? else {
+        return Ok(FrontmatterEngine::default());
+    };
+    if doc.is_null() || !doc.is_mapping() {
+        return Ok(FrontmatterEngine::default());
+    }
+
+    let mut engine = FrontmatterEngine::default();
+    if frontmatter_key_present(&doc, "knitr") {
+        engine.explicit_knitr = true;
+    }
+    if frontmatter_key_present(&doc, "jupyter") {
+        engine.explicit_jupyter = true;
+    }
+    apply_execute_engine(&doc, &mut engine);
+    apply_format_execute_engines(&doc, &mut engine);
+
+    Ok(engine)
+}
+
+fn frontmatter_key_present(doc: &Yaml<'_>, key: &str) -> bool {
+    doc.as_mapping_get(key)
+        .is_some_and(|value| !value.is_null())
+}
+
+fn apply_execute_engine(doc: &Yaml<'_>, engine: &mut FrontmatterEngine) {
+    let Some(execute) = doc.as_mapping_get("execute") else {
+        return;
+    };
+    let Some(value) = execute
+        .as_mapping_get("engine")
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+    apply_engine_name(value, engine);
+}
+
+fn apply_format_execute_engines(doc: &Yaml<'_>, engine: &mut FrontmatterEngine) {
+    let Some(format) = doc.as_mapping_get("format") else {
+        return;
+    };
+    let Some(formats) = format.as_mapping() else {
+        return;
+    };
+    for format in formats.values() {
+        apply_execute_engine(format, engine);
+    }
+}
+
+fn apply_engine_name(value: &str, engine: &mut FrontmatterEngine) {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "knitr" => engine.explicit_knitr = true,
+        "jupyter" => engine.explicit_jupyter = true,
+        _ => {}
+    }
 }
 
 /// True for Quarto markdown documents.
@@ -105,6 +290,17 @@ pub(crate) fn is_quarto_document(script: &Path) -> bool {
             .map(str::to_ascii_lowercase)
             .as_deref(),
         Some("qmd") | Some("rmd")
+    )
+}
+
+fn is_r_markdown(script: &Path) -> bool {
+    matches!(
+        script
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("rmd")
     )
 }
 

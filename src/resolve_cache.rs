@@ -31,6 +31,7 @@ pub(crate) fn paths(
     dependencies: &[String],
     exclude_newer: Option<&str>,
     quarto_render: bool,
+    quarto_reticulate: bool,
     library_root: Option<&Path>,
 ) -> Result<Option<Paths>, Box<dyn Error>> {
     if !dependencies
@@ -54,6 +55,7 @@ pub(crate) fn paths(
         dependencies,
         exclude_newer,
         quarto_render,
+        quarto_reticulate,
         &rscript_identity,
         rscript_args,
         library_root,
@@ -126,6 +128,7 @@ fn resolution_cache_key(
     dependencies: &[String],
     exclude_newer: Option<&str>,
     quarto_render: bool,
+    quarto_reticulate: bool,
     rscript_identity: &str,
     rscript_args: &[String],
     library_root: Option<&Path>,
@@ -138,6 +141,9 @@ fn resolution_cache_key(
     parts.push(source_key);
     if quarto_render {
         parts.push("quarto".to_string());
+    }
+    if quarto_reticulate {
+        parts.push("quarto-reticulate".to_string());
     }
     parts.push(format!("rscript: {rscript_identity}"));
     for arg in rscript_args {
@@ -425,6 +431,7 @@ mod tests {
             &dependencies,
             None,
             false,
+            false,
             None,
         )
         .unwrap()
@@ -438,6 +445,7 @@ mod tests {
             &[],
             &dependencies,
             None,
+            false,
             false,
             None,
         )
@@ -453,6 +461,7 @@ mod tests {
             &[],
             &dependencies,
             None,
+            false,
             false,
             None,
         )
@@ -481,6 +490,7 @@ mod tests {
             &dependencies,
             Some("2026-06-01"),
             false,
+            false,
             None,
         )
         .unwrap()
@@ -492,6 +502,7 @@ mod tests {
             &[],
             &dependencies,
             Some("2026-06-01"),
+            false,
             false,
             Some(&dir.join("tool-store")),
         )
@@ -530,6 +541,7 @@ mod tests {
                     &dependencies,
                     Some("2026-06-01"),
                     false,
+                    false,
                     None
                 )
                 .unwrap()
@@ -557,6 +569,7 @@ mod tests {
                     &[],
                     &dependencies,
                     Some("2026-06-01"),
+                    false,
                     false,
                     None
                 )
