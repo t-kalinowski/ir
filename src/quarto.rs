@@ -104,6 +104,8 @@ fn read_to_string(script: &Path) -> Result<String, Box<dyn Error>> {
 fn quarto_reticulate_required(script: &Path, document: &str) -> Result<bool, Box<dyn Error>> {
     // This heuristic intentionally considers only fenced executable chunks.
     // Inline Python expressions are undefined here, not a reticulate signal.
+    // Detection is local-document only: ir does not probe _quarto.yml or
+    // _metadata.yml, so project-inherited engine settings are out of scope.
     let chunks = chunk_languages(document);
     if !chunks.has_python {
         return Ok(false);
@@ -314,6 +316,8 @@ fn apply_format_execute_engines(doc: &Yaml<'_>, engine: &mut FrontmatterEngine) 
     let Some(formats) = format.as_mapping() else {
         return;
     };
+    // Target-dependent engine selection is not modeled here; format-scoped
+    // engines are only a broad local signal for this dependency heuristic.
     for format in formats.values() {
         apply_execute_engine(format, engine);
     }
