@@ -55,6 +55,41 @@ fn readme_install_commands_are_copyable() {
 }
 
 #[test]
+fn public_ir_links_use_r_lib_owner() {
+    for file in [
+        "README.md",
+        "docs/config.qmd",
+        "scripts/install.sh",
+        "scripts/install.ps1",
+    ] {
+        let text = fs::read_to_string(repo_root().join(file)).unwrap();
+        assert!(!text.contains("t-kalinowski/ir"), "{file}");
+        assert!(!text.contains("t-kalinowski.github.io/ir"), "{file}");
+        assert!(
+            !text.contains("raw.githubusercontent.com/t-kalinowski/ir"),
+            "{file}"
+        );
+    }
+
+    let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
+    assert!(readme.contains("https://r-lib.github.io/ir/"), "{readme}");
+    assert!(
+        readme.contains("https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.sh"),
+        "{readme}"
+    );
+    assert!(
+        readme.contains("https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.ps1"),
+        "{readme}"
+    );
+
+    let sh = fs::read_to_string(repo_root().join("scripts/install.sh")).unwrap();
+    assert!(sh.contains("OWNER=\"r-lib\""), "{sh}");
+
+    let ps1 = fs::read_to_string(repo_root().join("scripts/install.ps1")).unwrap();
+    assert!(ps1.contains("$Owner = \"r-lib\""), "{ps1}");
+}
+
+#[test]
 fn public_installers_recommend_rig_when_missing() {
     let sh_path = repo_root().join("scripts/install.sh");
     let sh = fs::read_to_string(&sh_path)

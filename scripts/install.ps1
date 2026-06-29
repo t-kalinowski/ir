@@ -1,6 +1,6 @@
 # Install a pre-built `ir` binary on Windows.
 #
-#   irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.ps1 | iex
 #
 # Downloads the latest Windows release archive, verifies it runs, and installs
 # `ir.exe` and `rx.exe` into $env:IR_INSTALL_DIR (default $HOME\bin). The x64
@@ -9,7 +9,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Owner = "t-kalinowski"
+$Owner = "r-lib"
 $Repo = "ir"
 $App = "ir"
 $Target = "x86_64-pc-windows-msvc"
