@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Install a pre-built `ir` binary on Linux or macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.sh | sh
 #
 # Downloads the archive for this machine's platform from the latest GitHub
 # Release, verifies it runs, and installs `ir` and `rx` into $IR_INSTALL_DIR
@@ -9,7 +9,7 @@
 # On macOS, the default install directory is added to ~/.zprofile when needed.
 set -eu
 
-OWNER="t-kalinowski"
+OWNER="r-lib"
 REPO="ir"
 APP="ir"
 RIG_MACOS_INSTALL_URL="https://github.com/r-lib/rig#id-macos"

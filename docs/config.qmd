@@ -16,13 +16,13 @@ title: Install and Configuration
 Install a pre-built binary on Linux or macOS:
 
 ```console
-$ curl -fsSL https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.sh | sh
+$ curl -fsSL https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.sh | sh
 ```
 
 Install on Windows PowerShell:
 
 ```console
-> irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
+> irm https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.ps1 | iex
 ```
 
 The installers download the latest release archive and install `ir` and `rx` into `~/.local/bin` on Unix or `$HOME\bin` on Windows.

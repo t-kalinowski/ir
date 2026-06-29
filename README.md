@@ -25,7 +25,7 @@ ir run script.R
 ./script.R
 ```
 
-Full documentation: <https://t-kalinowski.github.io/ir/>
+Full documentation: <https://r-lib.github.io/ir/>
 
 ## Why use it?
 
@@ -57,13 +57,13 @@ ir cache dir
 Install a pre-built binary on Linux or macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.sh | sh
 ```
 
 Install on Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/t-kalinowski/ir/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.ps1 | iex
 ```
 
 The installers download the latest release and install `ir` and `rx` into `~/.local/bin` on Unix or `$HOME\bin` on Windows.
@@ -114,12 +114,12 @@ On first use, `ir` prepares its resolver tooling in its cache, so you do not nee
 
 For command details, configuration, and edge cases, see:
 
-- [Scripts](https://t-kalinowski.github.io/ir/run.html)
-- [Quarto rendering](https://t-kalinowski.github.io/ir/quarto.html)
-- [Package tools](https://t-kalinowski.github.io/ir/tools.html)
-- [Cache management](https://t-kalinowski.github.io/ir/cache.html)
-- [Install and configuration](https://t-kalinowski.github.io/ir/config.html)
-- [CLI reference](https://t-kalinowski.github.io/ir/reference.html)
+- [Scripts](https://r-lib.github.io/ir/run.html)
+- [Quarto rendering](https://r-lib.github.io/ir/quarto.html)
+- [Package tools](https://r-lib.github.io/ir/tools.html)
+- [Cache management](https://r-lib.github.io/ir/cache.html)
+- [Install and configuration](https://r-lib.github.io/ir/config.html)
+- [CLI reference](https://r-lib.github.io/ir/reference.html)
 
 ## License
 
